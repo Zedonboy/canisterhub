@@ -1,0 +1,75 @@
+// One entry in the audit log - who did what, when. `action`/`details` are
+// free text (the tool/method name, and a human-readable summary of its
+// arguments) rather than a structured type, since what's worth recording
+// varies per action - see `tools.rs`'s example tools for the convention.
+type ActionLogEntry = record {
+  at : nat64;
+  id : nat64;
+  action : text;
+  admin : principal;
+  details : text;
+};
+type ChatTurn = record { content : text; role : Role };
+type Config = record {
+  // System prompt for `chat` - see `llm_context.md`'s "Writing a good
+  // system prompt" section. Falls back to a generic prompt if unset.
+  system_prompt : opt text;
+  // Which LLM provider `chat` calls - one of `"openai"` (default),
+  // `"anthropic"`, `"gemini"`, `"deepseek"`. Each makes its own HTTPS
+  // outcall directly to that provider's API - see `llm.rs`'s doc comment.
+  llm_provider : opt text;
+  // LLM <-> tool round trips one `chat` call may make before returning
+  // whatever it has rather than looping further. Defaults to
+  // `llm::DEFAULT_MAX_TOOL_ITERATIONS` if unset.
+  max_tool_iterations : opt nat8;
+  // Principals allowed to call any gated method here - every direct
+  // candid action method and `chat`. A controller may always call them
+  // too (see `require_admin`), so this can be empty while a deployment
+  // is still using controller-only access during setup.
+  admins : vec principal;
+  // API key for whichever `llm_provider` is configured. Required: `chat`
+  // returns an error if this is unset.
+  llm_api_key : opt text;
+  // Provider-specific model id (e.g. `"gpt-5.6-sol"`, `"claude-sonnet-5"`)
+  // - defaults to that provider's flagship model if unset (see
+  // `llm::default_model_for`).
+  llm_model : opt text;
+};
+// `update_config`'s argument - see `connector::config::ConfigUpdate`'s doc
+// comment for the exact three-state-per-field semantics this mirrors.
+type ConfigUpdate = record {
+  system_prompt : opt opt text;
+  llm_provider : opt opt text;
+  max_tool_iterations : opt opt nat8;
+  admins : opt vec principal;
+  llm_api_key : opt opt text;
+  llm_model : opt opt text;
+};
+type Result = variant { Ok : vec ChatTurn; Err : text };
+type Result_1 = variant { Ok : Config; Err : text };
+type Result_2 = variant { Ok : text; Err : text };
+type Result_3 = variant { Ok : vec ActionLogEntry; Err : text };
+type Result_4 = variant { Ok; Err : text };
+type Role = variant { User; Assistant };
+service : (Config) -> {
+  // Runs one round of conversation: sends `history` plus `prompt` (prefixed
+  // with the configured system prompt) to the LLM, executes any tool calls
+  // via the same functions the direct methods above call, and returns the
+  // full updated conversation (`history` plus a `User` turn for `prompt` and
+  // an `Assistant` turn for the reply) - see this module's doc comment for
+  // why this is stateless and what that means for callers: keep the
+  // returned list and pass it back as `history` (with your next message as
+  // `prompt`) to continue.
+  chat : (vec ChatTurn, text) -> (Result);
+  get_config : () -> (Result_1) query;
+  issue_refund : (text, nat64, text) -> (Result_2);
+  // Newest-first, paginated.
+  list_action_log : (nat64, nat64) -> (Result_3) query;
+  // See `connector::llm_context`/`agent::llm_context`'s identical
+  // reasoning: open to any caller, since there's nothing sensitive in a
+  // description of this canister's own shape, and an agent needs to be able
+  // to read this before it has any credentials to call anything else here.
+  llm_context : () -> (text) query;
+  set_account_status : (text, text) -> (Result_2);
+  update_config : (ConfigUpdate) -> (Result_4);
+}

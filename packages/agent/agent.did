@@ -1,0 +1,205 @@
+// A request to do something this canister's tools deliberately cannot do
+// themselves - created by the `request_admin_action` tool (see `tools.rs`),
+// POSTed to `Config.admin_webhook_url` (see `admin.rs`), and updated in
+// place when `POST /webhook/admin` calls back with a resolution.
+type AdminRequest = record {
+  id : nat64;
+  status : AdminRequestStatus;
+  updated_at : nat64;
+  session_id : text;
+  // Set once `POST /webhook/admin` resolves this request - the text
+  // relayed back to the customer via `connector.send_message` verbatim
+  // (see `admin.rs::handle_callback`'s doc comment on why it's sent
+  // as-is rather than run back through the LLM).
+  result_message : opt text;
+  // Free-text, model-chosen category (e.g. `"refund"`,
+  // `"account_deletion"`, `"escalate"`) - see `tools.rs`'s doc comment on
+  // why this template leaves it as text rather than a fixed enum.
+  action_type : text;
+  created_at : nat64;
+  // Free-text detail the model provided - human-readable context for
+  // whoever/whatever handles this on the other side of the webhook, not
+  // something this canister parses or acts on itself.
+  details : text;
+  channel : Channel;
+};
+type AdminRequestStatus = variant { Approved; Rejected; Completed; Pending };
+// Business-level activity, as opposed to the infrastructure-level numbers
+// `icp canister status` already reports (cycles, memory, module hash).
+// `messages_in`/`messages_out` count `receive_message` turns (one customer
+// message in, one reply out - always paired, since `run_agent_loop` always
+// produces some reply, even its own escalation fallback); `prompt_tokens`/
+// `completion_tokens` accumulate whatever the configured LLM provider
+// reports via `Usage` (see `llm.rs`'s `TrackingModel`) - `0` for either
+// simply means no completion has reported usage yet (some provider
+// responses omit it), not necessarily that none were made. Deliberately
+// open to any caller (no `require_controller` gate) - an aggregate count
+// isn't sensitive the way conversation content or `Config`'s secrets are.
+type AgentStats = record {
+  messages_out : nat64;
+  completion_tokens : nat64;
+  messages_in : nat64;
+  prompt_tokens : nat64;
+};
+// Matches `connector`'s `Channel` type field-for-field (candid matches by
+// shape, not by the two crates sharing a Rust type - see
+// `IncomingMessage`'s doc comment).
+type Channel = variant { Email; WhatsApp; Telegram };
+type Config = record {
+  // The `ic-sql` canister (`packages/ic-sql`) this deployment's
+  // `query_database` tool reads from, if any - see `db.rs` and
+  // `tools.rs::QueryDatabaseTool`. Unset = the tool is still registered
+  // (so the model can attempt it and get a clear error) but every call
+  // fails immediately rather than reaching for a canister id that isn't
+  // there.
+  ic_sql_canister_id : opt principal;
+  // Base URL an administrative system's callback listens on -
+  // `request_admin_action`-triggered requests are POSTed to
+  // `<this>/admin/requests` (see `admin.rs`). Unset = administrative
+  // escalation is disabled entirely: `request_admin_action` returns an
+  // error to the model instead of silently doing nothing.
+  admin_webhook_url : opt text;
+  // The system prompt prepended to every conversation - this is the main
+  // thing a business customizes: persona, tone, what the assistant is
+  // for, and (critically) an explicit statement of what it *can't* do
+  // (see `llm_context.md`'s "Writing a good system prompt" section). If
+  // unset, a generic fallback is used (see `llm::default_system_prompt`).
+  system_prompt : opt text;
+  // Shared HMAC-SHA256 key used both directions: signing this
+  // canister's outbound request to `admin_webhook_url` (so the receiving
+  // system can verify it really came from here), and verifying the
+  // inbound callback to `POST /webhook/admin` (so this canister only
+  // acts on callbacks the operator's own system sent). Using one key
+  // both ways is the simplest correct setup for a template; splitting it
+  // into two independent keys is a straightforward hardening step for a
+  // production deployment - see README.md's "Hardening ideas".
+  admin_webhook_secret : opt text;
+  // Which LLM provider to call - one of `"openai"` (default),
+  // `"anthropic"`, `"gemini"`, `"deepseek"` (each makes its own HTTPS
+  // outcall directly to that provider's API, and needs `llm_api_key`),
+  // or `"platform"` (the real on-chain LLM canister via `ic_llm` - no API
+  // key, but only DFINITY's own hosted models and that canister's own
+  // prompt/token/message caps) - see `llm.rs`'s doc comment for the full
+  // tradeoff.
+  llm_provider : opt text;
+  // Upper bound on how many LLM <-> tool round trips one incoming
+  // message may cause before this canister gives up and escalates to a
+  // human (see `llm::run_agent_loop`) - bounds cycle spend and stable
+  // storage growth from a model that won't stop calling tools. Defaults
+  // to `DEFAULT_MAX_TOOL_ITERATIONS` if unset.
+  max_tool_iterations : opt nat8;
+  // API key for whichever HTTPS `llm_provider` is configured - not used
+  // at all for `"platform"` (see that variant's own doc comment above).
+  // Required for every other provider: `receive_message` returns an
+  // error (which becomes an `request_admin_action`-style escalation -
+  // see `llm::run_agent_loop`) if this is unset.
+  llm_api_key : opt text;
+  // The principal allowed to call `receive_message` - `connector`'s own
+  // identity. Every inbound customer message arrives this way; nothing
+  // else should be able to inject one.
+  connector_principal : opt principal;
+  // Provider-specific model id (e.g. `"gpt-5.6-sol"`, `"claude-sonnet-5"`,
+  // `"gemini-3.1-pro-preview"`, `"deepseek-v4-pro"`, or - for `"platform"` -
+  // `"llama3.1:8b"`/`"qwen3:32b"`/`"llama4-scout"`/`"qwen2.5:0.5b"`
+  // (free) / `"gemma3:27b"`/`"z-ai:glm-5.2"` (paid, drawn from this
+  // canister's own cycles balance)) - defaults to that provider's
+  // flagship model if unset (see `llm::default_model_for`).
+  llm_model : opt text;
+};
+// `update_config`'s argument - see `Config`'s doc comment. Semantics
+// (three states per field) are identical to `connector`'s `ConfigUpdate`;
+// see that type's doc comment for the full explanation.
+type ConfigUpdate = record {
+  ic_sql_canister_id : opt opt principal;
+  admin_webhook_url : opt opt text;
+  system_prompt : opt opt text;
+  admin_webhook_secret : opt opt text;
+  llm_provider : opt opt text;
+  max_tool_iterations : opt opt nat8;
+  llm_api_key : opt opt text;
+  connector_principal : opt opt principal;
+  llm_model : opt opt text;
+};
+// One customer's conversation. Deliberately holds only *finished* turns
+// (one `User` message, one final `Assistant` reply) - the back-and-forth of
+// an in-progress tool-calling round (`ic_rig::Agent::chat` handles this
+// internally - see `llm.rs`'s doc comment) lives only for the duration of
+// that one `receive_message` call and is never persisted, which keeps this
+// bounded and keeps `ic_rig`'s own message types (which aren't candid
+// types - see this crate's own `StoredChatMessage` below instead) out of
+// the candid surface entirely. `history` is capped at
+// `state::MAX_HISTORY_MESSAGES` (oldest turns dropped first) to bound
+// stable memory growth and keep the prompt sent to the model on each turn
+// from growing unbounded.
+type ConversationState = record { history : vec StoredChatMessage };
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
+// `receive_message`'s argument - what `connector` forwards for every
+// inbound customer message, normalized to just enough for this canister to
+// route and respond: which channel, which conversation (`session_id` -
+// literally the same address `connector` already uses: a WhatsApp number, a
+// Telegram chat id, or an email address), and the message text itself.
+// Deliberately minimal and channel-agnostic - a template shouldn't need to
+// know WhatsApp's or Telegram's raw payload shapes to hold a conversation.
+type IncomingMessage = record {
+  session_id : text;
+  "text" : text;
+  channel : Channel;
+};
+type Result = variant { Ok : opt AdminRequest; Err : text };
+type Result_1 = variant { Ok : Config; Err : text };
+type Result_2 = variant { Ok : ConversationState; Err : text };
+type Result_3 = variant { Ok : vec AdminRequest; Err : text };
+type Result_4 = variant { Ok; Err : text };
+type Role = variant { User; Assistant };
+type StoredChatMessage = record {
+  // Nanoseconds since the Unix epoch (`ic_cdk::api::time()`'s convention).
+  at : nat64;
+  content : text;
+  role : Role;
+};
+service : (Config) -> {
+  get_admin_request : (nat64) -> (Result) query;
+  get_config : () -> (Result_1) query;
+  get_conversation : (Channel, text) -> (Result_2) query;
+  get_stats : () -> (AgentStats) query;
+  // First stop for every inbound HTTP request (a query call - see
+  // `connector/src/http.rs`'s doc comment for the full explanation of the
+  // IC's `http_request`/`http_request_update` split). This canister has
+  // exactly one HTTP endpoint, and it always mutates state (updates an
+  // `AdminRequest`, and typically triggers a reply to the customer) - so it
+  // always upgrades, never handled here.
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  // Verifies and applies an administrative resolution (see
+  // `admin::handle_callback`), then relays its `result_message` to the
+  // customer via `connector::send_message` - independent of, and without
+  // re-invoking, the LLM (see `admin.rs`'s doc comment on `handle_callback`
+  // for why).
+  http_request_update : (HttpRequest) -> (HttpResponse);
+  // Newest-first, paginated via `offset`/`limit`.
+  list_admin_requests : (nat64, nat64) -> (Result_3) query;
+  // A prose description of this canister for an AI agent (or a human
+  // implementer) to consume - what this template does, its security model,
+  // and step by step how to adapt it for a specific business. Open to any
+  // caller, same reasoning as `connector::llm_context`: nothing sensitive in
+  // a description of the canister's own shape, and it needs to be readable
+  // before anyone has credentials to call anything else here.
+  llm_context : () -> (text) query;
+  // Accepts one inbound customer message forwarded by `connector`, runs it
+  // through the LLM/tool-calling loop, persists the resulting turn, and
+  // relays the reply back out via `connector::send_message`. See this
+  // module's doc comment for the full flow and `llm::run_agent_loop` for the
+  // loop itself.
+  receive_message : (IncomingMessage) -> (Result_4);
+  update_config : (ConfigUpdate) -> (Result_4);
+}

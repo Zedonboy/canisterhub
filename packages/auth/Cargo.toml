@@ -1,0 +1,28 @@
+[package]
+name = "auth"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+canister-hub-sdk.workspace = true
+candid.workspace = true
+ic-cdk.workspace = true
+ic-stable-structures.workspace = true
+serde.workspace = true
+# Candid's derive macro special-cases `#[serde(with = "serde_bytes")]` fields
+# to encode as `blob` (a plain `Vec<u8>` would encode as `vec nat8` instead -
+# correct but far slower to (de)serialize) - matches connector/agent's
+# own reasoning, even though this crate doesn't currently have a blob field
+# itself (kept for parity/future use, same as those crates).
+serde_bytes.workspace = true
+# Parses OAuth token/userinfo responses (both JSON) - see `oauth.rs`.
+serde_json.workspace = true
+ciborium.workspace = true
+
+[dev-dependencies]
+# Keep aligned with the local PocketIC server used by tests (POCKET_IC_BIN) -
+# see backend/Cargo.toml's identical pin.
+pocket-ic.workspace = true

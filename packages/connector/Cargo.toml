@@ -1,0 +1,31 @@
+[package]
+name = "connector"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid.workspace = true
+ic-cdk.workspace = true
+ic-stable-structures.workspace = true
+serde.workspace = true
+# Candid's derive macro special-cases `#[serde(with = "serde_bytes")]` fields
+# to encode as `blob` (a plain `Vec<u8>` would encode as `vec nat8` instead —
+# correct but far slower to (de)serialize for the message bodies flowing
+# through `http_request`/`http_request_update`).
+serde_bytes.workspace = true
+# Parses WhatsApp Cloud API and Telegram Bot API webhook payloads, both JSON.
+serde_json.workspace = true
+ciborium.workspace = true
+# HMAC-SHA256 verification of WhatsApp's `X-Hub-Signature-256` header - see
+# `whatsapp::verify_signature`.
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+# Keep aligned with the local PocketIC server used by tests (POCKET_IC_BIN) -
+# see backend/Cargo.toml's identical pin.
+pocket-ic.workspace = true

@@ -1,0 +1,2 @@
+# SPA fallback: preserve the requested URL while serving the app shell.
+/*  /index.html  200

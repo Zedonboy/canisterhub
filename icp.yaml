@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://github.com/dfinity/icp-cli/raw/refs/tags/v1.3.0/docs/schemas/icp-yaml-schema.json
+
+networks:
+  - name: local
+    mode: managed
+    ii: true
+    # Provides the ICP ledger and CMC at their canonical IDs so the same
+    # minting code path works in local development and on mainnet.
+    nns: true
+
+canisters:
+  - backend
+  - frontend
+  # - hnsw_index
+  # - packages/connector
+  # - packages/agent
+  # - packages/admin_agent
+  # - packages/ic-sql
+  # - packages/ic-kv
+  # - packages/vector_db
+  # - packages/analytics

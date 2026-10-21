@@ -1,0 +1,130 @@
+[package]
+name = "orchestrator"
+version = "0.1.0"
+edition = "2021"
+description = "Orchestration Agent: an LLM-driven axum HTTP server that searches the canister_hub Marketplace, and failing a match, scaffolds a new ICP project with icp-cli, writes + compiles a canister directly on the host (a coding subagent with a real interactive shell), and uploads it to mainnet with ic-agent."
+
+[[bin]]
+name = "orchestrator"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP server
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["trace", "timeout", "cors"] }
+
+# LLM agent framework - provider-agnostic; the concrete provider is chosen at
+# runtime from LLM_PROVIDER (see src/llm/mod.rs).
+rig = "0.42"
+# Only for `OllamaToolResultShim` (src/llm/ollama_tool_result_shim.rs), which
+# implements `rig`'s own `HttpClientExt` transport trait - that trait's
+# `send` is generic over `Bytes` directly, so this crate needs to be a
+# direct dependency (rig itself already depends on the same version
+# transitively).
+bytes = "1"
+
+# IC: raw agent for the marketplace `query` calls and high-level management-
+# canister / cycles-wallet builders for canister creation + code install.
+ic-agent = "0.49"
+ic-utils = "0.49"
+# Only for `UploadChunkArgs` (see `ic::deploy`'s doc comment on why installs
+# are chunked by hand) - `ic-utils` already depends on this same crate
+# internally, just without re-exporting that one type.
+ic-management-canister-types = "0.8"
+candid = "0.10"
+
+# Downloading prebuilt marketplace release .wasm artifacts; "json"/"form" are
+# also needed for the GitHub OAuth token-exchange + repo-permission calls in
+# src/github.rs (the "Connect Git" flow).
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "form"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+
+# Verifying the HS256 JWTs `backend`'s `issue_jwt` hands out - see src/auth.rs.
+# Same crates/versions `backend` signs with.
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+
+# Deriving the orchestrator's identity from a BIP-39 seed phrase (see
+# src/ic/agent.rs's identity_from_seed_phrase) the same way `dfx identity new`
+# derives one: tiny-bip39 (crate `bip39`) turns the phrase into a seed, bip32
+# does the BIP-32 derivation. k256 pinned to exactly what ic-agent 0.49
+# depends on, since Secp256k1Identity::from_private_key takes its k256::SecretKey
+# type specifically - a mismatched version would be a different, incompatible type.
+bip32 = "0.5"
+tiny-bip39 = "2"
+k256 = "0.13"
+uuid = { version = "1", features = ["v4"] }
+
+# The coding subagent's tools (see src/llm/codetools.rs) - glob_files/grep_files,
+# and the tool set is modeled closely on real coding agents' (OpenCode's, in
+# particular - see codetools.rs's own doc comment).
+glob = "0.3"
+regex = "1"
+
+# Backs the coding subagent's `shell`/`shell_send` tools (src/process.rs):
+# commands run directly on the host (no more Docker sandbox - see
+# README.md's "Notes and limitations"), under a real PTY rather than plain
+# pipes, since interactive-prompt libraries (e.g. the one `icp new` uses)
+# render/behave differently without one. The `tokio` feature gives an
+# async-native Child/Pty pair that fits this crate's tokio runtime directly.
+pty-process = { version = "0.5", features = ["async"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+
+# Verifies GitHub Artifact Attestations (build provenance) on a marketplace
+# release's Wasm before installing it (src/provenance.rs) - confirms the
+# exact bytes were produced by a specific repo's own CI (Sigstore/Fulcio,
+# via GitHub's OIDC issuer), not just uploaded by whoever owns that repo
+# (see src/github.rs's "Connect Git" flow for that separate, weaker
+# property). `bundle`/`verify`/`sigstore-trust-root` are the minimal
+# features for verifying a pre-fetched bundle against the public-good trust
+# root - no signing, no cosign/OCI-registry support needed here.
+sigstore = { version = "0.14.0", default-features = false, features = ["rustls-tls", "verify", "bundle", "sigstore-trust-root"] }
+# Only for the `x509_cert::Certificate` type `sigstore::bundle::verify::policy::VerificationPolicy`'s
+# signature takes (src/provenance.rs's `RepoAttestationPolicy` impl) - not
+# otherwise used directly. Pinned to exactly the version `sigstore` 0.14.0
+# itself depends on, since this is the same type, not a redefinition of it.
+x509-cert = { version = "0.2.5", default-features = false }
+# Web Push's VAPID keypair (P-256 ECDSA) - see src/push.rs. Pinned to the
+# same 0.13.x line `sigstore` (above) already depends on - NOT the latest
+# 0.14, which switched to the `hybrid-array` crate internally. Rust trait
+# coherence is global across the whole build, so merely adding `hybrid-array`
+# anywhere in the graph makes its blanket `impl From<&Array<T, U>> for
+# Box<[T]>` visible to sigstore's own (unrelated) `sign.rs`, which has an
+# `AsRef`/`Into<Box<[u8]>>` call that was only inferrable while `[u8]`'s was
+# the sole candidate - adding the second candidate turns it into an
+# unresolvable E0283 inside a dependency we don't control. Staying on 0.13.x
+# keeps that crate out of the graph entirely.
+p256 = { version = "0.13.2", default-features = false, features = ["arithmetic", "pem"] }
+
+[dev-dependencies]
+# `examples/generate_vapid_keys.rs`'s source of real randomness. Dev-only:
+# fine to resolve independently of the main dependency tree's own
+# getrandom/rand_core versions above (see the p256 pin's comment) since it
+# never touches `src/` or the ambiguous sigstore code path.
+rand = "0.8"
+# End-to-end test only (tests/marketplace_search_and_deploy_tests.rs): a real
+# PocketIC-backed `backend`/`hnsw_index`, driven directly for setup (publish
+# a marketplace item) while a real `orchestrator` subprocess is driven over
+# HTTP for the actual thing under test. Keep aligned with the local PocketIC
+# server used by tests (POCKET_IC_BIN) - see backend/Cargo.toml's identical
+# pin.
+pocket-ic = "15.0.0"
+# `json`/`form` are also enabled on the main `reqwest` entry above now (the
+# GitHub OAuth/provenance calls in src/github.rs and src/provenance.rs need
+# them in production too) - `query` is test-only, used to build request
+# query strings in tests/github_connect_route_tests.rs. `blocking` is also
+# test-only, to POST/parse JSON against the mock LLM server and the running
+# orchestrator's own HTTP API. Cargo unifies features per build, but only
+# within a `cargo test` invocation - an ordinary `cargo build --release`
+# never sees `blocking`/`query`.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json", "blocking", "query"] }

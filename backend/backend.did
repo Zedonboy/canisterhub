@@ -1,0 +1,362 @@
+// Access rights of a user to a vetKey in [`crate::key_manager::KeyManager`] and/or an encrypted map in [`crate::encrypted_maps::EncryptedMaps`].
+type AccessRights = variant {
+  // User can retrieve the vetKey or encrypted map.
+  Read;
+  // User can update values in the encrypted map.
+  ReadWrite;
+  // User can view/share/revoke access to the vetKey or encrypted map.
+  ReadWriteManage;
+};
+// Efficiently serializable and deserializable byte vector that is `Storable` with `ic_stable_structures`.
+// See, e.g., [https://mmapped.blog/posts/01-effective-rust-canisters#serde-bytes](https://mmapped.blog/posts/01-effective-rust-canisters#serde-bytes) for more details regarding why `Vec<u8>` does not work out of the box.
+// Also, we cannot use `serde_bytes::ByteBuf` directly because it is not `Storable`.
+type ByteBuf = record { inner : blob };
+// One tracked canister's identity.
+type CanisterInfo = record { id : principal; kind : CanisterKind };
+// Which building block a tracked canister actually is. A marketplace-item
+// deploy (see `frontend/src/lib/deploy.ts`) always records `Other` - a
+// `MarketplaceItem` has no kind classification of its own.
+type CanisterKind = variant {
+  Analytics;
+  Auth;
+  Static;
+  Connector;
+  AdminAgent;
+  Database;
+  Agent;
+  Other;
+};
+// The IC http gateway's standard inbound request shape - served by
+// `http_request` below, which serves the embedded CanisterHub landing page
+// (see backend/src/lib.rs's "Landing page assets" section). Field names and
+// shapes are fixed by the IC interface spec, not this canister's own design.
+type HttpRequest = record {
+  method : text;
+  url : text;
+  headers : vec record { text; text };
+  body : blob;
+  certificate_version : opt nat16;
+};
+type HttpResponse = record {
+  status_code : nat16;
+  headers : vec record { text; text };
+  body : blob;
+  upgrade : opt bool;
+};
+type MarketplaceItemType = variant { Package; Template };
+// A package or project template published to the marketplace.
+type MarketplaceItem = record {
+  id : nat64;
+  item_type : MarketplaceItemType;
+  // Present if and only if `price` is: an Identity-Based-Encryption
+  // ciphertext (`@dfinity/vetkeys`' `IbeCiphertext`) of the random
+  // AES-256 key the publisher's CI encrypted the package manifest's Wasm
+  // artifact with. Encrypted to this item's own vetkey identity (see
+  // `item_key_id`) — this canister stores it opaquely and can never
+  // decrypt it itself; only a buyer granted read access via
+  // `set_user_rights` can derive the matching vetkey (through
+  // `get_encrypted_vetkey`) and decrypt it client-side. Free items have
+  // nothing worth gating, so they carry no key at all.
+  encrypted_key : opt blob;
+  title : text;
+  publisher : principal;
+  description : text;
+  web_url : opt text;
+  created_at : nat64;
+  // Absolute URL of the public canister_hub.toml manifest.
+  download_url : text;
+  // SHA-256 of the exact bytes an installer fetches from the manifest's
+  // wasm_url — the encrypted artifact for a paid item, the raw Wasm for a
+  // free one. Supplied by the verified publisher at publish time; anchors
+  // install-time integrity against the manifest/release asset (both
+  // off-chain and otherwise publisher-mutable after the fact) being
+  // swapped post-publish.
+  wasm_hash : blob;
+  git_repo_url : text;
+  // One idempotent ICP payment journal entry per buyer. A `None` block
+  // height means the transfer outcome has not yet been confirmed; retries
+  // reuse `created_at_time`, allowing the ledger to reject a second charge
+  // as an ICRC-2 duplicate.
+  purchases : vec record { principal; MarketplacePurchase };
+  // Exact ICP price in e8s. `None` means free.
+  price : opt nat64;
+  // Stable identity within the repository. Publishing the same slug updates
+  // this item; a different slug creates an independent item.
+  package_slug : text;
+  // Popularity signal `orchestrator` uses to break ties between
+  // semantically-similar marketplace items (see `record_download` and
+  // `services/orchestrator/src/embeddings.rs`'s ranking) - not tied to any real
+  // payment/entitlement flow, just a counter anyone can bump.
+  // `#[serde(default)]` so items published (and CBOR-encoded into stable
+  // memory) before this field existed still decode: they come back as 0
+  // rather than failing to load after an upgrade.
+  downloads : nat64;
+};
+type MarketplacePurchase = record {
+  amount_e8s : nat64;
+  created_at_time : nat64;
+  block_height : opt nat;
+};
+type MarketplacePurchaseReceipt = record {
+  block_index : opt nat;
+  amount_e8s : nat64;
+  already_owned : bool;
+  ledger_canister_id : principal;
+};
+// A single orchestrated app - see this section's own header comment.
+// `canisters` is authoritative and additive-only (see
+// `add_project_canisters`): the dashboard's only source of truth for which
+// canister ids belong to this project.
+type Project = record {
+  id : text;
+  updated_at : nat64;
+  // The real end-user principal that created this project - `get_project`/
+  // `list_my_projects` only ever return a project to its own owner. Set
+  // once, at `create_project`, to `msg_caller()` directly: the caller
+  // creates their own project as themselves, with no other party
+  // asserting it on their behalf.
+  owner : principal;
+  request : text;
+  network : text;
+  created_at : nat64;
+  error : opt text;
+  state : ProjectState;
+  canisters : vec record { text; CanisterInfo };
+  llm_context : opt text;
+  final_message : opt text;
+  project_name : opt text;
+  pending_question : opt text;
+};
+// A project's own lifecycle - `AwaitingAnswer`/`Succeeded`/`Failed` only
+// mean anything once something (the frontend, driving a real Orchestrate
+// conversation) actually calls `update_project_state`/`finish_project` to
+// reflect it - `backend` itself has no opinion on what drives these
+// transitions, only that the caller is the project's own owner.
+type ProjectState = variant { Failed; AwaitingAnswer; Succeeded; Running };
+// A browser's `PushSubscription.toJSON()` shape, mirrored exactly from
+// services/orchestrator/src/push.rs::PushSubscription - this canister just
+// persists it, it never interprets `p256dh`/`auth` itself.
+type PushSubscription = record { endpoint : text; p256dh : text; auth : text };
+type Result = variant { Ok; Err : text };
+type Result_1 = variant { Ok : ByteBuf; Err : text };
+type Result_2 = variant { Ok : blob; Err : text };
+type Result_3 = variant { Ok : opt AccessRights; Err : text };
+type Result_4 = variant { Ok : bool; Err : text };
+type Result_5 = variant { Ok : text; Err : text };
+type Result_6 = variant { Ok : nat64; Err : text };
+type Result_7 = variant { Ok : MarketplacePurchaseReceipt; Err : text };
+type Result_8 = variant { Ok : vec PushSubscription; Err : text };
+service : () -> {
+  // Merges newly deployed canister ids into a project's running set.
+  // Additive, never replacing: called at every point a canister id becomes
+  // known (e.g. right after the frontend's own direct `install_code` call
+  // succeeds - see `lib/deploy.ts`), so a project's `canisters` map is
+  // always the complete, current record - the only thing telling the
+  // dashboard which canisters exist to call directly. Owner-gated, same
+  // shape as `remove_project_canister` below.
+  add_project_canisters : (text, vec record { text; CanisterInfo }) -> (Result);
+  // Creates a new `Project` record - called directly by the frontend, as the
+  // signed-in user themselves. The orchestrator has no part in this at all
+  // (see the `decouple-orchestrator-api` project notes): `backend` is a
+  // self-service data store the real end user writes to directly, using the
+  // same identity every other direct-to-canister call in this dashboard
+  // already uses - so the owner is simply `msg_caller()`, not a value
+  // asserted on the caller's behalf by some other authenticated party.
+  create_project : (text, text, text) -> (Result);
+  // Permanently deletes a project's own record - the Settings page's "Delete
+  // Project" (Danger Zone). Owner-gated, same "indistinguishable from not
+  // existing" behavior as `get_project`/`remove_project_canister`.
+  // 
+  // Deliberately does **not** touch any real IC canister - a `Project` here
+  // is only ever a *record of* canisters this canister never itself
+  // controls or could reach. Deleting it just stops tracking whatever it
+  // still names; any canister still listed in `canisters` keeps running,
+  // keeps burning cycles, and becomes unreachable from this dashboard the
+  // moment this call succeeds (no other project will ever list it). This
+  // canister has no way to know whether that's actually fine, so it doesn't
+  // second-guess the caller - `frontend/src/pages/Settings.tsx` is what
+  // requires `canisters` be empty first, as its own disclosed, deliberate
+  // safety rule, not something enforced here.
+  delete_project : (text) -> (Result);
+  // Marks a project finished - `Succeeded` if `error` is `None`, `Failed`
+  // otherwise. Clears any pending question. Owner-gated, same shape as
+  // `remove_project_canister` below.
+  finish_project : (text, opt text, opt text) -> (Result);
+  // Lists the marketplace (owner, vetkeyName) pairs shared with the caller
+  // that they still have access to.
+  get_accessible_shared_key_ids : () -> (
+      vec record { principal; ByteBuf },
+    ) query;
+  // Issues the decryption vetkey for a marketplace item's `item_key_id()` to
+  // a verified caller, wrapped under the
+  // client-supplied vetKD transport public key so only that client can
+  // decrypt it (see `@dfinity/vetkeys`' `TransportSecretKey` /
+  // `EncryptedVetKey.decryptAndVerify`, or the Rust equivalent, on the caller
+  // side — pair with `get_vetkey_verification_key` for verification).
+  get_encrypted_vetkey : (principal, ByteBuf, ByteBuf) -> (Result_1);
+  // Lets the orchestrator (or any other controller-run verifier) fetch this
+  // canister's JWT signing key once and verify tokens locally from then on,
+  // instead of calling back into this canister on every HTTP request it
+  // serves. This is controller-only because it is a symmetric key, so anyone
+  // who can read it can forge tokens for any principal.
+  get_jwt_signing_key : () -> (Result_2) query;
+  // Fetches a single marketplace item by id.
+  get_marketplace_item : (nat64) -> (opt MarketplaceItem) query;
+  // Fetches one project by id - but only for its own owner (see `Project::owner`'s
+  // doc comment). Returns `None` for a non-owner caller, indistinguishable
+  // from the project not existing at all, rather than an error revealing that
+  // it does.
+  get_project : (text) -> (opt Project) query;
+  // Reports a principal's access rights to a vetkey this canister manages.
+  // Same authorization as `set_user_rights` (this canister has no
+  // self-service "check my own rights" path — attempt `get_encrypted_vetkey`
+  // instead, which will simply fail for an unauthorized caller).
+  get_user_rights : (principal, ByteBuf, principal) -> (Result_3) query;
+  // Returns this canister's vetKD verification key, needed by clients to
+  // authenticate (`decryptAndVerify`) whatever `get_encrypted_vetkey` returns.
+  // Public and side-effect-free, but still `#[update]`: fetching it is itself
+  // an inter-canister call to the management canister, which a `#[query]`
+  // cannot make.
+  get_vetkey_verification_key : () -> (ByteBuf);
+  greet : (text) -> (text) query;
+  // Returns whether the caller may download a paid marketplace item without
+  // paying again. The caller principal is derived from the signed query.
+  has_purchased_marketplace_item : (nat64) -> (Result_4) query;
+  // Serves the embedded CanisterHub marketing landing page as certified
+  // HTTP assets - the IC http gateway's standard entry point for a browser
+  // visiting this canister's own URL directly. See backend/src/lib.rs's
+  // "Landing page assets" section.
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  // One-time setup: generates this canister's JWT signing key from `raw_rand`
+  // (the IC's own verifiable randomness — not `getrandom`, which this canister
+  // can't use; see the top of this file) and stores it in stable memory.
+  // 
+  // Deliberately not "generate lazily on first `issue_jwt` call": two callers
+  // racing to be first would each see no key set, each trigger a generation,
+  // and whichever write loses would silently invalidate any token already
+  // issued off the other's key. An explicit, controller-only, one-time,
+  // idempotent-by-rejection setup step avoids that without needing a mutex
+  // primitive this single-threaded canister doesn't have anyway.
+  init_jwt_signing_key : () -> (Result);
+  // Issues a short-lived (`JWT_TTL_SECS`) HS256 JWT binding `msg_caller()`,
+  // for the caller to present as a bearer token to the orchestrator's HTTP
+  // API. `#[update]`, not `#[query]`, so `msg_caller()` reflects a properly
+  // authenticated (consensus-certified) call rather than an unsigned fast
+  // query anyone could send as anyone — same reasoning as
+  // `register_repo_publisher` and `get_encrypted_vetkey` above.
+  issue_jwt : () -> (Result_5);
+  // Returns the vetkey name for a marketplace item's `git_repo_url` (see
+  // `item_key_id`) — the same URL you'd pass to `publish_marketplace_item` — so a
+  // publisher's CI doesn't have to reimplement the parsing/SHA-256
+  // derivation itself to know what identity to IBE-encrypt to before
+  // calling `publish_marketplace_item`.
+  item_key_name : (text, text) -> (Result_2) query;
+  // Lists all marketplace items.
+  list_marketplace_items : () -> (vec MarketplaceItem) query;
+  // Every project the caller owns, newest first - mirrors
+  // `orchestrator::job::JobStore::list_for`. The real data behind the
+  // dashboard's project list, called directly - no orchestrator HTTP call.
+  list_my_projects : () -> (vec Project) query;
+  // Publishes a package or template manifest to the marketplace.
+  // 
+  // The caller must have already claimed this GitHub repository via
+  // `register_repo_publisher` - a different (or not-yet-registered)
+  // principal calling this for the same repo is rejected outright, not
+  // silently re-verified or auto-claimed.
+  // 
+  // `encrypted_key` gates whether the release is protected at all: it must
+  // be `Some` exactly when `price` is `Some`, and `None` exactly when the
+  // item is free — there's nothing worth encryption-gating behind a price of
+  // nothing. The publisher's own CI is expected to have generated a random
+  // AES key, encrypted the release artifact with it, and IBE-encrypted *that
+  // key* to this item's vetkey identity (`item_key_id`, via
+  // `get_vetkey_verification_key`) before calling this method — this
+  // canister only ever stores the resulting ciphertext, never a usable key.
+  publish_marketplace_item : (
+      MarketplaceItemType,
+      opt text,
+      text,
+      text,
+      text,
+      text,
+      text,
+      opt nat64,
+      opt blob,
+      text,
+      blob,
+    ) -> (Result_6);
+  // Pulls the exact listing price from the caller's approved ICP allowance and
+  // grants that caller read access to the item's vetkey only after the ledger
+  // confirms the transfer. Pending calls are journaled before the await, and a
+  // retry accepts ICRC-2 `Duplicate` as the original successful payment.
+  purchase_marketplace_item : (nat64) -> (Result_7);
+  // `principal`'s own currently-stored push subscriptions - persistence for
+  // services/orchestrator's `/push/subscriptions` route. Controller-only
+  // (the orchestrator, after verifying the caller's own JWT itself).
+  push_list_subscriptions : (principal) -> (Result_8) query;
+  // Records (or updates) `principal`'s push subscription - persistence for
+  // services/orchestrator's `/push/subscribe` route. Controller-only, same
+  // reasoning as `register_repo_publisher`: only the orchestrator can prove
+  // which end-user principal a request actually came from. Idempotent on
+  // `endpoint`.
+  push_subscribe : (principal, PushSubscription) -> (Result);
+  // Drops one of `principal`'s push subscriptions by `endpoint` -
+  // persistence for services/orchestrator's `/push/unsubscribe` route.
+  // Controller-only, same as `push_subscribe`. Not finding a match is not
+  // an error.
+  push_unsubscribe : (principal, text) -> (Result);
+  // Bumps an item's download counter by one - a bare popularity signal, not
+  // tied to any real payment/entitlement check (a production deployment would
+  // call this from wherever a purchase/download is actually confirmed, e.g.
+  // alongside a `get_encrypted_vetkey` success). Callable by anyone; there's
+  // nothing sensitive being gated here, only a number `orchestrator` reads to
+  // break ties between semantically-similar search results.
+  record_download : (nat64) -> (Result);
+  // Registers an explicit publisher principal for a GitHub repository.
+  // Controller-only - called by the orchestrator after it independently
+  // verifies GitHub repository ownership via OAuth (see
+  // services/orchestrator/src/github.rs), never directly by an end user's
+  // dashboard session. `publisher` is the separate CI identity
+  // `publish_marketplace_item` must later be signed by. The first
+  // registration wins; repeating it with the same publisher is a no-op,
+  // while replacing it with a different publisher is rejected.
+  register_repo_publisher : (text, principal) -> (Result);
+  // Drops one canister from a project's tracked set - the owner's own
+  // counterpart to `add_project_canisters`. Called directly by the frontend
+  // right after its own direct `delete_canister` management-canister call
+  // succeeds, so this project's record doesn't keep pointing at a canister
+  // id that no longer exists. Same "indistinguishable from not existing"
+  // non-owner behavior as `get_project`. A `name` that isn't currently
+  // tracked is not an error - the end state (not tracked) is already what
+  // was asked for.
+  remove_project_canister : (text, text) -> (Result);
+  // Revokes a principal's access to a vetkey this canister manages (e.g.
+  // after a refund or chargeback). Same authorization as `set_user_rights`.
+  remove_user : (principal, ByteBuf, principal) -> (Result_3);
+  // Records a project-wide LLM context document. Owner-gated, same shape as
+  // `remove_project_canister` below.
+  set_project_llm_context : (text, text) -> (Result);
+  // Records a project's own chosen name. Owner-gated, same shape as
+  // `remove_project_canister` below.
+  set_project_name : (text, text) -> (Result);
+  // Grants or modifies a principal's access to a marketplace item's
+  // `item_key_id()` (its registered publisher, or a controller). Normal
+  // marketplace purchases use `purchase_marketplace_item`, which grants
+  // `Read` automatically only after its ICRC-2 payment succeeds; this method
+  // remains the explicit administrative grant/override surface.
+  // 
+  // Unlike a single-use redemption token, this grant is durable: the caller
+  // may derive the same key as many times as it needs to (re-installs,
+  // multiple devices, a dropped download) until revoked via `remove_user`.
+  // vetKD's derivation is idempotent — re-deriving costs cycles but never
+  // changes what the key *is* — so there is no replay risk to guard against
+  // the way there was when this canister held (and handed out copies of) the
+  // raw key material itself.
+  set_user_rights : (principal, ByteBuf, principal, AccessRights) -> (Result_3);
+  // Updates a project's state - `Running`/`AwaitingAnswer` transitions, with
+  // `pending_question` set exactly when `state == AwaitingAnswer`. Owner-gated,
+  // same shape as `remove_project_canister` below - called directly by the
+  // frontend on its own project, never the orchestrator (see this file's
+  // "Project tracking" section doc note).
+  update_project_state : (text, ProjectState, opt text) -> (Result);
+}

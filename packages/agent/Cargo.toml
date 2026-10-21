@@ -1,0 +1,58 @@
+[package]
+name = "agent"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid.workspace = true
+# `ic-llm` 2.0 (below) forces `^0.20.1` (its own Cargo.toml dependency, and
+# `ic-cdk`'s `links` key means only one version can ever be in the final
+# binary - see the packages workspace's `rust-toolchain.toml`, pinned to 1.94 for
+# `ic-llm` 2.0's own MSRV). `ic-rig` itself has no bundled HTTP client (see
+# its `Cargo.toml` entry below) and only depends on serde/serde_json/
+# thiserror, so it carries no `ic-cdk` requirement of its own - `ic-llm` is
+# the only reason this crate needs a specific `ic-cdk` version at all.
+ic-cdk-020.workspace = true
+# `ic-cdk` 0.20 moved `management_canister` (http_request and friends) out
+# into its own crate - see `llm.rs::IcpClient`.
+ic-cdk-management-canister.workspace = true
+# The real on-chain LLM canister client (`llm_provider = "platform"` below) -
+# re-added alongside `ic-rig`, not instead of it (see `src/llm.rs`'s own doc
+# comment on the real tradeoff between the two: no API key/outcall needed
+# here, but only DFINITY's own hosted models and that canister's own
+# prompt/token/message caps).
+ic-llm.workspace = true
+# LLM client that makes its own HTTPS outcalls to a real provider's API
+# (OpenAI/Anthropic/Gemini/DeepSeek), rather than going through the IC's
+# on-chain LLM canister - see `src/llm.rs`'s doc comment for why, and
+# `src/llm_context.md`'s "Choosing a provider" section for the tradeoffs.
+# "Bring your own HTTP client" by design (see `llm.rs::IcpClient`), which is
+# exactly what makes it canister-compatible with no version gymnastics of
+# its own - `ic-llm` above is this crate's only actual source of one.
+ic-rig.workspace = true
+ic-stable-structures.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+serde_json.workspace = true
+ciborium.workspace = true
+# HMAC-SHA256 for signing/verifying the admin webhook - see admin.rs.
+hmac.workspace = true
+sha2.workspace = true
+hex.workspace = true
+# `ic_rig::Tool`/`HttpClient`'s associated `Error` types require
+# `std::error::Error` - `thiserror` is the easiest way to satisfy that for
+# our own small error types (see `llm.rs::ActionError`).
+thiserror.workspace = true
+
+
+[dev-dependencies]
+# Keep aligned with the local PocketIC server used by tests (POCKET_IC_BIN) -
+# see backend/Cargo.toml's identical pin.
+pocket-ic.workspace = true
+# Only for `#[tokio::test]` on `tools.rs`'s unit tests, which call `async fn`
+# `Tool::call` methods directly (a real canister/PocketIC execution runs
+# them via ic-cdk's own executor instead - this is host-side unit testing).
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -1,0 +1,45 @@
+type ApiError = variant {
+  Internal : text;
+  InvalidInput : text;
+  NotFound;
+  Unauthorized : text;
+  Forbidden : text;
+  Conflict : text;
+  AuthUnavailable : text;
+};
+type Authorization = record { "principal" : opt principal; profile_id : nat64 };
+type CreateItem = record { name : text; payload : text };
+type Health = record { "service" : text; status : text };
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
+type Item = record {
+  id : nat64;
+  updated_at : nat64;
+  name : text;
+  created_at : nat64;
+  owner_profile_id : nat64;
+  payload : text;
+};
+type Result = variant { Ok : Item; Err : ApiError };
+type Result_1 = variant { Ok : Authorization; Err : ApiError };
+type Result_2 = variant { Ok : vec Item; Err : ApiError };
+service : {
+  create_item : (text, CreateItem) -> (Result);
+  delete_item : (text, nat64) -> (Result);
+  get_my_identity : (text) -> (Result_1);
+  health : () -> (Health) query;
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  http_request_update : (HttpRequest) -> (HttpResponse);
+  list_my_items : (text) -> (Result_2);
+  llm_context : () -> (text) query;
+}

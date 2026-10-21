@@ -1,0 +1,35 @@
+type Value = variant {
+  Null;
+  Text : text;
+  Boolean : bool;
+  Bytes : blob;
+  Float : float64;
+  Integer : int64;
+};
+service : {
+  // Empties the store, returning how many entries it held.
+  clear : () -> (nat64);
+  // Removes `key`, returning the value it held (`null` if it didn't exist).
+  delete : (text) -> (opt Value);
+  exists : (text) -> (bool) query;
+  get : (text) -> (opt Value) query;
+  // Looks up several keys in one call, preserving order - a missing key comes
+  // back as `null` in its slot rather than shrinking the result.
+  get_many : (vec text) -> (vec opt Value) query;
+  // All keys, optionally restricted to ones starting with `prefix` - in
+  // sorted order.
+  keys : (opt text) -> (vec text) query;
+  len : () -> (nat64) query;
+  // A prose description of this canister for an AI agent (or a human caller)
+  // to consume - what it does, its API, and its persistence tradeoffs. Open
+  // to any caller: nothing sensitive in a description of the canister's own
+  // shape, and it needs to be readable before anyone has a reason to call
+  // anything else here.
+  llm_context : () -> (text) query;
+  // Sets `key` to `value`, returning whatever `key`'s value was before this
+  // call (`null` if it didn't exist).
+  set : (text, Value) -> (opt Value);
+  // Sets every `(key, value)` pair in `entries` in one call, later entries
+  // winning on a repeated key. Returns how many entries were set.
+  set_many : (vec record { text; Value }) -> (nat64);
+}

@@ -1,0 +1,47 @@
+[workspace]
+members = [
+    "admin_agent",
+    "agent",
+    "app_api",
+    "auth",
+    "connector",
+    "ic-kv",
+    "ic-sql",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+canister-hub-sdk = { path = "../sdk", default-features = false, features = ["ic"] }
+candid = "0.10"
+ciborium = "0.2"
+hex = "0.4"
+hmac = "0.12"
+ic-cdk = "0.19"
+ic-cdk-020 = { package = "ic-cdk", version = "0.20.3" }
+ic-cdk-management-canister = "0.1"
+ic-asset-certification = "4"
+ic-http-certification = "4"
+ic-llm = "2.0"
+include_dir = "0.7"
+ic-rig = { version = "0.2", features = ["openai", "anthropic", "gemini", "deepseek"] }
+ic-stable-structures = "0.7"
+im = "15"
+pocket-ic = "15.0.0"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+serde_json = "1"
+sha2 = "0.10"
+sqlparser = "0.60"
+thiserror = "2"
+tokio = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,0 +1,17 @@
+[package]
+name = "example_module"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid = "0.10"
+ic-cdk = "0.19"
+serde = { version = "1", features = ["derive"] }
+ic-stable-structures = "0.7"
+canister-hub-sdk = { path = "../../..", default-features = false, features = ["ic"] }
+
+[workspace]

@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=https://github.com/dfinity/icp-cli/raw/refs/tags/v1.3.0/docs/schemas/canister-yaml-schema.json
+#
+name: app_api
+recipe:
+  type: "@dfinity/rust@v3.4.0"
+  configuration:
+    shrink: true
+    candid: app_api.did
+    metadata:
+      - name: "crate:version"
+        value: 1.0.0
+

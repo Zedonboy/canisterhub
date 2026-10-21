@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="text-scale" content="scale" />
+		<link rel="icon" href="/favicon.svg" />
+		<title>IntelliSheet</title>
+		<script>
+			// Apply the saved theme before first paint so dark mode doesn't flash white (see stores/theme.ts).
+			(function () {
+				try {
+					var mode = localStorage.getItem('silver:theme');
+					var dark = mode === 'dark' || (mode !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+					document.documentElement.classList.toggle('dark', dark);
+					document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+				} catch (error) {}
+			})();
+		</script>
+	</head>
+	<body>
+		<div id="root"></div>
+		<!-- Glide Data Grid renders overlays (read-only cell viewers) into this portal. -->
+		<div id="portal" style="position: fixed; left: 0; top: 0; z-index: 9999"></div>
+		<script type="module" src="/src/main.tsx"></script>
+	</body>
+</html>

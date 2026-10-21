@@ -1,0 +1,120 @@
+type AnalyticsMeta = record {
+  name : text;
+  user_id : principal;
+  master_canister : principal;
+};
+type ApiKeyMeta = record {
+  id : text;
+  name : text;
+  created_at : nat64;
+  key_prefix : text;
+};
+type ConnectedCanister = record {
+  name : text;
+  canister_id : principal;
+  added_at : nat64;
+  system_metrics : bool;
+};
+type HistogramPage = record {
+  total : nat64;
+  name : text;
+  points : vec record { float64; float64 };
+};
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
+type LogPage = record {
+  total : nat64;
+  name : text;
+  offset : nat64;
+  entries : vec record { nat64; text };
+};
+type Metric = record { key : text; value : MetricValue; name : text };
+type MetricValue = variant {
+  Log : text;
+  TimeSeries : float64;
+  Histogram : record { x : float64; y : float64 };
+  Gauge : float64;
+  Counter : int64;
+};
+type Result = variant { Ok; Err : text };
+type Result_1 = variant { Ok : text; Err : text };
+type Result_2 = variant { Ok : TransformerOutput; Err : text };
+type Result_3 = variant { Ok : nat; Err : text };
+type StoredMetric = variant {
+  Log : record { total : nat64; name : text };
+  Histogram : record { total : nat64; name : text };
+  Gauge : record { value : float64; name : text };
+  Counter : record { value : int64; name : text };
+};
+type TransformerInfo = record {
+  key : text;
+  script : text;
+  name : text;
+  created_at : nat64;
+};
+type TransformerOutput = variant {
+  Text : text;
+  Scalar : float64;
+  Series : vec record { float64; float64 };
+};
+service : (AnalyticsMeta) -> {
+  add_canister_connection : (principal, text, bool) -> (Result);
+  clear_metric : (text) -> (Result);
+  delete_transformer : (text) -> ();
+  // Generates a new API key. Returns the full key exactly once — only the
+  // SHA-256 hash is stored. The key format is `icm_<base64url>`.
+  generate_api_key : (text) -> (Result_1);
+  get_all_metrics : () -> (vec record { text; StoredMetric }) query;
+  get_analytics_name : () -> (text) query;
+  // Returns histogram data points within an x-axis range.
+  // When both `from` and `to` are `0.0`, all stored points are returned.
+  get_histogram_page : (text, float64, float64) -> (opt HistogramPage) query;
+  get_log_page : (text, nat64, nat64) -> (opt LogPage) query;
+  get_metric : (text) -> (opt StoredMetric) query;
+  get_transformer : (text) -> (opt TransformerInfo) query;
+  get_version : () -> (text) query;
+  // Validates the API key before upgrading to an update call.
+  // Rejecting invalid keys here (query cost) avoids paying update cycle costs.
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  // Handles authenticated metric writes over HTTP.
+  // Expects `Authorization: Bearer <api_key>` and a JSON body:
+  // `{"key":"…","name":"…","type":"counter"|"gauge"|"log"|"histogram","value":…}`
+  // For histograms, use `"x": <f64>, "y": <f64>` instead of `"value"`.
+  http_request_update : (HttpRequest) -> (HttpResponse);
+  list_api_keys : () -> (vec ApiKeyMeta) query;
+  list_canister_connections : () -> (vec ConnectedCanister) query;
+  list_transformers : () -> (vec TransformerInfo) query;
+  record_metric : (Metric) -> ();
+  register_transformer : (text, text, text) -> (Result);
+  remove_canister_connection : (principal) -> (Result);
+  revoke_api_key : (text) -> (Result);
+  // Execute a transformer script. The script fetches its own inputs via these
+  // built-in functions that read from this canister's stable storage:
+  //
+  // get_counter(key)   → integer
+  // get_gauge(key)     → float
+  // get_histogram(key) → array of `#{x, y}` maps
+  // get_log(key)       → array of `#{ts, text}` maps
+  //
+  // The script's final expression determines the output variant:
+  // float / int            → Scalar(f64)
+  // array of `#{x, y}`    → Series(Vec<(f64, f64)>)
+  // string                 → Text(String)
+  run_transformer : (text) -> (Result_2) query;
+  // Fetches the latest user-canister version from the master, and if it is
+  // newer than this canister's version, fires an inter-canister `upgrade_me`
+  // call back to the master. The master schedules the actual WASM swap 10 s
+  // later so this call can return cleanly first.
+  upgrade_metric_canister : () -> (Result);
+  withdraw_cycles : () -> (Result_3);
+}

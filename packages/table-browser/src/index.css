@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* Matches `frontend/src/index.css` exactly - this app is embedded into the
+   dashboard via iframe (see `frontend/src/pages/DatabaseTable.tsx`'s own
+   embed point), so it needs to actually look like the same app, not just
+   use the same literal hex colors in its own markup. `--font-mono` in
+   particular matters here: the ported grid (`App.tsx`, straight from
+   `frontend/src/pages/DatabaseTable.tsx`) uses Tailwind's `font-mono`
+   utility throughout, which - per Tailwind v4's CSS-first config - resolves
+   from this `@theme` variable, not from Tailwind's own unrelated default
+   mono stack. Omitting it would make every `font-mono` cell/badge/id
+   render in a different typeface than the dashboard around it. */
+@theme {
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
+  --font-ui: "DM Sans", "Geist", system-ui, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: #0a0e1a;
+  color: #e2e8f0;
+  font-family: "DM Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  height: 100%;
+}
+
+#root { height: 100dvh; display: flex; flex-direction: column; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0a0e1a; }
+::-webkit-scrollbar-thumb { background: #1e2d47; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #00d4ff44; }
+
+::selection { background: #00d4ff33; color: #e2e8f0; }
+
+a { color: inherit; text-decoration: none; }
+
+button { cursor: pointer; }

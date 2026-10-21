@@ -1,0 +1,13 @@
+[package]
+name = "canister-hub-sdk-macros"
+version = "0.1.0"
+edition = "2021"
+description = "Procedural macros backing canister-hub-sdk's ic-only config module: #[derive(FounderOsConfig)] and #[founder_os_config]."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"

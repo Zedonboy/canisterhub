@@ -1,0 +1,32 @@
+[package]
+name = "admin_agent"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid.workspace = true
+# Matches this repo's other on-chain canisters (backend/connector) - see
+# `agent/Cargo.toml`'s identical comment on why `ic-rig` (below)
+# doesn't force any particular `ic-cdk` version, unlike the earlier
+# `ic-llm`-based design.
+ic-cdk.workspace = true
+# LLM client that makes its own HTTPS outcalls to a real provider's API
+# (OpenAI/Anthropic/Gemini/DeepSeek) - see `src/llm.rs`'s doc comment.
+ic-rig.workspace = true
+ic-stable-structures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ciborium.workspace = true
+# `ic_rig::Tool`/`HttpClient`'s associated `Error` types require
+# `std::error::Error` - see `tools.rs::ActionError`.
+thiserror.workspace = true
+
+[dev-dependencies]
+# Keep aligned with the local PocketIC server used by tests (POCKET_IC_BIN).
+pocket-ic.workspace = true
+# Only for `#[tokio::test]` on `tools.rs`'s unit tests, which call `async fn`
+# `Tool::call` methods directly.
+tokio = { workspace = true, features = ["macros", "rt"] }

@@ -1,0 +1,82 @@
+name: "vetKD encrypt"
+description: >-
+  Derives an AES-256 key on demand from a canister's vetKD-backed KeyManager
+  (the ic-vetkeys Rust crate's standard candid interface) and uses it to
+  AES-256-GCM encrypt a file. No static secret is ever stored in CI or in the
+  canister — the key is re-derived fresh each run via the IC's threshold
+  vetKD protocol. Works against any canister exposing
+  get_encrypted_vetkey / get_vetkey_verification_key, not just this repo's.
+author: "canister_hub"
+branding:
+  icon: "lock"
+  color: "purple"
+
+inputs:
+  canister-id:
+    description: "Principal of the canister exposing the KeyManager interface."
+    required: true
+  ic-host:
+    description: "IC HTTP gateway host to call."
+    required: false
+    default: "https://icp0.io"
+  identity-seed:
+    description: >-
+      64-character hex string (32-byte Ed25519 seed) for an identity already
+      granted read access to the target vetkey via the canister's
+      set_user_rights method. Treat as a secret — pass it from a repo/org
+      secret, never hardcode it.
+    required: true
+  key-owner:
+    description: >-
+      Principal that "owns" the vetkey being requested, per KeyManager's
+      (owner, name) key scheme. Defaults to canister-id, matching the common
+      convention of a canister managing its own single key.
+    required: false
+    default: ""
+  key-name:
+    description: "UTF-8 vetkey name (must be 32 bytes or fewer)."
+    required: true
+  aes-domain-separator:
+    description: >-
+      Local HKDF domain separator used to turn the vetkey into an AES-GCM
+      key. Never sent to the canister — must match whatever decrypts the
+      output file later, or it silently derives a different key with no
+      error.
+    required: true
+  in-file:
+    description: "Path to the plaintext file to encrypt."
+    required: true
+  out-file:
+    description: "Path to write the encrypted output to."
+    required: true
+
+outputs:
+  out-file:
+    description: "Path to the encrypted output file (same as the out-file input)."
+    value: ${{ steps.encrypt.outputs.out-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install action dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm install
+
+    - name: Derive key and encrypt
+      id: encrypt
+      shell: bash
+      # No working-directory override here (defaults to the caller's own
+      # checkout) so relative in-file/out-file inputs resolve the way a
+      # caller would expect; the script itself is addressed by full path.
+      env:
+        CANISTER_ID: ${{ inputs.canister-id }}
+        IC_HOST: ${{ inputs.ic-host }}
+        IDENTITY_SEED: ${{ inputs.identity-seed }}
+        KEY_OWNER: ${{ inputs.key-owner }}
+        KEY_NAME: ${{ inputs.key-name }}
+        AES_DOMAIN_SEPARATOR: ${{ inputs.aes-domain-separator }}
+      run: |
+        node "${{ github.action_path }}/derive_key_and_encrypt.js" \
+          "${{ inputs.in-file }}" "${{ inputs.out-file }}"
+        echo "out-file=${{ inputs.out-file }}" >> "$GITHUB_OUTPUT"

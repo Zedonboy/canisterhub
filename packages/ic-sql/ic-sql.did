@@ -1,0 +1,214 @@
+type Access = variant { None; Read; Write; Admin };
+type CanisterMetadata = record {
+  name : text;
+  description : text;
+  version : text;
+  canister_type : opt CanisterType;
+};
+type CanisterType = variant { Storage; Auth; Database; Custom };
+type CheckConstraint = record { expression : text; name : opt text };
+type ColumnDef = record { name : text; data_type : text };
+type ColumnDefault = record { value : SqlValue; column : text };
+type Config = record {
+  // The `auth` canister (see that crate) to consult for a caller with no
+  // explicit `set_permission` entry of their own - `None` (the default)
+  // means every such caller falls back to `ReadWrite`, the same
+  // no-access-control behavior this canister had before this field
+  // existed. See `auth::decide`'s doc comment for exactly how this
+  // combines with an explicit permission entry.
+  auth_canister : opt principal;
+};
+type ConfigFieldSchema = record {
+  key : text;
+  is_required : bool;
+  field_type : ConfigType;
+  description : text;
+  label : text;
+  // Optional typed filter for canister-picker fields. `None` has the
+  // same meaning as `Some(CanisterType::Custom)`.
+  canister_type : opt CanisterType;
+  // True for canister-provided display data that set_config cannot mutate.
+  is_readonly : opt bool;
+  default_value : opt ConfigValue;
+};
+type ConfigType = variant {
+  Text;
+  CanisterPicker : record { module_type_filter : opt text };
+  Boolean;
+  Float;
+  // Same wire shape as `Text`; `get_config` masks the value for any
+  // caller that isn't a controller (see this module's doc comment).
+  SecretText;
+  Select : record { options : vec text };
+  Number;
+};
+// `update_config`'s argument - see this module's doc comment for the
+// three-state-per-field convention.
+type ConfigUpdate = record { auth_canister : opt opt principal };
+type ConfigValue = variant {
+  Text : text;
+  Boolean : bool;
+  Float : float64;
+  PrincipalId : principal;
+  Number : int64;
+};
+type ConstraintDescription = record {
+  constraints : RelationalConstraints;
+  table_name : text;
+};
+type ForeignKeyAction = variant {
+  Cascade;
+  NoAction;
+  Restrict;
+  SetNull;
+  SetDefault;
+};
+type ForeignKeyConstraint = record {
+  name : opt text;
+  referred_columns : vec text;
+  on_delete : ForeignKeyAction;
+  columns : vec text;
+  foreign_table : text;
+  on_update : ForeignKeyAction;
+};
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
+type IndexDefinition = record {
+  name : text;
+  unique : bool;
+  columns : vec text;
+};
+type PermissionEntry = record {
+  access : Access;
+  "principal" : principal;
+  module : text;
+};
+type QueryResult = record {
+  rows : vec vec SqlValue;
+  rows_affected : nat64;
+  message : text;
+  columns : vec text;
+};
+type RelationalConstraints = record {
+  foreign_keys : vec ForeignKeyConstraint;
+  unique : vec UniqueConstraint;
+  defaults : vec ColumnDefault;
+  checks : vec CheckConstraint;
+  indexes : vec IndexDefinition;
+  not_null : vec text;
+};
+type Result = variant { Ok : ConstraintDescription; Err : text };
+type Result_1 = variant { Ok : TableDescription; Err : text };
+type Result_2 = variant { Ok; Err : text };
+type Result_3 = variant { Ok : QueryResult; Err : text };
+type Result_4 = variant { Ok : vec QueryResult; Err : text };
+type Result_5 = variant { Ok : Config; Err : text };
+type Result_6 = variant { Ok : vec RlsPolicy; Err : text };
+// Opt-in owner-column policy for one table. Absence from the policy map means
+// RLS is disabled for that table.
+type RlsPolicy = record { table_name : text; owner_column : text };
+type SqlValue = variant {
+  Null;
+  Text : text;
+  Boolean : bool;
+  Float : float64;
+  Integer : int64;
+};
+type TableDescription = record {
+  name : text;
+  row_count : nat64;
+  columns : vec ColumnDef;
+};
+type UniqueConstraint = record {
+  primary_key : bool;
+  name : opt text;
+  columns : vec text;
+};
+service : () -> {
+  canister_metadata : () -> (CanisterMetadata) query;
+  describe_constraints : (text) -> (Result) query;
+  describe_table : (text) -> (Result_1) query;
+  disable_rls : (text) -> (Result_2);
+  enable_rls : (text, text) -> (Result_2);
+  // Runs any SQL statement (DDL or DML - `CREATE TABLE`, `INSERT`, `UPDATE`,
+  // `DELETE`, `DROP TABLE`, or `SELECT`) and persists its effect. Prefer
+  // `query` for a read-only `SELECT` - it doesn't need to go through
+  // consensus.
+  // 
+  // Requires `ReadWrite` access (see [`auth`]) - a `Blocked` caller is
+  // rejected outright, and a `ReadOnly` one is rejected here regardless of
+  // which statement it sent (even a harmless `SELECT`): this is the
+  // read-*write* endpoint, `query` is the read-only one.
+  execute : (text) -> (Result_3);
+  // Executes up to 100 statements as one atomic transaction. Stable storage is
+  // changed only after every statement and every constraint check succeeds.
+  execute_batch : (vec text) -> (Result_4);
+  execute_batch_with_session : (text, vec text) -> (Result_4);
+  execute_with_session : (text, text) -> (Result_3);
+  get_admin_panel_url : () -> (opt text) query;
+  get_config : () -> (vec record { text; ConfigValue }) query;
+  get_config_schema : () -> (vec ConfigFieldSchema) query;
+  get_database_config : () -> (Result_5) query;
+  get_home_page_url : () -> (opt text) query;
+  get_permission : (text, principal) -> (opt Access) query;
+  // Controller-only fast path for a table-browser-style admin UI to page
+  // through a table's rows: no SQL text, no parser, and no full-database
+  // load (see `storage::table_rows`) - just this table's own rows, directly
+  // out of stable storage. Deliberately controller-only rather than routed
+  // through the general `ReadOnly`/`ReadWrite`/RLS permission model `query`
+  // respects: it exists for this canister's own admin tooling, not as a
+  // second general-purpose read endpoint for arbitrary callers. Use `query`
+  // (or the REST API) for anything that needs to respect per-caller
+  // permissions or RLS.
+  get_table_rows : (text, nat64, nat64) -> (Result_3) query;
+  // PostgREST gateway entry point, plus the embedded `table-browser` static
+  // UI for any path outside it (see `assets.rs`). Mutations and every
+  // RLS-protected request return `upgrade=true` so authentication and row
+  // access run in an update.
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  // Consensus-backed half of the REST interface. RLS routes validate a bearer
+  // session here; unprotected writes retain the anonymous-permission behavior.
+  http_request_update : (HttpRequest) -> (HttpResponse);
+  list_permissions : (opt text) -> (vec PermissionEntry) query;
+  list_rls_policies : () -> (Result_6) query;
+  list_tables : () -> (vec text) query;
+  // A prose description of this canister for an AI agent (or a human caller)
+  // to consume - what it does, exactly which SQL it supports (and, just as
+  // important, which it silently doesn't), and its persistence tradeoffs.
+  // Open to any caller: nothing sensitive in a description of the canister's
+  // own shape, and it needs to be readable before anyone has a reason to
+  // call anything else here.
+  llm_context : () -> (text) query;
+  // Runs a read-only `SELECT`. Rejects anything else outright: an IC query
+  // call's state changes are never committed regardless, so letting a
+  // mutation through here would silently discard it instead of reporting an
+  // error.
+  // 
+  // Only a `Blocked` caller is rejected here (see [`auth`]) - `ReadOnly` and
+  // `ReadWrite` are both allowed, since this endpoint is already
+  // structurally read-only regardless of which one a caller has.
+  "query" : (text) -> (Result_3) query;
+  // Authenticated SELECT endpoint for RLS tables. It is an update because
+  // resolving a principal through the auth canister requires an inter-canister
+  // call; the SQL itself remains read-only.
+  query_authenticated : (text) -> (Result_3);
+  // Session-token variants let OAuth-only identities use Candid while sharing
+  // exactly the same RLS subject as REST bearer authentication.
+  query_with_session : (text, text) -> (Result_3);
+  remove_permission : (text, principal) -> (Result_2);
+  set_config : (vec record { text; ConfigValue }) -> (Result_2);
+  set_permission : (PermissionEntry) -> (Result_2);
+  // Applies `update` to the current configuration - see `ConfigUpdate`'s doc
+  // comment for its three-state-per-field semantics.
+  update_config : (ConfigUpdate) -> (Result_2);
+}

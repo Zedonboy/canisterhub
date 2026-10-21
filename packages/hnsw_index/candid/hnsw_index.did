@@ -1,0 +1,106 @@
+type AccessEntry = record { "principal" : principal; role : Role };
+// Parameters that control the HNSW graph structure.
+// 
+// Sensible defaults for ICP (instruction-budget conscious):
+// - m = 8, ef_construction = 100  → fast insert, good recall up to ~50k nodes
+// - m = 16, ef_construction = 200 → higher quality, slower insert
+type CollectionConfig = record {
+  // Max connections per node (except layer 0 which uses 2×m). Default 8.
+  m : nat8;
+  // Dimensionality of vectors in this collection. All inserted vectors must match.
+  dim : nat32;
+  // Human-readable name.
+  name : text;
+  distance : DistanceMetric;
+  // Candidate pool size during index construction. Higher = better recall,
+  // more instructions per insert. Default 100.
+  ef_construction : nat16;
+};
+type CollectionInfo = record {
+  m : nat8;
+  id : nat32;
+  dim : nat32;
+  node_count : nat64;
+  owner : principal;
+  name : text;
+  max_layer : nat8;
+  distance : DistanceMetric;
+  ef_construction : nat16;
+};
+type DistanceMetric = variant {
+  // Negative dot product. Use when vectors are already unit-normalised.
+  DotProduct;
+  // Euclidean (L2) distance. Good for image / dense feature vectors.
+  Euclidean;
+  // 1 − cosine_similarity. Best for text / embedding model output.
+  Cosine;
+};
+type HnswError = variant {
+  // Internal storage error (should never happen in practice).
+  Internal : text;
+  // m must be in 2..=64; ef_construction must be ≥ m.
+  InvalidConfig : text;
+  // ef_search must be ≥ top_k.
+  InvalidSearchParams;
+  // The collection already exists with that name.
+  CollectionAlreadyExists;
+  // Referenced collection does not exist.
+  CollectionNotFound : nat32;
+  // Vector dimensionality does not match the collection.
+  DimensionMismatch : record { got : nat32; expected : nat32 };
+  // Caller does not have the required role.
+  Unauthorized;
+  // Referenced node does not exist.
+  NodeNotFound : nat64;
+};
+type InsertRequest = record {
+  // Arbitrary bytes the caller wants stored with this vector (JSON, Candid, etc.).
+  metadata : blob;
+  collection_id : nat32;
+  vector : vec float32;
+};
+type Result = variant { Ok : CollectionInfo; Err : HnswError };
+type Result_1 = variant { Ok : nat32; Err : HnswError };
+type Result_2 = variant { Ok; Err : HnswError };
+type Result_3 = variant { Ok : nat64; Err : HnswError };
+type Result_4 = variant { Ok : vec AccessEntry; Err : HnswError };
+type Result_5 = variant { Ok : vec SearchResult; Err : HnswError };
+type Role = variant {
+  // Read-only: can search and inspect collection info.
+  Reader;
+  // Can insert and delete vectors. Cannot manage access.
+  Writer;
+  // Full control: configure, insert, delete, search, grant/revoke access.
+  Owner;
+};
+type SearchRequest = record {
+  top_k : nat32;
+  collection_id : nat32;
+  // Override the collection's distance metric for this search.
+  // If `None`, the collection's configured metric is used.
+  distance : opt DistanceMetric;
+  vector : vec float32;
+  // Candidate pool during search. Higher = better recall, more cycles.
+  // Must be ≥ top_k. Default 50.
+  ef_search : nat32;
+};
+type SearchResult = record {
+  id : nat64;
+  metadata : blob;
+  // Distance to the query (lower = more similar).
+  distance : float32;
+};
+service : {
+  collection_info : (nat32) -> (Result) query;
+  create_collection : (CollectionConfig) -> (Result_1);
+  delete_collection : (nat32) -> (Result_2);
+  delete_node : (nat32, nat64) -> (Result_2);
+  get_controller_only : () -> (bool) query;
+  grant_access : (nat32, principal, Role) -> (Result_2);
+  insert : (InsertRequest) -> (Result_3);
+  list_access : (nat32) -> (Result_4) query;
+  revoke_access : (nat32, principal) -> (Result_2);
+  search : (SearchRequest) -> (Result_5) query;
+  set_controller_only : (bool) -> (Result_2);
+  transfer_ownership : (nat32, principal) -> (Result_2);
+}

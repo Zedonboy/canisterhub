@@ -1,0 +1,240 @@
+// Identical to `mail_bridge`'s `mail::auth::AuthResult` - see that type's
+// doc comment for what each variant means.
+type AuthResult = variant {
+  Fail;
+  None;
+  Pass;
+  TempError;
+  SoftFail;
+  PermError;
+  Neutral;
+};
+// Which outside service a message came from or is going to - shared between
+// inbound (`MessagePayload`'s variants, above) and outbound
+// (`OutboundMessage`, below) even though the two aren't the same type: an
+// inbound message carries a whole channel-specific record, while an
+// outbound one is deliberately minimal (see `OutboundMessage`'s doc
+// comment).
+type Channel = variant { Email; WhatsApp; Telegram };
+type Config = record {
+  // The `secret_token` passed to Telegram's `setWebhook` call - Telegram
+  // echoes it back as `X-Telegram-Bot-Api-Secret-Token` on every
+  // delivery; see `telegram::verify_secret`.
+  telegram_secret_token : opt text;
+  // The bearer token `mail_bridge`'s `POST /send_mail` requires
+  // (`MAIL_BRIDGE_API_KEY` in its own config).
+  mail_bridge_api_key : opt text;
+  // A canister to forward every successfully-stored inbound message to,
+  // via that canister's own `receive_message(record { channel; session_id; text })`
+  // candid method (e.g. this project's `agent`) - see
+  // `forward_to_agent`. Best-effort: a failed or unconfigured forward
+  // never affects the webhook's/`receive_mail`'s own response, since the
+  // message is already durably stored either way.
+  agent_canister : opt principal;
+  // Base URL of a `mail_bridge` deployment's HTTP API (e.g.
+  // `https://mail-bridge.example.com`, no trailing slash needed) -
+  // `send_message` posts to `<this>/send_mail`.
+  mail_bridge_url : opt text;
+  // Bearer token for the WhatsApp Cloud API's `POST .../messages` send
+  // call - a permanent (System User) access token from the Meta
+  // developer console, used by `send_message`.
+  whatsapp_access_token : opt text;
+  // The token Meta's `GET /webhook/whatsapp` verification handshake must
+  // present as `hub.verify_token` - see `whatsapp::verify_handshake`.
+  whatsapp_verify_token : opt text;
+  // The WhatsApp app secret `X-Hub-Signature-256` is HMAC-SHA256'd with -
+  // see `whatsapp::verify_signature`. Not the same value as the verify
+  // token above.
+  whatsapp_app_secret : opt text;
+  // The principal allowed to call `send_message` - e.g. this project's
+  // `orchestrator`, or whatever else is driving conversations through
+  // this connector. A controller may always call `send_message`
+  // regardless of this setting (see `lib.rs::require_authorized_sender`).
+  authorized_sender : opt principal;
+  // The business phone number id `send_message` posts to
+  // (`https://graph.facebook.com/<version>/<this>/messages>`) - found on
+  // the same console page as the access token above, not the phone
+  // number itself.
+  whatsapp_phone_number_id : opt text;
+  // The principal allowed to call `receive_mail` - `mail_bridge`'s own
+  // identity (see `services/mail_bridge/README.md`).
+  mail_bridge_principal : opt principal;
+  // The bot token `send_message` authenticates
+  // `https://api.telegram.org/bot<this>/sendMessage` calls with (the same
+  // token `setWebhook` itself was called through).
+  telegram_bot_token : opt text;
+  // The `From:` address `send_message` sends outbound mail as.
+  mail_from_address : opt text;
+};
+// `update_config`'s argument: one field per `Config` field, each wrapped in
+// an *extra* layer of `Option` beyond `Config`'s own - so every field has
+// three states, not two:
+// - outer `None` ("not mentioned"): leave this field exactly as it is.
+// - outer `Some(None)`: clear this field to `None`.
+// - outer `Some(Some(value))`: set this field to `value`.
+// 
+// Without that extra layer, a field's own `None` would be ambiguous
+// between "don't touch this" and "clear it" - the two need different
+// representations. `#[derive(Default)]` gives every field `None` (leave
+// everything alone), so `ConfigUpdate { authorized_sender: Some(Some(p)), ..Default::default() }`
+// changes only the one field named.
+type ConfigUpdate = record {
+  telegram_secret_token : opt opt text;
+  mail_bridge_api_key : opt opt text;
+  agent_canister : opt opt principal;
+  mail_bridge_url : opt opt text;
+  whatsapp_access_token : opt opt text;
+  whatsapp_verify_token : opt opt text;
+  whatsapp_app_secret : opt opt text;
+  authorized_sender : opt opt principal;
+  whatsapp_phone_number_id : opt opt text;
+  mail_bridge_principal : opt opt principal;
+  telegram_bot_token : opt opt text;
+  mail_from_address : opt opt text;
+};
+// Business-level activity, as opposed to the infrastructure-level numbers
+// `icp canister status` already reports (cycles, memory, module hash) -
+// this is what an operator dashboard or an LLM agent actually cares about:
+// how much traffic this gateway has moved. Deliberately open to any caller
+// (no `require_controller` gate), same reasoning as `llm_context` below -
+// an aggregate count isn't sensitive the way stored message content is.
+type ConnectorStats = record { messages_processed : nat64 };
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
+// Field-for-field identical to `mail_bridge`'s `IncomingMail` candid type
+// (see `services/mail_bridge/src/mail/message.rs`) - candid matches record fields by
+// name, not by the two crates sharing a Rust type, so this has to be kept in
+// sync by hand if that struct's shape ever changes.
+type MailMessage = record {
+  to : vec text;
+  spf : AuthResult;
+  tls : bool;
+  received_at : nat64;
+  subject : text;
+  dkim : AuthResult;
+  from : text;
+  envelope_from : text;
+  headers : vec record { text; text };
+  html_body : opt text;
+  dmarc : AuthResult;
+  envelope_to : vec text;
+  text_body : opt text;
+};
+type MessagePayload = variant {
+  Mail : MailMessage;
+  WhatsApp : WhatsAppMessage;
+  Telegram : TelegramMessage;
+};
+// The argument to `send_message` (see `lib.rs`): a reply to relay out to
+// one of the three channels, addressed by `session_id` rather than a
+// channel-specific type - literally the same identifier this canister
+// already handed back on the matching inbound `StoredMessage`:
+// `WhatsAppMessage.from`, `TelegramMessage.chat_id` (stringified - Telegram
+// chat ids are signed integers, but a `text` field here keeps all three
+// channels uniform), or `MailMessage.envelope_from`.
+type OutboundMessage = record {
+  session_id : text;
+  // Email only (ignored for WhatsApp/Telegram, neither of which have a
+  // concept of a subject line) - defaults to `"Message"` if omitted,
+  // since `mail_bridge`'s `/send_mail` requires one.
+  subject : opt text;
+  "text" : text;
+  channel : Channel;
+};
+type Result = variant { Ok : Config; Err : text };
+type Result_1 = variant { Ok : opt StoredMessage; Err : text };
+type Result_2 = variant { Ok : vec StoredMessage; Err : text };
+type Result_3 = variant { Ok; Err : text };
+type StoredMessage = record {
+  id : nat64;
+  // Nanoseconds since the Unix epoch (`ic_cdk::api::time()`'s convention)
+  // - when this canister received the message, not necessarily when the
+  // upstream service says it was sent (see each payload's own timestamp
+  // field for that).
+  received_at : nat64;
+  payload : MessagePayload;
+};
+type TelegramMessage = record {
+  // The raw JSON of the whole `Update` object.
+  raw : text;
+  from_username : opt text;
+  // Unix seconds, as Telegram sends it.
+  date : opt int64;
+  "text" : opt text;
+  from_user_id : opt int64;
+  update_id : int64;
+  chat_id : int64;
+  message_id : opt int64;
+};
+type WhatsAppMessage = record {
+  // The business phone number this arrived on
+  // (`value.metadata.display_phone_number`) - a connector may be
+  // configured with more than one WhatsApp number behind one webhook URL.
+  to : opt text;
+  // The raw JSON of this one message object, for fields not surfaced above
+  // (media ids, interactive replies, location, etc.).
+  raw : text;
+  // Sender's WhatsApp ID (a phone number, no `+` or formatting).
+  from : text;
+  "text" : opt text;
+  // Unix seconds, as WhatsApp sends it (a JSON string, not a number).
+  timestamp : opt text;
+  // `messages[].type` - `"text"`, `"image"`, `"button"`, etc. Only
+  // `"text"` is unpacked into `text` below; every other type still gets
+  // stored, with its full JSON in `raw` for a caller that needs it.
+  message_type : text;
+  // WhatsApp's own message id (`messages[].id`) - stable, useful for
+  // dedup if the Cloud API redelivers a webhook.
+  message_id : text;
+};
+service : (Config) -> {
+  get_config : () -> (Result) query;
+  get_message : (nat64) -> (Result_1) query;
+  get_stats : () -> (ConnectorStats) query;
+  // First stop for every inbound HTTP request (a query call - see `http.rs`'s
+  // doc comment). Handles WhatsApp's GET verification handshake directly
+  // (read-only, safe from a query call); every POST that would mutate state
+  // is bounced to `http_request_update` via `upgrade: Some(true)` instead of
+  // being processed here.
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  // Handles what `http_request` upgraded to an update call - the only place
+  // webhook POST bodies are actually verified, parsed, and stored, since only
+  // an update call is replicated through consensus.
+  http_request_update : (HttpRequest) -> (HttpResponse);
+  // Newest-first, paginated via `offset`/`limit`.
+  list_messages : (nat64, nat64) -> (Result_2) query;
+  // A prose description of this canister for an AI agent to consume - what it
+  // does, every method's purpose and access control, and the non-obvious
+  // semantics candid types alone don't convey (which principal each gated
+  // method expects, the single-replica outcall tradeoff behind
+  // `send_message`, channel-specific quirks). Open to any caller: unlike
+  // `get_config`/`list_messages`, there's nothing sensitive in a description
+  // of the canister's own shape, and an agent needs to be able to read this
+  // *before* it has any credentials to call anything else.
+  llm_context : () -> (text) query;
+  // Accepts one piece of inbound mail forwarded by `mail_bridge`. Only that
+  // bridge's own identity (`Config::mail_bridge_principal`) may call this -
+  // unlike the HTTP webhooks below, this arrives as a regular update call, so
+  // `msg_caller()` is meaningful and enforced.
+  receive_mail : (MailMessage) -> (Result_3);
+  // Sends `msg` out through the channel it names - see `outbound.rs` for each
+  // channel's own API call and why every one of them is a single-replica
+  // outcall. Only `Config::authorized_sender` (or a controller) may call
+  // this - unrestricted access would let anyone spend this canister's
+  // configured WhatsApp/Telegram/mail_bridge credentials to send arbitrary
+  // messages.
+  send_message : (OutboundMessage) -> (Result_3);
+  // Applies `update` to the current configuration, field by field - see
+  // `ConfigUpdate`'s doc comment for its three-state-per-field semantics.
+  update_config : (ConfigUpdate) -> (Result_3);
+}

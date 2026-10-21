@@ -1,0 +1,61 @@
+name: Release package Wasms
+
+# Builds only the installable canister packages under packages/ and publishes
+# their Wasm/Candid artifacts to a GitHub Release. The product catalog returns
+# these public release URLs from backend.get_product_wasm_url.
+#
+# The backend canister is deliberately not built or published here: it is the
+# marketplace/catalog service, not one of the packages users install.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.0
+          targets: wasm32-unknown-unknown
+
+      - name: Install Node toolchain
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/table-browser/package-lock.json
+
+      - name: Cache package build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages
+
+      # packages/build.sh builds the table-browser embedded by ic-sql, then
+      # compiles the complete Cargo workspace into packages/bin/.
+      - name: Build package Wasms
+        run: ./packages/build.sh
+
+      - name: Generate package checksums
+        working-directory: packages/bin
+        run: sha256sum *.wasm > SHA256SUMS
+
+      - name: Publish package release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            packages/bin/*.wasm
+            packages/bin/*.did
+            packages/bin/SHA256SUMS
+          fail_on_unmatched_files: true

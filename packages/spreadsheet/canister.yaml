@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://github.com/dfinity/icp-cli/raw/refs/tags/v1.3.0/docs/schemas/canister-yaml-schema.json
+#
+# A standalone, marketplace-ready deployment of ic_hnsw's own official
+# prebuilt release - see README.md. Identical build recipe to the repo's own
+# internal `hnsw_index/canister.yaml` (same release, same reasoning for why
+# this is a prebuilt release rather than built from source); this is a
+# *separate* deployment meant to be published as a reusable "vector database"
+# item, independent of hnsw_index's own use as the Marketplace's internal
+# search index.
+#
+# Pinned to a specific release tag rather than `/releases/latest/download/...`
+# so a new upstream release can't silently change what gets deployed here -
+# bump the url/sha256 together, deliberately, when picking up a new release.
+name: vector_db
+build:
+  steps:
+    - type: pre-built
+      url: https://github.com/Zedonboy/ic-hnsw/releases/download/build-20260429-190649-9d5a1c9/ic_hnsw.wasm
+      sha256: 9199091381f8f283d79addc53a7379f94be236d6898dbf88d17ecb84c3c309d0
+    - type: script
+      commands:
+        - ic-wasm "$ICP_WASM_OUTPUT_PATH" -o "$ICP_WASM_OUTPUT_PATH" metadata "candid:service" -f 'candid/vector_db.did' -v public --keep-name-section

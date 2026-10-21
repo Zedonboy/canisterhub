@@ -1,0 +1,58 @@
+[package]
+name = "backend"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid = "0.10"
+# Pinned to the exact versions ic-vetkeys 0.6 depends on (see backend/src/lib.rs
+# for why: it re-exports types from these crates, so our copy and its internal
+# copy must be the *same* crate version or the types won't unify).
+ic-cdk = "0.19"
+ic-stable-structures = "0.7"
+serde = { version = "1", features = ["derive"] }
+ciborium = "0.2"
+# vetKD support library: derives and hands out encrypted, access-controlled
+# "vetkeys" via the IC's threshold vetKD protocol, so this canister never
+# holds the plaintext key material it's gatekeeping. See the `vetkd` skill:
+# https://skills.internetcomputer.org/.well-known/skills/vetkd/SKILL.md
+ic-vetkeys = "0.6"
+# ic-vetkeys pulls in `rand`/`getrandom` transitively (unconditionally — it
+# exposes no feature to opt out) for code paths this canister never actually
+# exercises (client-side vetKey/IBE helpers meant to run off-chain). getrandom
+# has no OS entropy source to call on wasm32-unknown-unknown and fails to
+# compile without a registered custom backend; see the `register_custom_getrandom!`
+# call in backend/src/lib.rs.
+getrandom = { version = "0.2", features = ["custom"] }
+sha2 = "0.10"
+# HS256-signs the API access tokens `issue_jwt` hands out — see the JWT section
+# of backend/src/lib.rs. Pure Rust, no OS entropy needed (unlike ic-vetkeys'
+# getrandom pull above): the actual randomness for the signing key itself
+# still comes from `raw_rand`, not from these crates.
+hmac = "0.12"
+base64 = "0.22"
+# Standard ICRC account and transfer-from types for marketplace payments.
+icrc-ledger-types = "0.2.0"
+# Serves the CanisterHub marketing landing page (`landing/`) as certified
+# HTTP assets directly from this canister - see `http_request`/
+# `init_landing_assets` in backend/src/lib.rs. `ic-http-certification` is a
+# transitive dependency of `ic-asset-certification` too, but is listed
+# directly since `http_request`/`HttpResponse`/`StatusCode` are used
+# directly in this crate's own code, not just internally by the other crate.
+ic-asset-certification = "4.0.0"
+ic-http-certification = "4.0.0"
+# Embeds `landing/dist` (the landing page's Vite build output) into this
+# canister's wasm at compile time - see `LANDING_ASSETS` in
+# backend/src/lib.rs. Requires `landing/dist` to exist before this crate
+# compiles (gitignored, same as `frontend/dist` - see `landing/README.md`).
+include_dir = "0.7.4"
+
+[dev-dependencies]
+# Keep aligned with the local PocketIC server used by tests (POCKET_IC_BIN).
+pocket-ic = "15.0.0"
+# Only for generating a real, validly-encoded vetKD transport key in tests —
+# see fake_transport_public_key() in tests/marketplace_tests.rs.
+rand = "0.8"

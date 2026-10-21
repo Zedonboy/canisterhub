@@ -1,0 +1,6 @@
+/target
+/data
+# Downloaded test fixture, not source - see
+# tests/marketplace_search_and_deploy_tests.rs's doc comment for how to
+# fetch it (the same pinned ic_hnsw release hnsw_index/canister.yaml uses).
+/tests/fixtures/ic_hnsw.wasm

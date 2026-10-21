@@ -1,0 +1,17 @@
+[package]
+name = "app_api"
+version.workspace = true
+edition.workspace = true
+description = "Authenticated Candid and HTTP API canister template for canister_hub"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid.workspace = true
+ciborium.workspace = true
+ic-cdk.workspace = true
+ic-stable-structures.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+serde_json.workspace = true

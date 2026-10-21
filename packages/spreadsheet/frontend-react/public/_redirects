@@ -1,0 +1,4 @@
+# IntelliSheet is a client-rendered SPA (adapter-static with an index.html
+# fallback) — every route not matching a real file rewrites to index.html so
+# the SvelteKit router takes over, instead of the asset canister 404ing.
+/*    /index.html   200

@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://github.com/dfinity/icp-cli/raw/refs/tags/v1.3.0/docs/schemas/canister-yaml-schema.json
+#
+# A standalone, marketplace-ready deployment of ic-analytics's own official
+# prebuilt "user canister" release - see README.md. Same build recipe shape
+# as `packages/vector_db` (also a pre-built third-party release, pinned by
+# tag + sha256) and `hnsw_index`.
+#
+# Unlike vector_db/hnsw_index's upstream release, this wasm already embeds
+# its own `candid:service` metadata (verified against the release's own
+# `.did` asset - identical) - the ic-wasm script step below is redundant with
+# what's already in the wasm, but kept anyway, for the same reason
+# vector_db/hnsw_index have it: `icp-cli`'s raw `build:` step has no built-in
+# notion of a Candid file (see Adapter2 in the schema above - a pre-built
+# step is just a wasm source + optional sha256), so nothing here would
+# actually fail without it, but nothing guarantees a future upstream release
+# keeps embedding it either. Re-setting the same metadata to the same value
+# from our own pinned `candid/analytics.did` is idempotent and keeps this
+# package's interface pinned to what we shipped, not to whatever the next
+# release happens to embed.
+#
+# Pinned to a specific release tag rather than `/releases/latest/download/...`
+# so a new upstream release can't silently change what gets deployed here -
+# bump the url/sha256 together, deliberately, when picking up a new release.
+name: analytics
+build:
+  steps:
+    - type: pre-built
+      url: https://github.com/Zedonboy/ic-analytics/releases/download/0.1.0/ic-analytics-user-canister.wasm
+      sha256: 02bca3796ba63b5461c966e4bff41e920373ed0919f2c12520ebcc84f2bd0b3d
+    - type: script
+      commands:
+        - ic-wasm "$ICP_WASM_OUTPUT_PATH" -o "$ICP_WASM_OUTPUT_PATH" metadata "candid:service" -f 'candid/analytics.did' -v public --keep-name-section

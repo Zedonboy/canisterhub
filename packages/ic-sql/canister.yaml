@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://github.com/dfinity/icp-cli/raw/refs/tags/v1.3.0/docs/schemas/canister-yaml-schema.json
+#
+name: ic-sql
+recipe:
+  type: "@dfinity/rust@v3.4.0"
+  configuration:
+    shrink: true
+    # Hand-committed, not auto-generated at build time - see README.md's
+    # "Regenerating ic-sql.did" section. Matches this repo's other canisters'
+    # convention.
+    candid: ic-sql.did
+    metadata:
+      - name: "crate:version"
+        value: 2.0.0

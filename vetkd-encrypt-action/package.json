@@ -1,0 +1,10 @@
+{
+  "name": "vetkd-encrypt-action",
+  "private": true,
+  "type": "module",
+  "description": "Implementation dependencies for the vetkd-encrypt-action composite GitHub Action.",
+  "dependencies": {
+    "@dfinity/vetkeys": "0.4.0",
+    "@icp-sdk/core": "6.1.0"
+  }
+}

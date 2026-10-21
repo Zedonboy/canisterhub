@@ -1,0 +1,43 @@
+[package]
+name = "ic-sql"
+version.workspace = true
+edition.workspace = true
+description = "An Internet Computer canister that behaves like a small PostgreSQL-dialect SQL database: execute()/query() take a SQL string and run it directly. The query engine (src/engine.rs) is a pure functional core - see its doc comment."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+canister-hub-sdk.workspace = true
+candid.workspace = true
+ic-cdk.workspace = true
+ic-asset-certification.workspace = true
+ic-http-certification.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+serde_json.workspace = true
+ciborium.workspace = true
+ic-stable-structures.workspace = true
+# Parses SQL text into an AST (src/engine.rs's `parse_one`) - the only part of
+# the engine that isn't hand-written.
+sqlparser.workspace = true
+# Persistent (structurally-shared) immutable maps - `im::OrdMap` is what makes
+# `engine::Database`/`Table` genuinely "functional": inserting a row or
+# dropping a table produces a *new* map value in O(log n), sharing all
+# unaffected structure with the old one, rather than either mutating in place
+# or deep-cloning. See engine.rs's doc comment.
+im.workspace = true
+# Embeds `../table-browser/dist` into this wasm at compile time (src/assets.rs)
+# - see that crate's README.md for the required build order.
+include_dir.workspace = true
+
+[dev-dependencies]
+# Keep aligned with the local PocketIC server used by tests (POCKET_IC_BIN) -
+# see backend/Cargo.toml's identical pin.
+pocket-ic.workspace = true
+
+# `sqlparser` + `im` pull in noticeably more code than this repo's other
+# canisters' dependencies - an unoptimized release build comes out well over
+# 6MB, over even a generous ingress message size limit for `install_code`
+# (canister-hub's other canisters don't need this section: they're small
+# enough without it). None of this changes behavior, only code size.

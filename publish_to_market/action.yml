@@ -1,0 +1,139 @@
+name: Publish to Canister Hub Market
+description: Publish a package or template canister_hub.toml to the Canister Hub marketplace.
+
+inputs:
+  backend-canister-id:
+    description: Principal of the Canister Hub marketplace backend.
+    required: true
+  publisher-identity-seed:
+    description: 64-character hex Ed25519 seed belonging to the publisher.
+    required: true
+  github-token:
+    description: GitHub token used to upload a paid listing's encrypted artifact.
+    required: false
+    default: ""
+  title:
+    description: Marketplace listing title.
+    required: true
+  description:
+    description: Marketplace listing description.
+    required: true
+  item-type:
+    description: Marketplace item type, either package or template.
+    required: false
+    default: "package"
+  package-slug:
+    description: Stable lowercase package identity within the repository; publishing it again updates the same marketplace item.
+    required: true
+  download-url:
+    description: Absolute public URL of the canister_hub.toml GitHub Release asset.
+    required: true
+  release-tag:
+    description: GitHub release tag containing the marketplace artifact.
+    required: true
+  git-repo-url:
+    description: GitHub repository that owns the release. Defaults to the caller repository.
+    required: false
+    default: ""
+  web-url:
+    description: Optional homepage or documentation URL.
+    required: false
+    default: ""
+  price:
+    description: Optional positive u64 ICP price in e8s. Empty publishes a free item.
+    required: false
+    default: ""
+  wasm:
+    description: Plaintext Wasm path in the caller workspace. Always required - its (or, for a paid item, the encrypted output's) sha256 is submitted as wasm_hash, which installers verify before use.
+    required: true
+  encrypted-output:
+    description: Output path for the encrypted paid artifact.
+    required: false
+    default: "build/artifact.enc"
+  ic-host:
+    description: IC API host containing the marketplace backend.
+    required: false
+    default: "https://icp0.io"
+
+outputs:
+  item-id:
+    description: Numeric ID assigned to the published marketplace item.
+    value: ${{ steps.publish.outputs.item-id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: ${{ github.action_path }}/../scripts/package-lock.json
+
+    - name: Install publisher dependencies
+      shell: bash
+      run: npm ci --prefix "$GITHUB_ACTION_PATH/../scripts"
+
+    - name: Generate marketplace binding
+      shell: bash
+      run: npm run generate --prefix "$GITHUB_ACTION_PATH/../scripts"
+
+    - name: Publish Wasm
+      id: publish
+      shell: bash
+      env:
+        BACKEND_CANISTER_ID: ${{ inputs.backend-canister-id }}
+        IC_HOST: ${{ inputs.ic-host }}
+        PUBLISHER_IDENTITY_SEED: ${{ inputs.publisher-identity-seed }}
+        GIT_REPO_URL_INPUT: ${{ inputs.git-repo-url }}
+        CALLER_REPOSITORY: ${{ github.repository }}
+        GITHUB_SERVER_URL_VALUE: ${{ github.server_url }}
+        TITLE: ${{ inputs.title }}
+        DESCRIPTION: ${{ inputs.description }}
+        WEB_URL: ${{ inputs.web-url }}
+        ITEM_TYPE: ${{ inputs.item-type }}
+        PACKAGE_SLUG: ${{ inputs.package-slug }}
+        DOWNLOAD_URL: ${{ inputs.download-url }}
+        RELEASE_TAG: ${{ inputs.release-tag }}
+        PRICE: ${{ inputs.price }}
+        IN_FILE: ${{ inputs.wasm }}
+        OUT_FILE: ${{ inputs.encrypted-output }}
+        RELEASE_UPLOAD_TOKEN: ${{ inputs.github-token }}
+        RELEASE_UPLOAD_REPOSITORY: ${{ github.repository }}
+        UPLOAD_ENCRYPTED_RELEASE_ASSET: ${{ inputs.price != '' && 'true' || 'false' }}
+      run: |
+        if [[ -n "$GIT_REPO_URL_INPUT" ]]; then
+          export GIT_REPO_URL="$GIT_REPO_URL_INPUT"
+        else
+          export GIT_REPO_URL="$GITHUB_SERVER_URL_VALUE/$CALLER_REPOSITORY"
+        fi
+        node "$GITHUB_ACTION_PATH/../scripts/publish_to_marketplace.js"
+
+    # Attests that this exact artifact - the plaintext wasm for a free item,
+    # the encrypted output for a paid one (the same file `wasm_hash` above
+    # is computed from - whatever an installer actually fetches from
+    # wasm_url) - was built by this repository's own CI. Sigstore-backed
+    # (Fulcio cert issued via this job's own GitHub OIDC token), not a
+    # shared secret. Installers verify this (`services/orchestrator/src/provenance.rs`)
+    # before installing a free item; see that module's doc comment for what
+    # it does and doesn't prove. Requires the *calling* workflow to grant
+    # `permissions: { id-token: write, attestations: write }` - a composite
+    # action can't grant these to itself.
+    - name: Determine build provenance subject
+      id: provenance_subject
+      shell: bash
+      run: |
+        if [[ -n "${{ inputs.price }}" ]]; then
+          echo "path=${{ inputs.encrypted-output }}" >> "$GITHUB_OUTPUT"
+        else
+          echo "path=${{ inputs.wasm }}" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Attest build provenance
+      uses: actions/attest-build-provenance@v1
+      with:
+        subject-path: ${{ steps.provenance_subject.outputs.path }}
+
+branding:
+  icon: package
+  color: blue

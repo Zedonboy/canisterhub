@@ -1,0 +1,23 @@
+[package]
+name = "ic-kv"
+version.workspace = true
+edition.workspace = true
+description = "An Internet Computer canister that behaves like a small key-value store: get/set/delete a key directly. Same functional-core architecture as ic-sql (src/engine.rs) - see its doc comment."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid.workspace = true
+ic-cdk.workspace = true
+serde.workspace = true
+# Persistent (structurally-shared) immutable map - same role as in ic-sql:
+# `im::OrdMap` is what makes `engine::Store` genuinely "functional". See
+# ic-sql/src/engine.rs's doc comment for the full rationale, which applies
+# unchanged here.
+im.workspace = true
+
+[dev-dependencies]
+# Keep aligned with the local PocketIC server used by tests (POCKET_IC_BIN) -
+# see backend/Cargo.toml's identical pin.
+pocket-ic.workspace = true

@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://github.com/dfinity/icp-cli/raw/refs/tags/v1.3.0/docs/schemas/canister-yaml-schema.json
+#
+# Deployed from ic_hnsw's own official release rather than built from source -
+# see README.md for why (its "embed as a library" mode doesn't actually work
+# as published). This is exactly ic_hnsw's own README's "Mode A - standalone
+# canister, using pre-built assets (Recommended)" path, adapted from dfx.json's
+# `"type": "custom"` shape to icp-cli's `pre-built` build step (which has no
+# built-in notion of a Candid file - unlike the `@dfinity/rust` recipe backend/
+# and the old version of this canister used, a raw `build:` canister has to
+# embed one itself; the `script` step below does that from candid/hnsw_index.did).
+#
+# Pinned to a specific release tag rather than `/releases/latest/download/...`
+# so a new upstream release can't silently change what gets deployed here -
+# bump the url/sha256 together, deliberately, when picking up a new release.
+name: hnsw_index
+build:
+  steps:
+    - type: pre-built
+      url: https://github.com/Zedonboy/ic-hnsw/releases/download/build-20260429-190649-9d5a1c9/ic_hnsw.wasm
+      sha256: 9199091381f8f283d79addc53a7379f94be236d6898dbf88d17ecb84c3c309d0
+    - type: script
+      commands:
+        - ic-wasm "$ICP_WASM_OUTPUT_PATH" -o "$ICP_WASM_OUTPUT_PATH" metadata "candid:service" -f 'candid/hnsw_index.did' -v public --keep-name-section

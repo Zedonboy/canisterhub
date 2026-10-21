@@ -1,0 +1,90 @@
+name: "Example: publish to Canister Hub market"
+
+# Copy this caller workflow into a package repository. The versioned action
+# owns the publishing implementation and generated backend binding; the caller
+# only builds its Wasm and supplies listing metadata plus its own identity.
+#
+# Before the first publish, satisfy request_publish_challenge by putting its
+# token in the target GitHub Release notes. Store the publisher's 32-byte
+# Ed25519 seed as PUBLISHER_IDENTITY_SEED and the marketplace canister id as
+# MARKETPLACE_CANISTER_ID.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing GitHub Release tag to publish."
+        required: true
+      package_slug:
+        description: "Stable lowercase identity for this package within the repository."
+        required: true
+      price:
+        description: "Price in ICP e8s as a u64. Leave empty to publish for free."
+        required: false
+        default: ""
+
+permissions:
+  # Paid publishing uploads the encrypted artifact to the existing release.
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out package repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      # Replace this example with the package's real release build. It must
+      # produce build/artifact.wasm before the publish step runs.
+      - name: Build Wasm
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - name: Publish package manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PACKAGE_SLUG: ${{ inputs.package_slug }}
+          PRICE: ${{ inputs.price }}
+        run: |
+          artifact="artifact.wasm"
+          if [[ -n "$PRICE" ]]; then artifact="artifact.wasm.enc"; fi
+          printf 'schema_version = 1\n\n[package]\nname = "my-product"\nversion = "%s"\nwasm_url = "https://github.com/%s/releases/download/%s/%s"\n' \
+            "$RELEASE_TAG" "$GITHUB_REPOSITORY" "$RELEASE_TAG" "$artifact" > "${PACKAGE_SLUG}.canister_hub.toml"
+          gh release upload "$RELEASE_TAG" "${PACKAGE_SLUG}.canister_hub.toml" --clobber
+
+      - name: Publish free Wasm
+        if: ${{ inputs.price == '' }}
+        id: publish-free
+        uses: Zedonboy/canister_hub/publish_to_market@v1
+        with:
+          backend-canister-id: ${{ vars.MARKETPLACE_CANISTER_ID }}
+          publisher-identity-seed: ${{ secrets.PUBLISHER_IDENTITY_SEED }}
+          title: "My Product"
+          description: "A one-line description of what this is."
+          package-slug: ${{ inputs.package_slug }}
+          release-tag: ${{ inputs.release_tag }}
+          download-url: https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}/${{ inputs.package_slug }}.canister_hub.toml
+
+      - name: Publish paid Wasm
+        if: ${{ inputs.price != '' }}
+        id: publish-paid
+        uses: Zedonboy/canister_hub/publish_to_market@v1
+        with:
+          backend-canister-id: ${{ vars.MARKETPLACE_CANISTER_ID }}
+          publisher-identity-seed: ${{ secrets.PUBLISHER_IDENTITY_SEED }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          title: "My Product"
+          description: "A one-line description of what this is."
+          package-slug: ${{ inputs.package_slug }}
+          release-tag: ${{ inputs.release_tag }}
+          download-url: https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag }}/${{ inputs.package_slug }}.canister_hub.toml
+          price: ${{ inputs.price }}
+          wasm: build/artifact.wasm
+          encrypted-output: build/artifact.wasm.enc
+
+      - name: Show marketplace item
+        env:
+          FREE_ITEM_ID: ${{ steps.publish-free.outputs.item-id }}
+          PAID_ITEM_ID: ${{ steps.publish-paid.outputs.item-id }}
+        run: echo "Published marketplace item ${FREE_ITEM_ID:-$PAID_ITEM_ID}"
