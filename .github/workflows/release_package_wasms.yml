@@ -9,6 +9,12 @@ name: Release agent, inventory, and asset storage modules
 # The backend canister is deliberately not built or published here: it is the
 # marketplace/catalog service, not one of the packages users install.
 on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (for example, v1.0.0)"
+        required: true
+        type: string
   push:
     tags:
       - "v*"
@@ -75,6 +81,7 @@ jobs:
       - name: Publish module release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag_name || github.ref_name }}
           files: |
             packages/bin/agent.wasm
             packages/bin/agent.did
