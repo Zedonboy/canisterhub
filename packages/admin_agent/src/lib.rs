@@ -118,8 +118,14 @@ async fn chat(history: Vec<ChatTurn>, prompt: String) -> Result<Vec<ChatTurn>, S
     let reply = llm::run_agent_loop(&config, rig_history, &prompt).await?;
 
     let mut updated = history;
-    updated.push(ChatTurn { role: Role::User, content: prompt });
-    updated.push(ChatTurn { role: Role::Assistant, content: reply });
+    updated.push(ChatTurn {
+        role: Role::User,
+        content: prompt,
+    });
+    updated.push(ChatTurn {
+        role: Role::Assistant,
+        content: reply,
+    });
     Ok(updated)
 }
 

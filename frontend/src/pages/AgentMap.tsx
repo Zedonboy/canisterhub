@@ -7,7 +7,7 @@ import { Dialog, DialogHeader, DialogContent } from "@/components/ui/Dialog";
 import { toast } from "@/components/Toast";
 import type { ProjectContext } from "@/components/layout/AppShell";
 import {
-  loadAgentMap, wireConnectorToAgent, unwireConnectorFromAgent, wireAgentToDatabase, unwireAgentFromDatabase,
+  loadAgentMap, wireConnectorToAgent, unwireConnectorFromAgent,
   getNodeLlmContext, type AgentMapData, type MapNode, type MapNodeKind, type MapEdge,
 } from "@/lib/agentMap";
 import { clsx } from "clsx";
@@ -20,16 +20,11 @@ import { clsx } from "clsx";
  * `update_config` call (see `lib/agentMap.ts`), not a locally-drawn line
  * that only looks wired.
  *
- * Only two edge kinds actually exist on the real canisters:
- * connector→agent (`connector.agent_canister` + `agent.connector_principal`
- * together) and agent→database (`agent.ic_sql_canister_id`, `ic-sql` only -
- * `ic-kv`/`vector_db` have no equivalent field to point at). Storage
- * canisters are drawn for visibility, since a project's own asset bucket is
- * as real a part of its architecture as anything else here, but their
- * input port is deliberately inert: the real `agent` canister has no
- * config field to wire to one, and the certified-assets interface has no
- * `llm_context` method either - inventing either would mean this map
- * accepting a drag that quietly does nothing. Node positions are a
+ * The real edge is connector→agent (`connector.agent_canister` plus the
+ * compatibility `agent.connector_principal` field). Database and storage
+ * canisters are drawn for visibility, but their input ports are inert: the
+ * agent owns its stable state and has no external database/storage wiring
+ * field. Node positions are a
  * per-viewer convenience only (`localStorage`, keyed by project) - not
  * real project state, so they're never round-tripped through any canister.
  */
@@ -101,7 +96,6 @@ function defaultLayout(data: AgentMapData): Record<string, Pos> {
  * from one simply isn't possible (see `NodeCard`'s own rendering). */
 function candidateTargets(fromKind: MapNodeKind, data: AgentMapData): MapNode[] {
   if (fromKind === "connector") return data.agents;
-  if (fromKind === "agent") return data.databases;
   return [];
 }
 
@@ -336,9 +330,6 @@ export default function AgentMapPage() {
       if (from.kind === "connector" && target.kind === "agent") {
         await wireConnectorToAgent(from, target, job.network);
         toast.success("Wired", `${from.name} now forwards to ${target.name}.`);
-      } else if (from.kind === "agent" && target.kind === "database") {
-        await wireAgentToDatabase(from, target, job.network);
-        toast.success("Wired", `${from.name} now queries ${target.name}.`);
       }
       load();
     } catch (e) {
@@ -352,11 +343,7 @@ export default function AgentMapPage() {
     if (!job || busy) return;
     setBusy(true);
     try {
-      if (edge.kind === "connector-agent") {
-        await unwireConnectorFromAgent(edge.from, edge.to, job.network);
-      } else {
-        await unwireAgentFromDatabase(edge.from, job.network);
-      }
+      await unwireConnectorFromAgent(edge.from, edge.to, job.network);
       toast.success("Disconnected", `${edge.from.name} → ${edge.to.name} removed.`);
       load();
     } catch (e) {
@@ -446,8 +433,8 @@ export default function AgentMapPage() {
                   node={node}
                   pos={pos}
                   hasInput={node.kind !== "connector"}
-                  hasOutput={node.kind === "connector" || node.kind === "agent"}
-                  inputDisabled={node.kind === "storage"}
+                  hasOutput={node.kind === "connector"}
+                  inputDisabled={node.kind === "database" || node.kind === "storage"}
                   inputHighlighted={hoveredKey === key}
                   busy={busy}
                   onDragPointerDown={(e) => startNodeDrag(e, node)}
@@ -469,7 +456,7 @@ export default function AgentMapPage() {
             <div className="flex items-center gap-1.5">
               <span className="text-[#ff5252] font-mono">×</span> Click a connection to remove it
             </div>
-            <div className="text-[#ffab40]">Storage nodes are shown for visibility only - the real agent canister has no config field to wire to one yet</div>
+            <div className="text-[#ffab40]">Database and storage nodes are shown for visibility only; the agent keeps its own data in stable memory.</div>
           </div>
         </div>
       )}

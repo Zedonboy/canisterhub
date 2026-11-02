@@ -16,7 +16,7 @@ mod state;
 pub use auth::Authorization;
 pub use http::{HttpRequest, HttpResponse};
 
-use candid::CandidType;
+use candid::{CandidType, Principal};
 use serde::{Deserialize, Serialize};
 
 const MAX_NAME_BYTES: usize = 200;
@@ -27,6 +27,22 @@ pub(crate) const MAX_HTTP_BODY_BYTES: usize = 10 * 1024;
 pub struct Health {
     pub status: String,
     pub service: String,
+}
+
+#[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AiChannel {
+    WhatsApp,
+    Telegram,
+    Email,
+}
+
+/// Shared identity envelope supplied by the fused agent. AI methods must
+/// derive authorization/scope from this record, never from JSON fields.
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AiContext {
+    pub agent: Principal,
+    pub channel: AiChannel,
+    pub session_id: String,
 }
 
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -144,6 +160,19 @@ async fn http_request_update(request: HttpRequest) -> HttpResponse {
 #[ic_cdk::query]
 fn llm_context() -> String {
     include_str!("llm_context.md").to_string()
+}
+
+/// Minimal example of the common dynamic-agent ABI. The second argument and
+/// the successful result are JSON text so each method can evolve its own
+/// schema without changing the shared Candid signature.
+#[ic_cdk::update]
+fn ai_health(_context: AiContext, parameters: String) -> Result<String, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(&parameters).map_err(|e| format!("invalid JSON parameters: {e}"))?;
+    if !value.is_object() {
+        return Err("parameters must be a JSON object".to_string());
+    }
+    Ok(serde_json::json!({ "status": "ok", "service": "app_api" }).to_string())
 }
 
 ic_cdk::export_candid!();

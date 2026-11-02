@@ -71,7 +71,10 @@ pub async fn run(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result
     let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(result) => result?,
         Err(_) => {
-            return Err(anyhow::anyhow!("command timed out after {:?}: {command}", timeout));
+            return Err(anyhow::anyhow!(
+                "command timed out after {:?}: {command}",
+                timeout
+            ));
         }
     };
 
@@ -94,9 +97,21 @@ pub async fn run(cwd: &Path, command: &str, timeout: Duration) -> anyhow::Result
 /// orchestrator deploy identity - see the project's own session notes on
 /// why this doesn't (and, for real security reasons, shouldn't) instead
 /// try to "borrow" the user's own Internet Identity session key.
-pub async fn add_controller(cwd: &Path, canister: &str, principal: &str, is_mainnet: bool, timeout: Duration) -> anyhow::Result<ExecResult> {
-    let flags = if is_mainnet { " -e ic --identity deploy" } else { "" };
-    let command = format!("icp canister settings update {canister} --add-controller {principal} -f{flags} 2>&1");
+pub async fn add_controller(
+    cwd: &Path,
+    canister: &str,
+    principal: &str,
+    is_mainnet: bool,
+    timeout: Duration,
+) -> anyhow::Result<ExecResult> {
+    let flags = if is_mainnet {
+        " -e ic --identity deploy"
+    } else {
+        ""
+    };
+    let command = format!(
+        "icp canister settings update {canister} --add-controller {principal} -f{flags} 2>&1"
+    );
     run(cwd, &command, timeout).await
 }
 
@@ -194,7 +209,13 @@ impl InteractiveSessions {
     /// on input, or `hard_timeout` elapses (in which case the process is
     /// killed). See [`pump`] for the "looks blocked waiting on input"
     /// heuristic.
-    pub async fn start(&self, cwd: &Path, command: &str, idle_timeout: Duration, hard_timeout: Duration) -> anyhow::Result<SessionResult> {
+    pub async fn start(
+        &self,
+        cwd: &Path,
+        command: &str,
+        idle_timeout: Duration,
+        hard_timeout: Duration,
+    ) -> anyhow::Result<SessionResult> {
         let (pty, pts) = pty_process::open()?;
         // A generous, fixed size - just needs to be big enough that a
         // prompt library doesn't wrap/misbehave on an unusually narrow
@@ -225,7 +246,11 @@ impl InteractiveSessions {
             .map_err(|e| anyhow::anyhow!("failed to spawn '{command}' under a pty: {e}"))?;
         let (read_half, write_half) = pty.into_split();
 
-        let mut session = Session { child, read_half, write_half };
+        let mut session = Session {
+            child,
+            read_half,
+            write_half,
+        };
         let result = pump(&mut session, idle_timeout, hard_timeout).await?;
         self.finish(session, result)
     }
@@ -233,7 +258,13 @@ impl InteractiveSessions {
     /// Sends `input` (followed by a newline, as if typed then Enter) to a
     /// still-open session from a prior [`start`](Self::start) or `send`
     /// call, then reads the same way `start` does.
-    pub async fn send(&self, session_id: &str, input: &str, idle_timeout: Duration, hard_timeout: Duration) -> anyhow::Result<SessionResult> {
+    pub async fn send(
+        &self,
+        session_id: &str,
+        input: &str,
+        idle_timeout: Duration,
+        hard_timeout: Duration,
+    ) -> anyhow::Result<SessionResult> {
         let mut session = self
             .sessions
             .lock()
@@ -241,7 +272,10 @@ impl InteractiveSessions {
             .remove(session_id)
             .ok_or_else(|| anyhow::anyhow!("no open interactive session with id '{session_id}' - it may have already exited"))?;
 
-        session.write_half.write_all(format!("{input}\n").as_bytes()).await?;
+        session
+            .write_half
+            .write_all(format!("{input}\n").as_bytes())
+            .await?;
         session.write_half.flush().await?;
 
         let result = pump(&mut session, idle_timeout, hard_timeout).await?;
@@ -284,7 +318,11 @@ impl InteractiveSessions {
 /// process that happens to pause mid-line for an unrelated reason would trip
 /// a bare newline check) - both together is the same practical heuristic
 /// real expect-style automation tools use.
-async fn pump(session: &mut Session, idle_timeout: Duration, hard_timeout: Duration) -> anyhow::Result<SessionResult> {
+async fn pump(
+    session: &mut Session,
+    idle_timeout: Duration,
+    hard_timeout: Duration,
+) -> anyhow::Result<SessionResult> {
     let mut output = String::new();
     let mut buf = [0u8; 4096];
     let start = Instant::now();
@@ -295,7 +333,12 @@ async fn pump(session: &mut Session, idle_timeout: Duration, hard_timeout: Durat
         if hard_left.is_zero() {
             let _ = session.child.start_kill();
             let _ = session.child.wait().await;
-            return Ok(SessionResult { output, exited: true, success: Some(false), session_id: None });
+            return Ok(SessionResult {
+                output,
+                exited: true,
+                success: Some(false),
+                session_id: None,
+            });
         }
         let idle_left = idle_timeout.saturating_sub(last_activity.elapsed());
         let wait_for = idle_left.min(hard_left);
@@ -358,7 +401,8 @@ fn looks_like_a_pending_prompt(output: &str) -> bool {
     }
     let last_hide = output.rfind("\x1b[?25l");
     let last_show = output.rfind("\x1b[?25h");
-    matches!((last_hide, last_show), (Some(_), None)) || matches!((last_hide, last_show), (Some(h), Some(s)) if h > s)
+    matches!((last_hide, last_show), (Some(_), None))
+        || matches!((last_hide, last_show), (Some(h), Some(s)) if h > s)
 }
 
 #[cfg(test)]
@@ -402,14 +446,18 @@ mod tests {
 
     #[tokio::test]
     async fn run_executes_a_command_and_captures_output() {
-        let result = run(&test_dir(), "echo hello", Duration::from_secs(5)).await.unwrap();
+        let result = run(&test_dir(), "echo hello", Duration::from_secs(5))
+            .await
+            .unwrap();
         assert!(result.success);
         assert!(result.stdout.contains("hello"));
     }
 
     #[tokio::test]
     async fn run_reports_failure_for_a_nonzero_exit() {
-        let result = run(&test_dir(), "exit 1", Duration::from_secs(5)).await.unwrap();
+        let result = run(&test_dir(), "exit 1", Duration::from_secs(5))
+            .await
+            .unwrap();
         assert!(!result.success);
     }
 
@@ -417,7 +465,12 @@ mod tests {
     async fn start_reports_immediate_completion_for_a_fast_command() {
         let sessions = InteractiveSessions::default();
         let result = sessions
-            .start(&test_dir(), "echo hi", Duration::from_millis(200), Duration::from_secs(5))
+            .start(
+                &test_dir(),
+                "echo hi",
+                Duration::from_millis(200),
+                Duration::from_secs(5),
+            )
             .await
             .unwrap();
         assert!(result.exited);
@@ -430,10 +483,19 @@ mod tests {
     async fn start_reports_waiting_for_input_when_the_command_blocks_on_read() {
         let sessions = InteractiveSessions::default();
         let result = sessions
-            .start(&test_dir(), "read x; echo got:$x", Duration::from_millis(200), Duration::from_secs(5))
+            .start(
+                &test_dir(),
+                "read x; echo got:$x",
+                Duration::from_millis(200),
+                Duration::from_secs(5),
+            )
             .await
             .unwrap();
-        assert!(!result.exited, "expected the still-blocked `read` to be reported as waiting, got: {}", result.output);
+        assert!(
+            !result.exited,
+            "expected the still-blocked `read` to be reported as waiting, got: {}",
+            result.output
+        );
         assert!(result.session_id.is_some());
     }
 
@@ -441,22 +503,52 @@ mod tests {
     async fn send_continues_a_waiting_session_to_completion() {
         let sessions = InteractiveSessions::default();
         let started = sessions
-            .start(&test_dir(), "read x; echo got:$x", Duration::from_millis(200), Duration::from_secs(5))
+            .start(
+                &test_dir(),
+                "read x; echo got:$x",
+                Duration::from_millis(200),
+                Duration::from_secs(5),
+            )
             .await
             .unwrap();
-        let session_id = started.session_id.expect("should still be waiting on `read`");
+        let session_id = started
+            .session_id
+            .expect("should still be waiting on `read`");
 
-        let result = sessions.send(&session_id, "hello", Duration::from_millis(200), Duration::from_secs(5)).await.unwrap();
+        let result = sessions
+            .send(
+                &session_id,
+                "hello",
+                Duration::from_millis(200),
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
         assert!(result.exited);
         assert_eq!(result.success, Some(true));
-        assert!(result.output.contains("got:hello"), "unexpected output: {}", result.output);
+        assert!(
+            result.output.contains("got:hello"),
+            "unexpected output: {}",
+            result.output
+        );
     }
 
     #[tokio::test]
     async fn send_to_an_unknown_session_id_fails_clearly() {
         let sessions = InteractiveSessions::default();
-        let err = sessions.send("no-such-session", "x", Duration::from_millis(50), Duration::from_secs(1)).await.unwrap_err();
-        assert!(err.to_string().contains("no open interactive session"), "unexpected error: {err}");
+        let err = sessions
+            .send(
+                "no-such-session",
+                "x",
+                Duration::from_millis(50),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no open interactive session"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
@@ -467,10 +559,18 @@ mod tests {
         // the hard cap below.
         let command = "while true; do printf x; sleep 0.02; done";
         let result = sessions
-            .start(&test_dir(), command, Duration::from_secs(5), Duration::from_millis(300))
+            .start(
+                &test_dir(),
+                command,
+                Duration::from_secs(5),
+                Duration::from_millis(300),
+            )
             .await
             .unwrap();
-        assert!(result.exited, "expected the hard timeout to force this to a stop");
+        assert!(
+            result.exited,
+            "expected the hard timeout to force this to a stop"
+        );
         assert_eq!(result.success, Some(false));
         assert!(result.session_id.is_none());
     }

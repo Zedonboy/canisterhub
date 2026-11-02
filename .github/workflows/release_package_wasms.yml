@@ -1,8 +1,10 @@
-name: Release package Wasms
+name: Release agent, inventory, and asset storage modules
 
-# Builds only the installable canister packages under packages/ and publishes
-# their Wasm/Candid artifacts to a GitHub Release. The product catalog returns
-# these public release URLs from backend.get_product_wasm_url.
+# Builds the agent, inventory, and asset storage modules, then publishes each
+# module's Wasm and Candid interface to a GitHub Release.
+# `packages/build.sh` builds the UIs before Rust so that:
+#   - agent.wasm contains chat-ui
+#   - order_inventory.wasm contains inventory-browser and storefront
 #
 # The backend canister is deliberately not built or published here: it is the
 # marketplace/catalog service, not one of the packages users install.
@@ -35,27 +37,50 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: packages/table-browser/package-lock.json
+          cache-dependency-path: |
+            packages/chat-ui/package-lock.json
+            packages/inventory-browser/package-lock.json
+            packages/storefront/package-lock.json
+            packages/table-browser/package-lock.json
 
       - name: Cache package build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages
 
-      # packages/build.sh builds the table-browser embedded by ic-sql, then
-      # compiles the complete Cargo workspace into packages/bin/.
-      - name: Build package Wasms
+      - name: Build modules with embedded UIs
         run: ./packages/build.sh
 
-      - name: Generate package checksums
-        working-directory: packages/bin
-        run: sha256sum *.wasm > SHA256SUMS
+      - name: Verify release assets
+        run: |
+          test -s packages/bin/agent.wasm
+          test -s packages/bin/agent.did
+          test -s packages/bin/order_inventory.wasm
+          test -s packages/bin/order_inventory.did
+          test -s packages/bin/assetstorage.wasm
+          test -s packages/bin/assetstorage.did
 
-      - name: Publish package release
+      - name: Generate module checksums
+        working-directory: packages/bin
+        run: |
+          sha256sum \
+            agent.wasm \
+            agent.did \
+            order_inventory.wasm \
+            order_inventory.did \
+            assetstorage.wasm \
+            assetstorage.did \
+            > SHA256SUMS
+
+      - name: Publish module release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            packages/bin/*.wasm
-            packages/bin/*.did
+            packages/bin/agent.wasm
+            packages/bin/agent.did
+            packages/bin/order_inventory.wasm
+            packages/bin/order_inventory.did
+            packages/bin/assetstorage.wasm
+            packages/bin/assetstorage.did
             packages/bin/SHA256SUMS
           fail_on_unmatched_files: true

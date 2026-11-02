@@ -145,12 +145,22 @@ use ic_stable_structures::DefaultMemoryImpl;
 use std::cell::RefCell;
 
 #[dynamic_config]
-#[config_urls(admin_panel_url = "https://{canister_id}.icp0.io/admin", home_page_url = "https://{canister_id}.icp0.io/")]
+#[config_links(
+    ("Admin Panel", "https://{canister_id}.icp0.io/admin", Admin),
+    ("Home Page", "https://{canister_id}.icp0.io/", Public),
+)]
 pub struct ModuleConfig {
-    #[config(label = "Greeting", default = "Hello!")]
+    #[config(
+        label = "Greeting",
+        default = "Hello!",
+        group = "general",
+        group_label = "General",
+        group_description = "Basic module behavior"
+    )]
     pub greeting: String,
 
-    #[config(label = "Retry Count")] // no default -> required
+    // Fields sharing a group key render in the same foldable UI section.
+    #[config(label = "Retry Count", group = "general")] // no default -> required
     pub retry_count: i64,
 
     #[config(label = "API Key", secret)] // masked in get_config for non-controllers
@@ -163,6 +173,10 @@ pub struct ModuleConfig {
     #[config(label = "Auth Canister", canister_type = "auth")]
     pub auth_canister: Option<candid::Principal>,
 }
+
+// CanisterType is UI metadata for CanisterPicker fields. The dashboard lists
+// matching canisters already installed in the project, while still accepting
+// either a tracked canister name or a principal typed by the user.
 
 thread_local! {
     static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
@@ -204,18 +218,18 @@ ic_cdk::export_candid!();
 `#[dynamic_config]` also adds `#[derive(candid::CandidType, serde::Deserialize, Clone, Debug)]`
 to the struct. Use `#[derive(canister_hub_sdk::ic::config::DynamicConfig)]`
 instead if you'd rather add your own derives - same field-attribute grammar,
-but it only adds the `ConfigSchema` impl and the five endpoints. Use exactly
+but it only adds the `ConfigSchema` impl and the four endpoints. Use exactly
 one such struct per canister crate; see `ic::config`'s module docs (`cargo
 doc --no-default-features --features ic --open`) for the full field-attribute
 reference, stable-memory ownership model, and endpoint semantics (`set_config`
 is controller-only; `get_config` masks `SecretText` fields for non-controllers).
 
-The optional struct-level `#[config_urls(...)]` generates two more public
-queries, `get_admin_panel_url`/`get_home_page_url` (both `Option<String>`,
-`None` if that URL wasn't declared) - what a dashboard's canister card calls
-to decide whether to show an "Open Admin Panel"/"Open Home Page" action.
-`{canister_id}` in either literal is substituted at call time with this
-canister's own principal, since that's almost always what the URL needs.
+The optional struct-level `#[config_links((label, url, kind), ...)]` populates
+the public `get_links` query. `kind` is either `Admin` (embed in the owner's
+dashboard) or `Public` (open as a public-facing page). The query returns an
+empty vector when no links are declared and preserves declaration order.
+`{canister_id}` in a URL is substituted at call time with this canister's own
+principal, since that's almost always what a hosted page URL needs.
 
 ## JavaScript / WebAssembly
 

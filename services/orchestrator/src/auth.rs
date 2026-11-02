@@ -60,12 +60,16 @@ pub fn verify_jwt(secret: &[u8], token: &str) -> Result<(Principal, u64), JwtErr
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC-SHA256 accepts any key length");
     mac.update(signing_input.as_bytes());
     let expected_sig = mac.finalize().into_bytes();
-    let given_sig = URL_SAFE_NO_PAD.decode(sig_b64).map_err(|_| JwtError::Malformed)?;
+    let given_sig = URL_SAFE_NO_PAD
+        .decode(sig_b64)
+        .map_err(|_| JwtError::Malformed)?;
     if !constant_time_eq(&given_sig, &expected_sig) {
         return Err(JwtError::BadSignature);
     }
 
-    let payload_bytes = URL_SAFE_NO_PAD.decode(payload_b64).map_err(|_| JwtError::Malformed)?;
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .map_err(|_| JwtError::Malformed)?;
     let claims: Claims = serde_json::from_slice(&payload_bytes).map_err(|_| JwtError::Malformed)?;
 
     if unix_now() >= claims.exp {
@@ -140,7 +144,10 @@ pub struct AuthenticatedPrincipal(pub Principal);
 impl FromRequestParts<AppState> for AuthenticatedPrincipal {
     type Rejection = (StatusCode, Json<Value>);
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let Some(secret) = &state.jwt_secret else {
             return Ok(AuthenticatedPrincipal(Principal::anonymous()));
         };
@@ -165,7 +172,8 @@ impl FromRequestParts<AppState> for AuthenticatedPrincipal {
             return Ok(AuthenticatedPrincipal(principal));
         }
 
-        let (principal, exp) = verify_jwt(secret, token).map_err(|e| unauthorized(&e.to_string()))?;
+        let (principal, exp) =
+            verify_jwt(secret, token).map_err(|e| unauthorized(&e.to_string()))?;
         state.jwt_cache.insert(token.to_string(), principal, exp);
         Ok(AuthenticatedPrincipal(principal))
     }

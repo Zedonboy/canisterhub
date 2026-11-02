@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useOutletContext, useNavigate } from "react-router-dom";
 import { HardDrive, ChevronRight, RefreshCw, Sparkles, FolderOpen, Globe, Gauge, Store } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { InstallCanisterDialog } from "@/components/InstallCanisterDialog";
 import type { ProjectContext } from "@/components/layout/AppShell";
-import { listStorageCanisters } from "@/lib/assetStorage";
+import { listStorageCanisters, type StorageCanister } from "@/lib/assetStorage";
 
 /** Shown instead of the canister grid while a project has no asset-storage
  * canister yet - matches `Auth.tsx`'s own empty-state styling. The feature
@@ -66,8 +66,17 @@ export default function StoragePage() {
   const { job, loadError, refetch } = useOutletContext<ProjectContext>();
   const navigate = useNavigate();
   const [showInstallDialog, setShowInstallDialog] = useState(false);
+  const [canisters, setCanisters] = useState<StorageCanister[] | null>(null);
 
-  const canisters = job ? listStorageCanisters(job) : null;
+  useEffect(() => {
+    let cancelled = false;
+    setCanisters(null);
+    if (!job) return () => { cancelled = true; };
+    void listStorageCanisters(job).then((found) => {
+      if (!cancelled) setCanisters(found);
+    });
+    return () => { cancelled = true; };
+  }, [job]);
 
   if (loadError) {
     return <div className="p-6 text-sm text-[#ff5252]">Couldn't load this project: {loadError}</div>;

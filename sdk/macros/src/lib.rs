@@ -23,7 +23,11 @@ enum ConfigItem {
     Label(LitStr),
     Description(LitStr),
     Key(LitStr),
+    Group(LitStr),
+    GroupLabel(LitStr),
+    GroupDescription(LitStr),
     Default(Lit),
+    Multiline,
     Secret,
     Readonly,
     Select { options: Vec<LitStr> },
@@ -47,10 +51,23 @@ impl Parse for ConfigItem {
                 input.parse::<Token![=]>()?;
                 Ok(ConfigItem::Key(input.parse()?))
             }
+            "group" => {
+                input.parse::<Token![=]>()?;
+                Ok(ConfigItem::Group(input.parse()?))
+            }
+            "group_label" => {
+                input.parse::<Token![=]>()?;
+                Ok(ConfigItem::GroupLabel(input.parse()?))
+            }
+            "group_description" => {
+                input.parse::<Token![=]>()?;
+                Ok(ConfigItem::GroupDescription(input.parse()?))
+            }
             "default" => {
                 input.parse::<Token![=]>()?;
                 Ok(ConfigItem::Default(input.parse()?))
             }
+            "multiline" => Ok(ConfigItem::Multiline),
             "secret" => Ok(ConfigItem::Secret),
             "readonly" => Ok(ConfigItem::Readonly),
             "select" => {
@@ -104,7 +121,11 @@ struct FieldAttrs {
     label: Option<LitStr>,
     description: Option<LitStr>,
     key: Option<LitStr>,
+    group: Option<LitStr>,
+    group_label: Option<LitStr>,
+    group_description: Option<LitStr>,
     default: Option<Lit>,
+    multiline: bool,
     secret: bool,
     readonly: bool,
     select: Option<Vec<LitStr>>,
@@ -125,7 +146,11 @@ fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
                 ConfigItem::Label(v) => attrs.label = Some(v),
                 ConfigItem::Description(v) => attrs.description = Some(v),
                 ConfigItem::Key(v) => attrs.key = Some(v),
+                ConfigItem::Group(v) => attrs.group = Some(v),
+                ConfigItem::GroupLabel(v) => attrs.group_label = Some(v),
+                ConfigItem::GroupDescription(v) => attrs.group_description = Some(v),
                 ConfigItem::Default(v) => attrs.default = Some(v),
+                ConfigItem::Multiline => attrs.multiline = true,
                 ConfigItem::Secret => attrs.secret = true,
                 ConfigItem::Readonly => attrs.readonly = true,
                 ConfigItem::Select { options } => attrs.select = Some(options),
@@ -145,6 +170,25 @@ fn unwrap_option(ty: &Type) -> (bool, &Type) {
         if type_path.qself.is_none() {
             if let Some(segment) = type_path.path.segments.last() {
                 if segment.ident == "Option" {
+                    if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                        if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                            return (true, inner);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (false, ty)
+}
+
+/// Strips a `Vec<...>` wrapper. Dynamic-config vectors are homogeneous, so
+/// the inner scalar type is enough to generate both schema and validation.
+fn unwrap_vec(ty: &Type) -> (bool, &Type) {
+    if let Type::Path(type_path) = ty {
+        if type_path.qself.is_none() {
+            if let Some(segment) = type_path.path.segments.last() {
+                if segment.ident == "Vec" {
                     if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
                         if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
                             return (true, inner);
@@ -187,17 +231,19 @@ fn title_case(field_name: &str) -> String {
 /// `default` against `select`'s `options`, etc.), not tokens.
 enum Kind {
     Text,
+    TextArea,
     Number,
     Float,
     Boolean,
     SecretText,
     Select(Vec<LitStr>),
     CanisterPicker(Option<LitStr>),
+    Vector(Box<Kind>),
 }
 
 fn default_literal_to_config_value(lit: &Lit, kind: &Kind) -> syn::Result<TokenStream2> {
     match kind {
-        Kind::Text | Kind::SecretText => {
+        Kind::Text | Kind::TextArea | Kind::SecretText => {
             let Lit::Str(s) = lit else {
                 return Err(syn::Error::new(
                     lit.span(),
@@ -269,6 +315,65 @@ fn default_literal_to_config_value(lit: &Lit, kind: &Kind) -> syn::Result<TokenS
                 )
             })
         }
+        Kind::Vector(_) => Err(syn::Error::new(
+            lit.span(),
+            "vector fields do not accept a literal `default`; a non-optional Vec starts empty",
+        )),
+    }
+}
+
+fn kind_to_config_type_tokens(kind: &Kind) -> TokenStream2 {
+    match kind {
+        Kind::Text => quote! { canister_hub_sdk::ic::config::ConfigType::Text },
+        Kind::TextArea => quote! { canister_hub_sdk::ic::config::ConfigType::TextArea },
+        Kind::Number => quote! { canister_hub_sdk::ic::config::ConfigType::Number },
+        Kind::Float => quote! { canister_hub_sdk::ic::config::ConfigType::Float },
+        Kind::Boolean => quote! { canister_hub_sdk::ic::config::ConfigType::Boolean },
+        Kind::SecretText => quote! { canister_hub_sdk::ic::config::ConfigType::SecretText },
+        Kind::Select(options) => {
+            quote! { canister_hub_sdk::ic::config::ConfigType::Select { options: vec![#(#options.to_string()),*] } }
+        }
+        Kind::CanisterPicker(module_type) => {
+            let filter = match module_type {
+                Some(lit) => quote! { Some(#lit.to_string()) },
+                None => quote! { None },
+            };
+            quote! { canister_hub_sdk::ic::config::ConfigType::CanisterPicker { module_type_filter: #filter } }
+        }
+        Kind::Vector(inner) => {
+            let element_type = match inner.as_ref() {
+                Kind::Text => quote! { canister_hub_sdk::ic::config::ConfigVectorType::Text },
+                Kind::TextArea => {
+                    unreachable!("multiline vector fields are rejected before code generation")
+                }
+                Kind::Number => quote! { canister_hub_sdk::ic::config::ConfigVectorType::Number },
+                Kind::Float => quote! { canister_hub_sdk::ic::config::ConfigVectorType::Float },
+                Kind::Boolean => quote! { canister_hub_sdk::ic::config::ConfigVectorType::Boolean },
+                Kind::SecretText => {
+                    quote! { canister_hub_sdk::ic::config::ConfigVectorType::SecretText }
+                }
+                Kind::Select(options) => quote! {
+                    canister_hub_sdk::ic::config::ConfigVectorType::Select {
+                        options: vec![#(#options.to_string()),*]
+                    }
+                },
+                Kind::CanisterPicker(module_type) => {
+                    let filter = match module_type {
+                        Some(lit) => quote! { Some(#lit.to_string()) },
+                        None => quote! { None },
+                    };
+                    quote! {
+                        canister_hub_sdk::ic::config::ConfigVectorType::CanisterPicker {
+                            module_type_filter: #filter
+                        }
+                    }
+                }
+                Kind::Vector(_) => {
+                    unreachable!("nested vectors are rejected before code generation")
+                }
+            };
+            quote! { canister_hub_sdk::ic::config::ConfigType::Vector { element_type: #element_type } }
+        }
     }
 }
 
@@ -303,7 +408,8 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
     })?;
     let attrs = parse_field_attrs(field)?;
 
-    let (is_option, inner_ty) = unwrap_option(&field.ty);
+    let (is_option, optional_inner_ty) = unwrap_option(&field.ty);
+    let (is_vector, inner_ty) = unwrap_vec(optional_inner_ty);
     let base_name = base_type_name(inner_ty)
         .ok_or_else(|| syn::Error::new(field.ty.span(), "unsupported dynamic_config field type"))?;
 
@@ -320,6 +426,7 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
     }
 
     let markers = [
+        attrs.multiline,
         attrs.secret,
         attrs.select.is_some(),
         attrs.canister_picker.is_some(),
@@ -330,11 +437,19 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
     if markers > 1 {
         return Err(syn::Error::new(
             field.span(),
-            "`secret`, `select(...)`, and `canister_picker(...)` are mutually exclusive",
+            "`multiline`, `secret`, `select(...)`, and `canister_picker(...)` are mutually exclusive",
         ));
     }
 
-    let kind = if let Some(options) = &attrs.select {
+    let scalar_kind = if attrs.multiline {
+        if base_name != "String" || is_vector {
+            return Err(syn::Error::new(
+                field.ty.span(),
+                "`multiline` requires a String or Option<String> field",
+            ));
+        }
+        Kind::TextArea
+    } else if let Some(options) = &attrs.select {
         if base_name != "String" {
             return Err(syn::Error::new(
                 field.ty.span(),
@@ -379,23 +494,12 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
         }
     };
 
-    let field_type_tokens = match &kind {
-        Kind::Text => quote! { canister_hub_sdk::ic::config::ConfigType::Text },
-        Kind::Number => quote! { canister_hub_sdk::ic::config::ConfigType::Number },
-        Kind::Float => quote! { canister_hub_sdk::ic::config::ConfigType::Float },
-        Kind::Boolean => quote! { canister_hub_sdk::ic::config::ConfigType::Boolean },
-        Kind::SecretText => quote! { canister_hub_sdk::ic::config::ConfigType::SecretText },
-        Kind::Select(options) => {
-            quote! { canister_hub_sdk::ic::config::ConfigType::Select { options: vec![#(#options.to_string()),*] } }
-        }
-        Kind::CanisterPicker(module_type) => {
-            let filter = match module_type {
-                Some(lit) => quote! { Some(#lit.to_string()) },
-                None => quote! { None },
-            };
-            quote! { canister_hub_sdk::ic::config::ConfigType::CanisterPicker { module_type_filter: #filter } }
-        }
+    let kind = if is_vector {
+        Kind::Vector(Box::new(scalar_kind))
+    } else {
+        scalar_kind
     };
+    let field_type_tokens = kind_to_config_type_tokens(&kind);
 
     let key_lit = match &attrs.key {
         Some(lit) => lit.value(),
@@ -410,15 +514,36 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
         .as_ref()
         .map(|lit| lit.value())
         .unwrap_or_default();
+    if attrs.group.is_none() && (attrs.group_label.is_some() || attrs.group_description.is_some()) {
+        return Err(syn::Error::new(
+            field.span(),
+            "`group_label` and `group_description` require `group = \"...\"`",
+        ));
+    }
+    let group_field = match &attrs.group {
+        Some(value) => quote! { Some(#value.to_string()) },
+        None => quote! { None },
+    };
+    let group_label_field = match &attrs.group_label {
+        Some(value) => quote! { Some(#value.to_string()) },
+        None => quote! { None },
+    };
+    let group_description_field = match &attrs.group_description {
+        Some(value) => quote! { Some(#value.to_string()) },
+        None => quote! { None },
+    };
 
     let default_value_tokens = match &attrs.default {
         Some(lit) => Some(default_literal_to_config_value(lit, &kind)?),
+        None if is_vector && !is_option => Some(quote! {
+            canister_hub_sdk::ic::config::ConfigValue::Vector(vec![])
+        }),
         None => None,
     };
 
     // Read-only values are supplied by canister code, not by the settings
     // client, so they must never make a public set_config call impossible.
-    let is_required = !attrs.readonly && !is_option && attrs.default.is_none();
+    let is_required = !attrs.readonly && !is_option && !is_vector && attrs.default.is_none();
     let is_readonly = attrs.readonly;
 
     let default_value_field = match &default_value_tokens {
@@ -435,6 +560,9 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
             key: #key_lit.to_string(),
             label: #label_lit.to_string(),
             description: #description_lit.to_string(),
+            group: #group_field,
+            group_label: #group_label_field,
+            group_description: #group_description_field,
             field_type: #field_type_tokens,
             canister_type: #canister_type_field,
             is_required: #is_required,
@@ -452,62 +580,42 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
     })
 }
 
-/// One parsed `#[config_urls(...)]` item (a struct-level attribute, unlike
-/// `#[config(...)]`'s field-level one).
-enum ConfigUrlsItem {
-    AdminPanelUrl(LitStr),
-    HomePageUrl(LitStr),
+struct ConfigLinkDecl {
+    label: LitStr,
+    url: LitStr,
+    kind: Ident,
 }
 
-impl Parse for ConfigUrlsItem {
+impl Parse for ConfigLinkDecl {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let ident: Ident = input.parse()?;
-        input.parse::<Token![=]>()?;
-        match ident.to_string().as_str() {
-            "admin_panel_url" => Ok(ConfigUrlsItem::AdminPanelUrl(input.parse()?)),
-            "home_page_url" => Ok(ConfigUrlsItem::HomePageUrl(input.parse()?)),
-            other => Err(syn::Error::new(
-                ident.span(),
-                format!("unknown `#[config_urls(...)]` attribute `{other}`"),
-            )),
+        let content;
+        syn::parenthesized!(content in input);
+        let label = content.parse()?;
+        content.parse::<Token![,]>()?;
+        let url = content.parse()?;
+        content.parse::<Token![,]>()?;
+        let kind: Ident = content.parse()?;
+        if !matches!(kind.to_string().as_str(), "Admin" | "Public") {
+            return Err(syn::Error::new(
+                kind.span(),
+                "link kind must be `Admin` or `Public`",
+            ));
         }
+        Ok(Self { label, url, kind })
     }
 }
 
-#[derive(Default)]
-struct ConfigUrls {
-    admin_panel_url: Option<LitStr>,
-    home_page_url: Option<LitStr>,
-}
-
-fn parse_config_urls(attrs: &[syn::Attribute]) -> syn::Result<ConfigUrls> {
-    let mut urls = ConfigUrls::default();
+fn parse_config_links(attrs: &[syn::Attribute]) -> syn::Result<Vec<ConfigLinkDecl>> {
+    let mut links = Vec::new();
     for attr in attrs {
-        if !attr.path().is_ident("config_urls") {
+        if !attr.path().is_ident("config_links") {
             continue;
         }
-        let items: Punctuated<ConfigUrlsItem, Token![,]> =
+        let items: Punctuated<ConfigLinkDecl, Token![,]> =
             attr.parse_args_with(Punctuated::parse_terminated)?;
-        for item in items {
-            match item {
-                ConfigUrlsItem::AdminPanelUrl(v) => urls.admin_panel_url = Some(v),
-                ConfigUrlsItem::HomePageUrl(v) => urls.home_page_url = Some(v),
-            }
-        }
+        links.extend(items);
     }
-    Ok(urls)
-}
-
-/// `None` (no URL declared) or
-/// `Some(canister_hub_sdk::ic::config::resolve_url_template(<literal>))` -
-/// the runtime substitutes `{canister_id}` in the literal with this
-/// canister's own principal, so one static string can point at a path on
-/// the canister itself (e.g. `"https://{canister_id}.icp0.io/admin"`).
-fn url_expr(lit: &Option<LitStr>) -> TokenStream2 {
-    match lit {
-        Some(lit) => quote! { Some(canister_hub_sdk::ic::config::resolve_url_template(#lit)) },
-        None => quote! { None },
-    }
+    Ok(links)
 }
 
 fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
@@ -540,9 +648,19 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     }
 
-    let urls = parse_config_urls(&input.attrs)?;
-    let admin_panel_expr = url_expr(&urls.admin_panel_url);
-    let home_page_expr = url_expr(&urls.home_page_url);
+    let links = parse_config_links(&input.attrs)?;
+    let link_entries = links.iter().map(|link| {
+        let label = &link.label;
+        let url = &link.url;
+        let kind = &link.kind;
+        quote! {
+            canister_hub_sdk::ic::config::CanisterLink {
+                label: #label.to_string(),
+                url: canister_hub_sdk::ic::config::resolve_url_template(#url),
+                kind: canister_hub_sdk::ic::config::LinkKind::#kind,
+            }
+        }
+    });
 
     Ok(quote! {
         impl canister_hub_sdk::ic::config::ConfigSchema for #struct_ident {
@@ -554,6 +672,10 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 let mut map = std::collections::HashMap::new();
                 #(#default_entries)*
                 map
+            }
+
+            fn links() -> Vec<canister_hub_sdk::ic::config::CanisterLink> {
+                vec![ #(#link_entries),* ]
             }
         }
 
@@ -578,21 +700,16 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
 
         #[ic_cdk::query]
-        fn get_admin_panel_url() -> Option<String> {
-            #admin_panel_expr
-        }
-
-        #[ic_cdk::query]
-        fn get_home_page_url() -> Option<String> {
-            #home_page_expr
+        fn get_links() -> Vec<canister_hub_sdk::ic::config::CanisterLink> {
+            <#struct_ident as canister_hub_sdk::ic::config::ConfigSchema>::links()
         }
     })
 }
 
 /// See `canister_hub_sdk::ic::config::DynamicConfig`'s docs for the
 /// field-attribute grammar and the optional struct-level
-/// `#[config_urls(...)]`.
-#[proc_macro_derive(DynamicConfig, attributes(config, config_urls))]
+/// `#[config_links(...)]`.
+#[proc_macro_derive(DynamicConfig, attributes(config, config_links))]
 pub fn derive_dynamic_config(input: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(input as DeriveInput);
     match expand(&input) {
@@ -604,7 +721,7 @@ pub fn derive_dynamic_config(input: TokenStream) -> TokenStream {
 fn strip_founder_os_attrs(input: &mut DeriveInput) {
     input
         .attrs
-        .retain(|attr| !attr.path().is_ident("config_urls"));
+        .retain(|attr| !attr.path().is_ident("config_links"));
     if let Data::Struct(data) = &mut input.data {
         if let Fields::Named(named) = &mut data.fields {
             for field in named.named.iter_mut() {
@@ -616,10 +733,10 @@ fn strip_founder_os_attrs(input: &mut DeriveInput) {
 
 /// See `canister_hub_sdk::ic::config::dynamic_config`'s docs for the
 /// field-attribute grammar and the optional struct-level
-/// `#[config_urls(...)]`. Unlike the derive form, this also adds
+/// `#[config_links(...)]`. Unlike the derive form, this also adds
 /// `#[derive(candid::CandidType, serde::Deserialize, Clone, Debug)]` to the
 /// struct and strips the (otherwise-unrecognized outside a derive macro)
-/// `#[config(...)]`/`#[config_urls(...)]` attributes before re-emitting it.
+/// `#[config(...)]`/`#[config_links(...)]` attributes before re-emitting it.
 #[proc_macro_attribute]
 pub fn dynamic_config(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut input = syn::parse_macro_input!(item as DeriveInput);

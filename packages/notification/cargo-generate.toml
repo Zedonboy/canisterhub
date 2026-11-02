@@ -1,0 +1,4 @@
+# This package is copied as already-correct source by `icp new --path`.
+[template]
+exclude = ["target/**", ".git/**"]
+

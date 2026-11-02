@@ -28,17 +28,25 @@ use ic_stable_structures::{
     storable::Bound,
     DefaultMemoryImpl, StableBTreeMap, StableCell, Storable,
 };
-use include_dir::{include_dir, Dir};
 use ic_vetkeys::key_manager::KeyManager;
 use ic_vetkeys::types::{AccessRights, ByteBuf, KeyName};
 use icrc_ledger_types::icrc1::account::Account;
 use icrc_ledger_types::icrc1::transfer::Memo;
 use icrc_ledger_types::icrc2::transfer_from::{TransferFromArgs, TransferFromError};
+use include_dir::{include_dir, Dir};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+
+mod managed_ai;
+mod project_notifications;
+pub use managed_ai::{
+    ManagedAiChoice, ManagedAiCompletionRequest, ManagedAiCompletionResponse,
+    ManagedAiConfigUpdate, ManagedAiMessage, ManagedAiRequest, ManagedAiResponse, ManagedAiRole,
+    ManagedAiService, ManagedAiStatus, ManagedAiUsage, TokenCreditBalance, TokenUsage,
+};
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
@@ -51,15 +59,6 @@ const REPO_OWNERS_MEM_ID: MemoryId = MemoryId::new(5);
 const KEY_NAME_OWNERS_MEM_ID: MemoryId = MemoryId::new(6);
 const JWT_SIGNING_KEY_MEM_ID: MemoryId = MemoryId::new(7);
 const PROJECTS_MEM_ID: MemoryId = MemoryId::new(8);
-// Jumps straight to 16, well past every id 0-8 ever used by anything else in
-// this file - see the numbering-regression note above this block. `backend`
-// is now a pure persistence layer for the orchestrator's Web Push feature
-// (orchestrator still owns VAPID keys/HTTP routes/auth - see
-// services/orchestrator/src/push.rs): a controller (the orchestrator) calls
-// push_subscribe/push_unsubscribe/push_list_subscriptions on a user's
-// behalf, the same controller-gated pattern as register_repo_publisher.
-const PUSH_SUBSCRIPTIONS_MEM_ID: MemoryId = MemoryId::new(16);
-
 // This file's MemoryId numbering has an open, unresolved question about
 // whether it still matches what's actually encoded in any already-deployed
 // canister's stable memory (see the `list_my_projects`/`Project` decode
@@ -93,17 +92,6 @@ const MAX_LLM_CONTEXT_BYTES: usize = 256 * 1_024;
 const MAX_PROJECT_RESULT_BYTES: usize = 32 * 1_024;
 const MAX_CANISTER_NAME_BYTES: usize = 128;
 const MAX_PROJECT_CANISTERS: usize = 256;
-/// A real `PushSubscription.endpoint` is a push-service URL (easily longer
-/// than a typical URL with its service-specific routing path); `p256dh`/
-/// `auth` are short base64url-encoded key material. Generous but still
-/// bounded.
-const MAX_PUSH_ENDPOINT_BYTES: usize = 2_048;
-const MAX_PUSH_KEY_BYTES: usize = 256;
-/// Caps one principal's own subscription count - a browser only ever has
-/// one live `PushSubscription` per origin at a time, so more than a handful
-/// (multiple devices/browsers) is already generous.
-const MAX_PUSH_SUBSCRIPTIONS_PER_PRINCIPAL: usize = 32;
-
 /// How long an `issue_jwt` access token remains valid. Callers (e.g. the
 /// orchestrator's frontend) are expected to call `issue_jwt` again once theirs
 /// expires rather than this being long-lived.
@@ -170,6 +158,24 @@ pub enum MarketplaceItemType {
     #[default]
     Package,
     Template,
+}
+
+/// Controller-supplied metadata for an official marketplace template.
+///
+/// Templates are always public and free. Their `download_url` points to the
+/// template's `canister_hub.toml` GitHub Release asset. `manifest_hash` is the
+/// SHA-256 of that manifest's exact bytes; internally it occupies the existing
+/// marketplace integrity field so no stable-storage migration is required.
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct MarketplaceTemplateInput {
+    pub title: String,
+    pub description: String,
+    pub web_url: Option<String>,
+    pub git_repo_url: String,
+    pub download_url: String,
+    pub release_tag: String,
+    pub package_slug: String,
+    pub manifest_hash: Vec<u8>,
 }
 
 /// A package or project template published to the marketplace.
@@ -289,14 +295,17 @@ impl Storable for MarketplaceItem {
 // so the dashboard can go call it directly for anything else.
 // ---------------------------------------------------------------------------
 
-/// Which building block a tracked canister actually is. A marketplace-item
-/// deploy (see `frontend/src/lib/deploy.ts`) always records `Other` - a
-/// `MarketplaceItem` has no kind classification of its own.
+/// Which building block a tracked canister actually is. Most generic
+/// marketplace deploys record `Other`; the project-wide notification module
+/// is classified explicitly so the one-per-project invariant can be enforced.
 #[derive(Clone, Copy, Debug, CandidType, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CanisterKind {
     Connector,
     Agent,
     AdminAgent,
+    /// The single project-wide Web Push service. Every module that needs
+    /// notifications shares this canister instead of deploying its own.
+    Notification,
     Auth,
     Database,
     Analytics,
@@ -309,6 +318,10 @@ pub enum CanisterKind {
 pub struct CanisterInfo {
     pub id: Principal,
     pub kind: CanisterKind,
+}
+
+fn is_notification_canister(name: &str, info: &CanisterInfo) -> bool {
+    info.kind == CanisterKind::Notification || name.eq_ignore_ascii_case("notification")
 }
 
 /// A project's own lifecycle - `AwaitingAnswer`/`Succeeded`/`Failed` only
@@ -370,9 +383,9 @@ impl Storable for Project {
     }
 }
 
-/// A browser's `PushSubscription.toJSON()` shape, mirrored exactly from
-/// `services/orchestrator/src/push.rs::PushSubscription` - this canister
-/// just persists it, it never interprets `p256dh`/`auth` itself.
+// Wire-compatible migration shims for clients generated before Web Push
+// moved into the project-owned `notification` module. These types and the
+// methods below deliberately contain no notification state or behavior.
 #[derive(Clone, Debug, CandidType, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PushSubscription {
     pub endpoint: String,
@@ -380,27 +393,19 @@ pub struct PushSubscription {
     pub auth: String,
 }
 
-/// One principal's subscriptions - a newtype over `Vec<PushSubscription>`
-/// purely so it can have its own `Storable` impl (a bare `Vec<T>` can't
-/// implement a foreign trait directly - Rust's orphan rule).
-#[derive(Clone, Debug, Default, CandidType, Serialize, Deserialize)]
-pub struct PushSubscriptions(pub Vec<PushSubscription>);
+#[derive(Clone, Debug, CandidType, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PushNotification {
+    pub title: String,
+    pub body: String,
+    pub url: String,
+}
 
-impl Storable for PushSubscriptions {
-    const BOUND: Bound = Bound::Unbounded;
-
-    // Candid, not ciborium - same reasoning as `Project`'s own impl above.
-    fn to_bytes(&self) -> Cow<'_, [u8]> {
-        Cow::Owned(candid::encode_one(self).expect("Failed to encode PushSubscriptions"))
-    }
-
-    fn into_bytes(self) -> Vec<u8> {
-        self.to_bytes().into_owned()
-    }
-
-    fn from_bytes(bytes: Cow<'_, [u8]>) -> Self {
-        candid::decode_one(bytes.as_ref()).expect("Failed to decode PushSubscriptions")
-    }
+#[derive(Clone, Debug, CandidType, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PushDelivery {
+    pub endpoint: String,
+    pub status: Option<u16>,
+    pub error: Option<String>,
+    pub subscription_removed: bool,
 }
 
 thread_local! {
@@ -463,14 +468,6 @@ thread_local! {
         StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(PROJECTS_MEM_ID)))
     );
 
-    /// Every principal's Web Push subscriptions - see `PushSubscriptions`'s
-    /// own doc comment. Mutated only by `push_subscribe`/`push_unsubscribe`
-    /// (controller-gated; the orchestrator calls these on a user's behalf
-    /// after verifying their JWT itself).
-    static PUSH_SUBSCRIPTIONS: RefCell<StableBTreeMap<Principal, PushSubscriptions, Memory>> = RefCell::new(
-        StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(PUSH_SUBSCRIPTIONS_MEM_ID)))
-    );
-
     /// Certified HTTP assets for the marketing landing page (see "Landing
     /// page assets" below) - deliberately *not* part of the `MemoryManager`-
     /// backed stable storage above: every byte here is already compiled
@@ -507,7 +504,10 @@ static LANDING_ASSETS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/../landi
 /// `AssetConfig`'s `path`/`pattern` matching below expects.
 fn collect_assets(dir: &'static Dir<'static>, out: &mut Vec<Asset<'static, 'static>>) {
     for file in dir.files() {
-        out.push(Asset::new(file.path().to_string_lossy().into_owned(), file.contents()));
+        out.push(Asset::new(
+            file.path().to_string_lossy().into_owned(),
+            file.contents(),
+        ));
     }
     for subdir in dir.dirs() {
         collect_assets(subdir, out);
@@ -523,7 +523,10 @@ fn init_landing_assets() {
     let mut assets = Vec::new();
     collect_assets(&LANDING_ASSETS, &mut assets);
 
-    let immutable_cache = ("cache-control".to_string(), "public, max-age=31536000, immutable".to_string());
+    let immutable_cache = (
+        "cache-control".to_string(),
+        "public, max-age=31536000, immutable".to_string(),
+    );
     let asset_configs = vec![
         // Vite's own output layout: hashed, content-addressed filenames
         // under `assets/`, safe to cache forever - a new build always gets
@@ -535,8 +538,14 @@ fn init_landing_assets() {
         AssetConfig::File {
             path: "index.html".to_string(),
             content_type: Some("text/html".to_string()),
-            headers: vec![("cache-control".to_string(), "public, no-cache, no-store".to_string())],
-            fallback_for: vec![AssetFallbackConfig { scope: "/".to_string(), status_code: Some(StatusCode::OK) }],
+            headers: vec![(
+                "cache-control".to_string(),
+                "public, no-cache, no-store".to_string(),
+            )],
+            fallback_for: vec![AssetFallbackConfig {
+                scope: "/".to_string(),
+                status_code: Some(StatusCode::OK),
+            }],
             aliased_by: vec!["/".to_string()],
             encodings: vec![],
         },
@@ -565,7 +574,7 @@ fn init_landing_assets() {
         router
             .certify_assets(assets, asset_configs)
             .expect("failed to certify landing page assets");
-        ic_cdk::api::certified_data_set(&router.root_hash());
+        ic_cdk::api::certified_data_set(router.root_hash());
     });
 }
 
@@ -748,6 +757,91 @@ fn validate_manifest_download_url(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn upsert_marketplace_item(
+    caller: Principal,
+    item_type: MarketplaceItemType,
+    web_url: Option<String>,
+    git_repo_url: String,
+    title: String,
+    description: String,
+    download_url: String,
+    price: Option<u64>,
+    encrypted_key: Option<Vec<u8>>,
+    package_slug: String,
+    wasm_hash: Vec<u8>,
+) -> u64 {
+    let (owner, repo) = parse_github_owner_repo(&git_repo_url)
+        .expect("marketplace repo URL must be validated before storage");
+    let repo_key = format!("{owner}/{repo}");
+
+    // A normalized GitHub repository plus package slug identifies one
+    // marketplace item. A new release updates the existing listing while
+    // retaining its popularity and any package purchase records.
+    let existing_item = ITEMS.with(|items| {
+        items.borrow().iter().find_map(|entry| {
+            let item = entry.value();
+            let (item_owner, item_repo) = parse_github_owner_repo(&item.git_repo_url).ok()?;
+            (format!("{item_owner}/{item_repo}") == repo_key && item.package_slug == package_slug)
+                .then_some(item)
+        })
+    });
+    if let Some(existing) = existing_item {
+        let id = existing.id;
+        let updated = MarketplaceItem {
+            id,
+            package_slug,
+            item_type,
+            title,
+            description,
+            web_url,
+            git_repo_url,
+            download_url,
+            wasm_hash,
+            price,
+            encrypted_key,
+            publisher: caller,
+            created_at: existing.created_at,
+            downloads: existing.downloads,
+            purchases: existing.purchases,
+        };
+        ITEMS.with(|items| items.borrow_mut().insert(id, updated));
+        return id;
+    }
+
+    let id = ITEM_ID_COUNTER.with(|counter| {
+        let mut cell = counter.borrow_mut();
+        let next_id = *cell.get();
+        cell.set(
+            next_id
+                .checked_add(1)
+                .expect("marketplace item id space exhausted"),
+        );
+        next_id
+    });
+
+    let item = MarketplaceItem {
+        id,
+        package_slug,
+        item_type,
+        title,
+        description,
+        web_url,
+        git_repo_url,
+        download_url,
+        wasm_hash,
+        price,
+        encrypted_key,
+        publisher: caller,
+        created_at: ic_cdk::api::time(),
+        downloads: 0,
+        purchases: BTreeMap::new(),
+    };
+
+    ITEMS.with(|items| items.borrow_mut().insert(id, item));
+    id
+}
+
 #[query]
 fn greet(name: String) -> String {
     format!("Hello, {}!", name)
@@ -800,80 +894,108 @@ fn register_repo_publisher(git_repo_url: String, publisher: Principal) -> Result
     Ok(())
 }
 
-/// Checks that `caller` is a controller - the shared gate every push-
-/// notification method below uses, same reasoning as
-/// `register_repo_publisher`'s own check: the orchestrator is the only
-/// party that can prove *which* end-user principal a subscribe/unsubscribe
-/// request actually came from (it already verified a JWT before calling
-/// here), so these take that principal as an explicit argument rather than
-/// trusting `msg_caller()` to be it.
-fn require_controller(caller: Principal) -> Result<(), String> {
-    if !ic_cdk::api::is_controller(&caller) {
-        return Err("only a controller (the orchestrator) may call this".to_string());
-    }
-    Ok(())
+fn notification_module_moved<T>() -> Result<T, String> {
+    Err(
+        "Web Push moved to the project-owned notification module; install and call that module"
+            .to_string(),
+    )
 }
 
-/// Records (or updates) `principal`'s subscription - persistence for
-/// `services/orchestrator/src/push.rs`'s `/push/subscribe` route. Idempotent
-/// on `endpoint`: resubscribing the same endpoint updates its keys in place
-/// rather than creating a duplicate, the same behavior the orchestrator's
-/// now-removed local `PushStore` had.
 #[update]
-fn push_subscribe(principal: Principal, subscription: PushSubscription) -> Result<(), String> {
-    require_controller(ic_cdk::api::msg_caller())?;
-    if principal == Principal::anonymous() {
-        return Err("principal must not be the anonymous principal".to_string());
-    }
-    ensure_text_size("endpoint", &subscription.endpoint, MAX_PUSH_ENDPOINT_BYTES)?;
-    ensure_text_size("p256dh", &subscription.p256dh, MAX_PUSH_KEY_BYTES)?;
-    ensure_text_size("auth", &subscription.auth, MAX_PUSH_KEY_BYTES)?;
-
-    PUSH_SUBSCRIPTIONS.with(|m| {
-        let mut subs = m.borrow_mut();
-        let mut entry = subs.get(&principal).unwrap_or_default();
-        match entry.0.iter_mut().find(|s| s.endpoint == subscription.endpoint) {
-            Some(existing) => *existing = subscription,
-            None => {
-                if entry.0.len() >= MAX_PUSH_SUBSCRIPTIONS_PER_PRINCIPAL {
-                    return Err(format!(
-                        "principal already has the maximum of {MAX_PUSH_SUBSCRIPTIONS_PER_PRINCIPAL} push subscriptions"
-                    ));
-                }
-                entry.0.push(subscription);
-            }
-        }
-        subs.insert(principal, entry);
-        Ok(())
-    })
+fn push_init_vapid(_subject: String) -> Result<Vec<u8>, String> {
+    notification_module_moved()
 }
 
-/// Drops one of `principal`'s subscriptions by `endpoint` - persistence for
-/// the `/push/unsubscribe` route. Not finding a match is not an error - the
-/// end state the caller wants is already true.
 #[update]
-fn push_unsubscribe(principal: Principal, endpoint: String) -> Result<(), String> {
-    require_controller(ic_cdk::api::msg_caller())?;
-    PUSH_SUBSCRIPTIONS.with(|m| {
-        let mut subs = m.borrow_mut();
-        if let Some(mut entry) = subs.get(&principal) {
-            entry.0.retain(|s| s.endpoint != endpoint);
-            if entry.0.is_empty() {
-                subs.remove(&principal);
-            } else {
-                subs.insert(principal, entry);
-            }
-        }
-    });
-    Ok(())
+fn push_import_vapid(_private_key: String, _subject: String) -> Result<Vec<u8>, String> {
+    notification_module_moved()
 }
 
-/// `principal`'s own currently-stored subscriptions - persistence for the
-/// `/push/subscriptions` route.
 #[query]
-fn push_list_subscriptions(principal: Principal) -> Result<Vec<PushSubscription>, String> {
-    require_controller(ic_cdk::api::msg_caller())?;
-    Ok(PUSH_SUBSCRIPTIONS.with(|m| m.borrow().get(&principal)).unwrap_or_default().0)
+fn push_vapid_public_key() -> Result<Vec<u8>, String> {
+    notification_module_moved()
+}
+
+#[update]
+fn push_subscribe(_subscription: PushSubscription) -> Result<(), String> {
+    notification_module_moved()
+}
+
+#[update]
+fn push_unsubscribe(_endpoint: String) -> Result<(), String> {
+    notification_module_moved()
+}
+
+#[query]
+fn push_list_subscriptions() -> Result<Vec<PushSubscription>, String> {
+    notification_module_moved()
+}
+
+#[update]
+fn push_send(
+    _principal: Principal,
+    _notification: PushNotification,
+) -> Result<Vec<PushDelivery>, String> {
+    notification_module_moved()
+}
+
+/// Adds or updates an official project template in the marketplace.
+///
+/// This is intentionally controller-only: unlike the general publisher API,
+/// it bypasses repository-publisher registration so the platform operator can
+/// seed curated templates directly. A repository/package-slug pair is stable;
+/// submitting it again updates the listing without resetting its id, creation
+/// time, or download counter.
+#[update]
+fn add_marketplace_template(info: MarketplaceTemplateInput) -> Result<u64, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() || !ic_cdk::api::is_controller(&caller) {
+        return Err("only a controller may add marketplace templates".to_string());
+    }
+
+    ensure_optional_https_url("web_url", info.web_url.as_ref())?;
+    ensure_text_size("title", &info.title, MAX_MARKETPLACE_TITLE_BYTES)?;
+    ensure_text_size(
+        "description",
+        &info.description,
+        MAX_MARKETPLACE_DESCRIPTION_BYTES,
+    )?;
+    if info.title.trim().is_empty() {
+        return Err("title must not be empty".to_string());
+    }
+    if info.download_url.trim().is_empty() {
+        return Err("download_url must not be empty".to_string());
+    }
+    validate_release_tag(&info.release_tag)?;
+    validate_package_slug(&info.package_slug)?;
+    if info.manifest_hash.len() != WASM_HASH_BYTES {
+        return Err(format!(
+            "manifest_hash must be exactly {WASM_HASH_BYTES} bytes"
+        ));
+    }
+
+    let (owner, repo) = parse_github_owner_repo(&info.git_repo_url)?;
+    validate_manifest_download_url(
+        &info.download_url,
+        &owner,
+        &repo,
+        &info.release_tag,
+        &info.package_slug,
+    )?;
+
+    Ok(upsert_marketplace_item(
+        caller,
+        MarketplaceItemType::Template,
+        info.web_url,
+        info.git_repo_url,
+        info.title,
+        info.description,
+        info.download_url,
+        None,
+        None,
+        info.package_slug,
+        info.manifest_hash,
+    ))
 }
 
 /// Publishes a package or template manifest to the marketplace.
@@ -990,72 +1112,19 @@ fn publish_marketplace_item(
     let (_, key_name) = item_key_id(&repo_key, &package_slug);
     KEY_NAME_OWNERS.with(|owners| owners.borrow_mut().insert(key_name, caller));
 
-    // A normalized GitHub repository plus package slug identifies one
-    // marketplace item. A new release of that package updates its listing.
-    // Preserve buyer entitlements and usage counters across package updates.
-    let existing_item = ITEMS.with(|items| {
-        items.borrow().iter().find_map(|entry| {
-            let item = entry.value();
-            let (item_owner, item_repo) = parse_github_owner_repo(&item.git_repo_url).ok()?;
-            (format!("{item_owner}/{item_repo}") == repo_key && item.package_slug == package_slug)
-                .then_some(item)
-        })
-    });
-    if let Some(existing) = existing_item {
-        let id = existing.id;
-        let updated = MarketplaceItem {
-            id,
-            package_slug,
-            item_type,
-            title,
-            description,
-            web_url,
-            git_repo_url,
-            download_url,
-            wasm_hash,
-            price,
-            encrypted_key,
-            publisher: caller,
-            created_at: existing.created_at,
-            downloads: existing.downloads,
-            purchases: existing.purchases,
-        };
-        ITEMS.with(|items| items.borrow_mut().insert(id, updated));
-        return Ok(id);
-    }
-
-    let id = ITEM_ID_COUNTER.with(|counter| {
-        let mut cell = counter.borrow_mut();
-        let next_id = *cell.get();
-        cell.set(
-            next_id
-                .checked_add(1)
-                .expect("marketplace item id space exhausted"),
-        );
-        next_id
-    });
-
-    let item = MarketplaceItem {
-        id,
-        package_slug,
+    Ok(upsert_marketplace_item(
+        caller,
         item_type,
-        title,
-        description,
         web_url,
         git_repo_url,
+        title,
+        description,
         download_url,
-        wasm_hash,
         price,
         encrypted_key,
-        publisher: caller,
-        created_at: ic_cdk::api::time(),
-        downloads: 0,
-        purchases: BTreeMap::new(),
-    };
-
-    ITEMS.with(|items| items.borrow_mut().insert(id, item));
-
-    Ok(id)
+        package_slug,
+        wasm_hash,
+    ))
 }
 
 /// Fetches a single marketplace item by id.
@@ -1795,6 +1864,44 @@ fn add_project_canisters(id: String, canisters: Vec<(String, CanisterInfo)>) -> 
             .get(&id)
             .filter(|project| project.owner == caller)
             .ok_or_else(|| format!("no project with id {id}"))?;
+
+        // Notification is project infrastructure, not a per-feature
+        // dependency. Enforce this here so concurrent and non-browser
+        // callers cannot register two distinct instances.
+        let existing_notification = project
+            .canisters
+            .iter()
+            .find(|(name, info)| is_notification_canister(name, info));
+        let requested_notifications = canisters
+            .iter()
+            .filter(|(name, info)| is_notification_canister(name, info))
+            .collect::<Vec<_>>();
+        if requested_notifications.len() > 1 {
+            return Err("a project may have only one notification canister".to_string());
+        }
+        if let (Some((existing_name, existing)), Some((requested_name, requested))) = (
+            existing_notification,
+            requested_notifications.first().copied(),
+        ) {
+            if existing_name != requested_name || existing != requested {
+                return Err(format!(
+                    "project already has notification canister '{}' ({})",
+                    existing_name, existing.id
+                ));
+            }
+        }
+
+        // Exact retries are idempotent, but a conflicting value must not
+        // silently replace an existing project entry.
+        for (name, info) in &canisters {
+            if let Some(existing) = project.canisters.get(name) {
+                if existing != info {
+                    return Err(format!(
+                        "project already tracks a different canister as '{name}'"
+                    ));
+                }
+            }
+        }
         let new_names = canisters
             .iter()
             .filter(|(name, _)| !project.canisters.contains_key(name))

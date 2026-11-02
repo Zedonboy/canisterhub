@@ -1,0 +1,18 @@
+[package]
+name = "assetstorage"
+version.workspace = true
+edition.workspace = true
+description = "ICP certified asset storage canister with controller-managed permissions"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+candid.workspace = true
+ic-cdk.workspace = true
+ic-certified-assets.workspace = true
+serde.workspace = true
+serde_cbor.workspace = true
+
+[dev-dependencies]
+pocket-ic.workspace = true

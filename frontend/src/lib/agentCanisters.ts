@@ -1,5 +1,5 @@
 // Real data + actions for the Agent page's "Agents" tab - direct canister
-// calls to a project's own `agent`-kind canister(s), no orchestrator HTTP
+// calls to a project's fused messaging + `agent` canister(s), no orchestrator HTTP
 // call anywhere in this file. Backs both the Test dialog (real
 // `receive_message` + `get_conversation`) and the Config dialog (real
 // `get_config`/`update_config`) - see `candid/agentCanister.ts`'s own doc
@@ -61,44 +61,27 @@ export async function getTestConversation(canisterId: string, network: string): 
   return result.Ok.history.map(adaptTurn);
 }
 
-/** Runs one real message through the real LLM/tool-calling loop
- * (`receive_message`) and returns the updated transcript. Two real,
- * separate failure modes worth telling apart (see
- * `packages/agent/src/lib.rs::receive_message`'s own flow):
- * - `connector_principal` unset: fails immediately, *before* the LLM ever
- *   runs - nothing to show, the whole call is a no-op. This throws, and
- *   the caller should treat it as blocking (surfaced in the dialog as
- *   "configure a connector first"), not a transient error to retry.
- * - Every other failure (most commonly: the final best-effort relay to
- *   `connector_principal` itself, since a real dashboard test has nothing
- *   listening there to actually deliver a reply to) happens *after* the
- *   turn is already durably persisted (`state::append_turn` runs before
- *   the outbound relay attempt) - so even on this error, the real reply is
- *   already in `get_conversation`. This function tolerates that class of
- *   error and still returns the real, updated transcript. */
+/** Runs one real message through the fused canister's LLM/tool loop. The
+ * dashboard is a controller, so this manual ingress path needs no separate
+ * connector principal. A channel-send failure may happen after persistence,
+ * so the transcript read remains authoritative. */
 export async function sendTestMessage(canisterId: string, network: string, text: string): Promise<ChatTurn[]> {
   const actor = await getAgentCanisterActor(canisterId, network);
   const result = await actor.receive_message({ session_id: TEST_SESSION_ID, text, channel: TEST_CHANNEL });
-  if ("Err" in result && /connector_principal is not configured/.test(result.Err)) {
-    throw new Error(result.Err);
-  }
   // Either Ok, or a non-blocking post-persistence relay failure (see this
   // function's own doc comment) - either way, re-read the real transcript.
   return getTestConversation(canisterId, network);
 }
 
 export interface AgentConfigSummary {
-  icSqlCanisterId: string | null;
   adminWebhookUrl: string | null;
+  whatsappPhoneNumberId: string | null;
   systemPrompt: string | null;
-  /** One of `"openai"`/`"anthropic"`/`"gemini"`/`"deepseek"` - the only
-   * four the real canister's `llm.rs::dispatch` actually implements (see
-   * that file's own doc comment on why no on-chain option exists here
-   * today). `null` means unset, which the canister itself treats as
-   * `"openai"` (see `llm.rs::dispatch`'s own `unwrap_or("openai")`). */
+  /** Managed platform or direct/BYOK provider identifier. */
   llmProvider: string | null;
   llmModel: string | null;
   maxToolIterations: number | null;
+  /** Legacy map compatibility; fused agents always return null. */
   connectorPrincipal: string | null;
   /** Not readable from `get_config` at all (write-only credential - see
    * `candid/agentCanister.ts`) - `true` only tells you a value exists on
@@ -111,14 +94,14 @@ function optToNullable<T>(opt: [] | [T]): T | null {
 
 export async function getAgentConfig(canisterId: string, network: string): Promise<AgentConfigSummary> {
   const actor = await getAgentCanisterActor(canisterId, network);
-  const result = await actor.get_config();
+  const result = await actor.get_runtime_config();
   if ("Err" in result) {
     throw new Error(result.Err);
   }
   const c = result.Ok;
   return {
-    icSqlCanisterId: optToNullable(c.ic_sql_canister_id)?.toText() ?? null,
     adminWebhookUrl: optToNullable(c.admin_webhook_url),
+    whatsappPhoneNumberId: optToNullable(c.whatsapp_phone_number_id),
     systemPrompt: optToNullable(c.system_prompt),
     llmProvider: optToNullable(c.llm_provider),
     llmModel: optToNullable(c.llm_model),
@@ -128,31 +111,27 @@ export async function getAgentConfig(canisterId: string, network: string): Promi
 }
 
 /** What the Config dialog submits. Every field here is always explicitly
- * set-or-cleared (blank = clear) *except* `llmApiKey`/`adminWebhookSecret`
+ * set-or-cleared (blank = clear) *except* credential fields
  * - both write-only (see `AgentConfigSummary`'s own doc comment), so
  * `undefined` there means "leave whatever's already configured alone"
  * (the outer `[]` "not mentioned" state), distinct from an empty string
  * meaning "clear it". */
 export interface AgentConfigPatch {
-  icSqlCanisterId: string;
   adminWebhookUrl: string;
+  whatsappPhoneNumberId: string;
   systemPrompt: string;
   llmProvider: string;
   llmModel: string;
   maxToolIterations: string;
-  connectorPrincipal: string;
   llmApiKey?: string | null;
   adminWebhookSecret?: string | null;
+  whatsappVerifyToken?: string | null;
+  whatsappAppSecret?: string | null;
+  whatsappAccessToken?: string | null;
 }
 
 function setOrClear(value: string): [] | [[] | [string]] {
   return value.trim() === "" ? [[]] : [[value.trim()]];
-}
-
-function setOrClearPrincipal(value: string): [] | [[] | [Principal]] {
-  const trimmed = value.trim();
-  if (trimmed === "") return [[]];
-  return [[Principal.fromText(trimmed)]];
 }
 
 function setOrClearNat8(value: string): [] | [[] | [number]] {
@@ -178,14 +157,19 @@ function writeOnlyField(value: string | null | undefined): [] | [[] | [string]] 
 export async function updateAgentConfig(canisterId: string, network: string, patch: AgentConfigPatch): Promise<void> {
   const actor = await getAgentCanisterActor(canisterId, network);
   const result = await actor.update_config({
-    ic_sql_canister_id: setOrClearPrincipal(patch.icSqlCanisterId),
+    project_id: [],
+    protocol_id: [],
+    connector_principal: [],
     admin_webhook_url: setOrClear(patch.adminWebhookUrl),
     system_prompt: setOrClear(patch.systemPrompt),
     admin_webhook_secret: writeOnlyField(patch.adminWebhookSecret),
+    whatsapp_verify_token: writeOnlyField(patch.whatsappVerifyToken),
+    whatsapp_app_secret: writeOnlyField(patch.whatsappAppSecret),
+    whatsapp_access_token: writeOnlyField(patch.whatsappAccessToken),
+    whatsapp_phone_number_id: setOrClear(patch.whatsappPhoneNumberId),
     llm_provider: setOrClear(patch.llmProvider),
     max_tool_iterations: setOrClearNat8(patch.maxToolIterations),
     llm_api_key: writeOnlyField(patch.llmApiKey),
-    connector_principal: setOrClearPrincipal(patch.connectorPrincipal),
     llm_model: setOrClear(patch.llmModel),
   });
   if ("Err" in result) {

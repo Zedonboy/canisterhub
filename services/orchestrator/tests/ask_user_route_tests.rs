@@ -73,8 +73,6 @@ fn dummy_config() -> Config {
         github_oauth_client_secret: None,
         public_base_url: None,
         github_api_token: None,
-        vapid_public_key: None,
-        vapid_private_key: None,
     }
 }
 
@@ -101,7 +99,12 @@ async fn start_test_server(jobs: JobStore) -> String {
 /// test's `dummy_config` sets it to 1s specifically so the timeout test
 /// below doesn't need a slow test), then resume. Returns what the "tool
 /// call" would have returned, over a channel the test can inspect.
-fn spawn_fake_ask_user(jobs: JobStore, job_id: String, question: String, timeout: Duration) -> tokio::sync::oneshot::Receiver<Result<String, String>> {
+fn spawn_fake_ask_user(
+    jobs: JobStore,
+    job_id: String,
+    question: String,
+    timeout: Duration,
+) -> tokio::sync::oneshot::Receiver<Result<String, String>> {
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
         let receiver = jobs.register_pending_answer(&job_id);
@@ -149,7 +152,13 @@ async fn wait_for_state(jobs: &JobStore, id: &str, want: JobState) -> Job {
 #[tokio::test]
 async fn a_pending_question_is_visible_in_the_job_store_and_answerable_via_post() {
     let jobs = JobStore::default();
-    let job = Job::new("job-1".to_string(), "request".to_string(), "local".to_string(), "anonymous".to_string(), std::env::temp_dir());
+    let job = Job::new(
+        "job-1".to_string(),
+        "request".to_string(),
+        "local".to_string(),
+        "anonymous".to_string(),
+        std::env::temp_dir(),
+    );
     jobs.insert(job);
 
     let base_url = start_test_server(jobs.clone()).await;
@@ -161,7 +170,12 @@ async fn a_pending_question_is_visible_in_the_job_store_and_answerable_via_post(
     assert_eq!(initial.state, JobState::Running);
     assert!(initial.pending_question.is_none());
 
-    let outcome = spawn_fake_ask_user(jobs.clone(), "job-1".to_string(), "which network?".to_string(), Duration::from_secs(5));
+    let outcome = spawn_fake_ask_user(
+        jobs.clone(),
+        "job-1".to_string(),
+        "which network?".to_string(),
+        Duration::from_secs(5),
+    );
 
     let awaiting = wait_for_state(&jobs, "job-1", JobState::AwaitingAnswer).await;
     assert_eq!(awaiting.pending_question.as_deref(), Some("which network?"));
@@ -188,11 +202,22 @@ async fn a_pending_question_is_visible_in_the_job_store_and_answerable_via_post(
 #[tokio::test]
 async fn answering_a_job_with_no_pending_question_is_a_conflict() {
     let jobs = JobStore::default();
-    jobs.insert(Job::new("job-1".to_string(), "request".to_string(), "local".to_string(), "anonymous".to_string(), std::env::temp_dir()));
+    jobs.insert(Job::new(
+        "job-1".to_string(),
+        "request".to_string(),
+        "local".to_string(),
+        "anonymous".to_string(),
+        std::env::temp_dir(),
+    ));
     let base_url = start_test_server(jobs).await;
     let client = reqwest::Client::new();
 
-    let response = client.post(format!("{base_url}/jobs/job-1/answer")).json(&json!({ "answer": "anything" })).send().await.unwrap();
+    let response = client
+        .post(format!("{base_url}/jobs/job-1/answer"))
+        .json(&json!({ "answer": "anything" }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
 }
 
@@ -202,21 +227,42 @@ async fn answering_an_unknown_job_is_not_found() {
     let base_url = start_test_server(jobs).await;
     let client = reqwest::Client::new();
 
-    let response = client.post(format!("{base_url}/jobs/no-such-job/answer")).json(&json!({ "answer": "anything" })).send().await.unwrap();
+    let response = client
+        .post(format!("{base_url}/jobs/no-such-job/answer"))
+        .json(&json!({ "answer": "anything" }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn an_empty_answer_is_rejected_before_touching_the_pending_question() {
     let jobs = JobStore::default();
-    jobs.insert(Job::new("job-1".to_string(), "request".to_string(), "local".to_string(), "anonymous".to_string(), std::env::temp_dir()));
+    jobs.insert(Job::new(
+        "job-1".to_string(),
+        "request".to_string(),
+        "local".to_string(),
+        "anonymous".to_string(),
+        std::env::temp_dir(),
+    ));
     let base_url = start_test_server(jobs.clone()).await;
     let client = reqwest::Client::new();
 
-    let _outcome = spawn_fake_ask_user(jobs.clone(), "job-1".to_string(), "q?".to_string(), Duration::from_secs(5));
+    let _outcome = spawn_fake_ask_user(
+        jobs.clone(),
+        "job-1".to_string(),
+        "q?".to_string(),
+        Duration::from_secs(5),
+    );
     wait_for_state(&jobs, "job-1", JobState::AwaitingAnswer).await;
 
-    let response = client.post(format!("{base_url}/jobs/job-1/answer")).json(&json!({ "answer": "   " })).send().await.unwrap();
+    let response = client
+        .post(format!("{base_url}/jobs/job-1/answer"))
+        .json(&json!({ "answer": "   " }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
 
     // The question must still be pending - the empty answer must not have
@@ -228,11 +274,22 @@ async fn an_empty_answer_is_rejected_before_touching_the_pending_question() {
 #[tokio::test]
 async fn a_question_that_times_out_resumes_the_job_without_an_answer() {
     let jobs = JobStore::default();
-    jobs.insert(Job::new("job-1".to_string(), "request".to_string(), "local".to_string(), "anonymous".to_string(), std::env::temp_dir()));
+    jobs.insert(Job::new(
+        "job-1".to_string(),
+        "request".to_string(),
+        "local".to_string(),
+        "anonymous".to_string(),
+        std::env::temp_dir(),
+    ));
     let base_url = start_test_server(jobs.clone()).await;
     let client = reqwest::Client::new();
 
-    let outcome = spawn_fake_ask_user(jobs.clone(), "job-1".to_string(), "q?".to_string(), Duration::from_millis(50));
+    let outcome = spawn_fake_ask_user(
+        jobs.clone(),
+        "job-1".to_string(),
+        "q?".to_string(),
+        Duration::from_millis(50),
+    );
     wait_for_state(&jobs, "job-1", JobState::AwaitingAnswer).await;
 
     // Nobody answers - the fake tool call's own short timeout above should
@@ -242,6 +299,11 @@ async fn a_question_that_times_out_resumes_the_job_without_an_answer() {
     assert_eq!(outcome.await.unwrap(), Err("timed out".to_string()));
 
     // An answer that arrives after the timeout has nothing to land on.
-    let response = client.post(format!("{base_url}/jobs/job-1/answer")).json(&json!({ "answer": "too late" })).send().await.unwrap();
+    let response = client
+        .post(format!("{base_url}/jobs/job-1/answer"))
+        .json(&json!({ "answer": "too late" }))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
 }

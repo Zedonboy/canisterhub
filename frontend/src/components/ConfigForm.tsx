@@ -4,24 +4,42 @@
 // schema's own `Vec` order, not alphabetical - a module author's declared
 // field order is the intended reading order.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Principal } from "@icp-sdk/core/principal";
-import { Input, Label } from "@/components/ui/Input";
+import { ChevronDown } from "lucide-react";
+import { Input, Label, Textarea } from "@/components/ui/Input";
 import { Toggle } from "@/components/ui/Toggle";
 import { Button } from "@/components/ui/Button";
-import type { ConfigFieldSchema, ConfigType, ConfigValue } from "@/lib/moduleConfig";
+import type { ConfigFieldSchema, ConfigType, ConfigValue, ConfigVectorType, ConfigVectorValue } from "@/lib/moduleConfig";
 
 /** What each field edits as - a plain string for every text-like/numeric
  * field (kept as text while editing, parsed only on submit, so a half-typed
  * number never gets silently coerced mid-keystroke) or a real boolean for
  * `Boolean`. */
-type RawValue = string | boolean;
+type RawScalarValue = string | boolean;
+type RawValue = RawScalarValue | RawScalarValue[];
+type ScalarType = ConfigVectorType | Exclude<ConfigType, { Vector: unknown }>;
+type InstalledCanisters = Record<string, { id: string; kind: string }>;
 
-function isTextLike(fieldType: ConfigType): boolean {
-  return "Text" in fieldType || "SecretText" in fieldType || "Select" in fieldType;
+interface CanisterOption {
+  name: string;
+  id: string;
+  kind: string;
+}
+
+function isTextLike(fieldType: ScalarType): boolean {
+  return "Text" in fieldType || "TextArea" in fieldType || "SecretText" in fieldType || "Select" in fieldType;
 }
 
 function configValueToRaw(fieldType: ConfigType, value: ConfigValue | undefined): RawValue {
+  if ("Vector" in fieldType) {
+    if (!value || !("Vector" in value)) return [];
+    return value.Vector.map(vectorValueToRaw);
+  }
+  return scalarConfigValueToRaw(fieldType, value);
+}
+
+function scalarConfigValueToRaw(fieldType: ScalarType, value: ConfigValue | undefined): RawScalarValue {
   if ("Boolean" in fieldType) return value && "Boolean" in value ? value.Boolean : false;
   if (!value) return "";
   if ("Text" in value) return value.Text;
@@ -31,9 +49,49 @@ function configValueToRaw(fieldType: ConfigType, value: ConfigValue | undefined)
   return "";
 }
 
+function vectorValueToRaw(value: ConfigVectorValue): RawScalarValue {
+  if ("Text" in value) return value.Text;
+  if ("Number" in value) return value.Number.toString();
+  if ("Float" in value) return value.Float.toString();
+  if ("Boolean" in value) return value.Boolean;
+  if ("PrincipalId" in value) return value.PrincipalId.toText();
+  return "";
+}
+
 /** `null` return means "couldn't convert" - the caller turns that into an
  * inline field error rather than silently dropping or guessing a value. */
-function rawToConfigValue(fieldType: ConfigType, raw: RawValue): ConfigValue | null {
+function resolveCanisterId(raw: RawScalarValue, installedCanisters: InstalledCanisters): string {
+  const candidate = String(raw).trim();
+  const namedCanister = Object.entries(installedCanisters).find(
+    ([name]) => name.toLowerCase() === candidate.toLowerCase(),
+  );
+  return namedCanister?.[1].id ?? candidate;
+}
+
+function rawToConfigValue(
+  fieldType: ConfigType,
+  raw: RawValue,
+  installedCanisters: InstalledCanisters,
+): ConfigValue | null {
+  if ("Vector" in fieldType) {
+    if (!Array.isArray(raw)) return null;
+    const values: ConfigVectorValue[] = [];
+    for (const item of raw) {
+      const converted = rawToVectorValue(fieldType.Vector.element_type, item, installedCanisters);
+      if (converted === null) return null;
+      values.push(converted);
+    }
+    return { Vector: values };
+  }
+  if (Array.isArray(raw)) return null;
+  return rawToScalarConfigValue(fieldType, raw, installedCanisters);
+}
+
+function rawToScalarConfigValue(
+  fieldType: ScalarType,
+  raw: RawScalarValue,
+  installedCanisters: InstalledCanisters,
+): ConfigValue | null {
   if (isTextLike(fieldType)) return { Text: String(raw) };
   if ("Number" in fieldType) {
     const n = Number(raw);
@@ -48,7 +106,7 @@ function rawToConfigValue(fieldType: ConfigType, raw: RawValue): ConfigValue | n
   if ("Boolean" in fieldType) return { Boolean: Boolean(raw) };
   if ("CanisterPicker" in fieldType) {
     try {
-      return { PrincipalId: Principal.fromText(String(raw).trim()) };
+      return { PrincipalId: Principal.fromText(resolveCanisterId(raw, installedCanisters)) };
     } catch {
       return null;
     }
@@ -56,13 +114,111 @@ function rawToConfigValue(fieldType: ConfigType, raw: RawValue): ConfigValue | n
   return null;
 }
 
+function rawToVectorValue(
+  fieldType: ConfigVectorType,
+  raw: RawScalarValue,
+  installedCanisters: InstalledCanisters,
+): ConfigVectorValue | null {
+  const converted = rawToScalarConfigValue(fieldType, raw, installedCanisters);
+  if (!converted || "Vector" in converted) return null;
+  return converted;
+}
+
 function isBlank(fieldType: ConfigType, raw: RawValue): boolean {
+  if ("Vector" in fieldType) return false;
+  if (Array.isArray(raw)) return false;
   if ("Boolean" in fieldType) return false;
   return String(raw).trim() === "";
 }
 
 function isReadonly(schema: ConfigFieldSchema): boolean {
   return schema.is_readonly[0] ?? false;
+}
+
+function normalizedCanisterLabel(value: string): string {
+  return value.toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function canisterPickerType(fieldType: ConfigType): Extract<ConfigVectorType, { CanisterPicker: unknown }> | null {
+  if ("CanisterPicker" in fieldType) return fieldType;
+  if ("Vector" in fieldType && "CanisterPicker" in fieldType.Vector.element_type) {
+    return fieldType.Vector.element_type;
+  }
+  return null;
+}
+
+function canisterOptionsForField(
+  schema: ConfigFieldSchema,
+  installedCanisters: InstalledCanisters,
+): CanisterOption[] {
+  const picker = canisterPickerType(schema.field_type);
+  if (!picker) return [];
+
+  const moduleFilter = picker.CanisterPicker.module_type_filter[0];
+  const expectedType = schema.canister_type?.[0]
+    ? Object.keys(schema.canister_type[0])[0]
+    : "Custom";
+
+  return Object.entries(installedCanisters)
+    .map(([name, canister]) => ({ name, ...canister }))
+    .filter(({ name, kind }) => {
+      const normalizedName = normalizedCanisterLabel(name);
+      const normalizedKind = normalizedCanisterLabel(kind);
+      const matchesType = expectedType === "Auth"
+        ? normalizedKind === "auth"
+        : expectedType === "Database"
+          ? normalizedKind === "database"
+          : expectedType === "Storage"
+            ? normalizedKind === "static" || normalizedName.includes("storage")
+            : true;
+      const normalizedFilter = moduleFilter ? normalizedCanisterLabel(moduleFilter) : "";
+      const matchesModule = !normalizedFilter
+        || normalizedName.includes(normalizedFilter)
+        || normalizedKind === normalizedFilter;
+      return matchesType && matchesModule;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function CanisterOptions({ id, options }: { id: string; options: CanisterOption[] }) {
+  return (
+    <datalist id={id}>
+      {options.flatMap((option) => [
+        <option key={`name:${option.name}`} value={option.name} label={`${option.id} · ${option.kind}`} />,
+        <option key={`id:${option.name}:${option.id}`} value={option.id} label={`${option.name} · ${option.kind}`} />,
+      ])}
+    </datalist>
+  );
+}
+
+function selectOptionLabel(option: string): string {
+  if (option === "managed") return "Managed";
+  if (option === "managed_deepseek") return "Managed";
+  if (option === "managed_ic_llm") return "Managed";
+  if (option === "deepseek") return "DeepSeek (Own API Key)";
+  return option;
+}
+
+const MANAGED_MODEL_OPTIONS = new Set([
+  "deepseek-v4-pro",
+  "llama3.1:8b",
+  "qwen3:32b",
+  "llama4-scout",
+  "qwen2.5:0.5b",
+]);
+
+function normalizeProvider(provider: string): string {
+  return ["managed_deepseek", "managed_ic_llm", "platform"].includes(provider) ? "managed" : provider;
+}
+
+function modelOptionsForProvider(provider: string, options: string[]): string[] {
+  if (["managed", "managed_deepseek", "managed_ic_llm", "platform"].includes(provider)) {
+    return options.filter((option) => MANAGED_MODEL_OPTIONS.has(option));
+  }
+  if (provider === "openai") return options.filter((option) => option.startsWith("gpt-"));
+  if (provider === "anthropic") return options.filter((option) => option.startsWith("claude-"));
+  if (provider === "deepseek") return options.filter((option) => option.startsWith("deepseek-"));
+  return options;
 }
 
 function displayConfigValue(value: ConfigValue | undefined): string {
@@ -72,6 +228,10 @@ function displayConfigValue(value: ConfigValue | undefined): string {
   if ("Float" in value) return value.Float.toString();
   if ("Boolean" in value) return value.Boolean ? "Yes" : "No";
   if ("PrincipalId" in value) return value.PrincipalId.toText();
+  if ("Vector" in value) {
+    if (value.Vector.length === 0) return "None";
+    return value.Vector.map((item) => String(vectorValueToRaw(item))).join(", ");
+  }
   return "Unavailable";
 }
 
@@ -79,10 +239,11 @@ interface FieldProps {
   schema: ConfigFieldSchema;
   value: RawValue;
   error?: string;
+  canisterOptions: CanisterOption[];
   onChange: (value: RawValue) => void;
 }
 
-function Field({ schema, value, error, onChange }: FieldProps) {
+function Field({ schema, value, error, canisterOptions, onChange }: FieldProps) {
   const fieldType = schema.field_type;
   const inputId = `config-field-${schema.key}`;
 
@@ -95,12 +256,20 @@ function Field({ schema, value, error, onChange }: FieldProps) {
         </Label>
         {"Select" in fieldType === false && "CanisterPicker" in fieldType === false && (
           <span className="text-[9px] text-[#4a5568] uppercase tracking-wide">
-            {"SecretText" in fieldType ? "secret" : "Boolean" in fieldType ? "" : Object.keys(fieldType)[0]}
+            {"Vector" in fieldType ? "list" : "SecretText" in fieldType ? "secret" : "Boolean" in fieldType ? "" : Object.keys(fieldType)[0]}
           </span>
         )}
       </div>
 
-      {"Boolean" in fieldType ? (
+      {"Vector" in fieldType ? (
+        <VectorField
+          inputId={inputId}
+          fieldType={fieldType.Vector.element_type}
+          value={Array.isArray(value) ? value : []}
+          canisterOptions={canisterOptions}
+          onChange={onChange}
+        />
+      ) : "Boolean" in fieldType ? (
         <Toggle checked={Boolean(value)} onChange={(v) => onChange(v)} />
       ) : "Select" in fieldType ? (
         <select
@@ -114,22 +283,38 @@ function Field({ schema, value, error, onChange }: FieldProps) {
           </option>
           {fieldType.Select.options.map((option) => (
             <option key={option} value={option}>
-              {option}
+              {selectOptionLabel(option)}
             </option>
           ))}
         </select>
+      ) : "TextArea" in fieldType ? (
+        <Textarea
+          id={inputId}
+          rows={6}
+          className="font-mono"
+          placeholder="shop.example.com\nwww.shop.example.com"
+          value={String(value)}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      ) : "CanisterPicker" in fieldType ? (
+        <>
+          <Input
+            id={inputId}
+            type="text"
+            list={`${inputId}-canisters`}
+            placeholder={fieldType.CanisterPicker.module_type_filter[0]
+              ? `${fieldType.CanisterPicker.module_type_filter[0]} name or canister ID`
+              : "Canister name or principal ID"}
+            value={String(value)}
+            onChange={(e) => onChange(e.target.value)}
+          />
+          <CanisterOptions id={`${inputId}-canisters`} options={canisterOptions} />
+        </>
       ) : (
         <Input
           id={inputId}
           type={"SecretText" in fieldType ? "password" : "Number" in fieldType || "Float" in fieldType ? "number" : "text"}
           step={"Float" in fieldType ? "any" : undefined}
-          placeholder={
-            "CanisterPicker" in fieldType
-              ? fieldType.CanisterPicker.module_type_filter.length > 0
-                ? `${fieldType.CanisterPicker.module_type_filter[0]} canister id`
-                : "aaaaa-aa"
-              : undefined
-          }
           value={String(value)}
           onChange={(e) => onChange(e.target.value)}
         />
@@ -141,85 +326,246 @@ function Field({ schema, value, error, onChange }: FieldProps) {
   );
 }
 
+function emptyVectorItem(fieldType: ConfigVectorType): RawScalarValue {
+  if ("Boolean" in fieldType) return false;
+  if ("Select" in fieldType) return fieldType.Select.options[0] ?? "";
+  return "";
+}
+
+interface VectorFieldProps {
+  inputId: string;
+  fieldType: ConfigVectorType;
+  value: RawScalarValue[];
+  canisterOptions: CanisterOption[];
+  onChange: (value: RawValue) => void;
+}
+
+function VectorField({ inputId, fieldType, value, canisterOptions, onChange }: VectorFieldProps) {
+  const replace = (index: number, item: RawScalarValue) => {
+    const next = [...value];
+    next[index] = item;
+    onChange(next);
+  };
+
+  return (
+    <div className="space-y-2">
+      {value.map((item, index) => (
+        <div key={`${inputId}-${index}`} className="flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            {"Boolean" in fieldType ? (
+              <Toggle checked={Boolean(item)} onChange={(next) => replace(index, next)} />
+            ) : "Select" in fieldType ? (
+              <select
+                id={`${inputId}-${index}`}
+                value={String(item)}
+                onChange={(e) => replace(index, e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-[#0a0e1a] border border-[#1e2d47] rounded text-[#e2e8f0] focus:outline-none focus:border-[#00d4ff]"
+              >
+                {fieldType.Select.options.map((option) => <option key={option} value={option}>{selectOptionLabel(option)}</option>)}
+              </select>
+            ) : (
+              <Input
+                id={`${inputId}-${index}`}
+                type={"SecretText" in fieldType ? "password" : "Number" in fieldType || "Float" in fieldType ? "number" : "text"}
+                step={"Float" in fieldType ? "any" : undefined}
+                list={"CanisterPicker" in fieldType ? `${inputId}-canisters` : undefined}
+                placeholder={"CanisterPicker" in fieldType ? "Canister name or principal ID" : undefined}
+                value={String(item)}
+                onChange={(e) => replace(index, e.target.value)}
+              />
+            )}
+          </div>
+          <Button type="button" variant="ghost" size="sm" onClick={() => onChange(value.filter((_, i) => i !== index))}>
+            Remove
+          </Button>
+        </div>
+      ))}
+      {"CanisterPicker" in fieldType && <CanisterOptions id={`${inputId}-canisters`} options={canisterOptions} />}
+      <Button type="button" variant="ghost" size="sm" onClick={() => onChange([...value, emptyVectorItem(fieldType)])}>
+        + Add item
+      </Button>
+    </div>
+  );
+}
+
 export interface ConfigFormProps {
   schema: ConfigFieldSchema[];
   initialValues: Record<string, ConfigValue>;
+  installedCanisters?: InstalledCanisters;
   onSubmit: (changed: Record<string, ConfigValue>) => Promise<void>;
 }
 
-export function ConfigForm({ schema, initialValues, onSubmit }: ConfigFormProps) {
-  const editableSchema = schema.filter((field) => !isReadonly(field));
-  const readonlySchema = schema.filter(isReadonly);
-  const [values, setValues] = useState<Record<string, RawValue>>(() =>
-    Object.fromEntries(
-      editableSchema.map((field) => [field.key, configValueToRaw(field.field_type, initialValues[field.key])])
-    )
-  );
-  // Only touched fields are ever sent to `set_config` - see `setModuleConfig`'s
-  // own doc comment. This also means an untouched `SecretText` field, whose
-  // displayed value may be the server's own "•••••••• " mask (a
-  // non-controller caller - see `ic::config`'s doc comment on why that
-  // masking exists at all), can never get written back as if it were real.
-  const [touched, setTouched] = useState<Set<string>>(new Set());
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+interface EditableFieldProps {
+  schema: ConfigFieldSchema;
+  initialValue: ConfigValue | undefined;
+  installedCanisters: InstalledCanisters;
+  onSubmit: ConfigFormProps["onSubmit"];
+  onRawChange?: (value: RawValue) => void;
+}
 
-  const setField = (key: string, value: RawValue) => {
-    setValues((v) => ({ ...v, [key]: value }));
-    setTouched((t) => new Set(t).add(key));
-    setFieldErrors((errs) => {
-      if (!(key in errs)) return errs;
-      const { [key]: _removed, ...rest } = errs;
-      return rest;
-    });
-  };
+interface FieldGroup {
+  key: string;
+  label: string | null;
+  description: string | null;
+  fields: ConfigFieldSchema[];
+}
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (touched.size === 0) return;
+function titleCase(value: string): string {
+  return value
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
 
-    const changed: Record<string, ConfigValue> = {};
-    const errors: Record<string, string> = {};
-    for (const field of editableSchema) {
-      if (!touched.has(field.key)) continue;
-      const raw = values[field.key];
-      if (field.is_required && isBlank(field.field_type, raw)) {
-        errors[field.key] = "Required";
-        continue;
-      }
-      if (isBlank(field.field_type, raw) && !field.is_required) continue; // clearing an optional field back to "unset" isn't supported by a partial merge - just don't send it
-      const converted = rawToConfigValue(field.field_type, raw);
-      if (converted === null) {
-        errors[field.key] = "CanisterPicker" in field.field_type ? "Not a valid canister id" : "Not a valid value";
-        continue;
-      }
-      changed[field.key] = converted;
+/** Preserves schema order while collecting fields that share a group key.
+ * Ungrouped fields remain independent, matching older modules' layout. */
+function groupFields(fields: ConfigFieldSchema[]): FieldGroup[] {
+  const result: FieldGroup[] = [];
+  const grouped = new Map<string, FieldGroup>();
+
+  for (const field of fields) {
+    const key = field.group[0];
+    if (!key) {
+      result.push({ key: `field:${field.key}`, label: null, description: null, fields: [field] });
+      continue;
     }
 
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors);
+    let group = grouped.get(key);
+    if (!group) {
+      group = {
+        key: `group:${key}`,
+        label: field.group_label[0] ?? titleCase(key),
+        description: field.group_description[0] ?? null,
+        fields: [],
+      };
+      grouped.set(key, group);
+      result.push(group);
+    } else {
+      group.label ??= field.group_label[0] ?? titleCase(key);
+      group.description ??= field.group_description[0] ?? null;
+    }
+    group.fields.push(field);
+  }
+
+  return result;
+}
+
+function FoldableGroup({ group, children }: { group: FieldGroup; children: React.ReactNode }) {
+  const [isOpen, setIsOpen] = useState(true);
+
+  return (
+    <details
+      open={isOpen}
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+      className="group rounded-md border border-[#1e2d47] bg-[#0a0e1a44]"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 marker:hidden [&::-webkit-details-marker]:hidden">
+        <div className="min-w-0">
+          <h4 className="text-xs font-medium text-[#e2e8f0]">{group.label}</h4>
+          {group.description && <p className="mt-0.5 text-[10px] leading-relaxed text-[#4a5568]">{group.description}</p>}
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2 text-[#4a5568]">
+          <span className="text-[9px] uppercase tracking-wide">{group.fields.length} {group.fields.length === 1 ? "setting" : "settings"}</span>
+          <ChevronDown size={14} className="transition-transform group-open:rotate-180" />
+        </div>
+      </summary>
+      <div className="space-y-3 border-t border-[#1e2d47] p-3">{children}</div>
+    </details>
+  );
+}
+
+function EditableField({ schema, initialValue, installedCanisters, onSubmit, onRawChange }: EditableFieldProps) {
+  const [value, setValue] = useState<RawValue>(() => configValueToRaw(schema.field_type, initialValue));
+  const [dirty, setDirty] = useState(false);
+  const [fieldError, setFieldError] = useState<string>();
+  const [submitError, setSubmitError] = useState<string>();
+  const [submitting, setSubmitting] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const change = (next: RawValue) => {
+    setValue(next);
+    onRawChange?.(next);
+    setDirty(true);
+    setSaved(false);
+    setFieldError(undefined);
+    setSubmitError(undefined);
+  };
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!dirty || submitting) return;
+
+    if (schema.is_required && isBlank(schema.field_type, value)) {
+      setFieldError("Required");
+      return;
+    }
+    if (isBlank(schema.field_type, value)) {
+      setFieldError("Optional scalar values cannot currently be cleared; enter a value or leave this field unchanged");
+      return;
+    }
+
+    const converted = rawToConfigValue(schema.field_type, value, installedCanisters);
+    if (converted === null) {
+      setFieldError(canisterPickerType(schema.field_type) ? "Enter an installed canister name or a valid canister ID" : "Not a valid value");
       return;
     }
 
     setSubmitting(true);
-    setSubmitError(null);
+    setSubmitError(undefined);
     try {
-      await onSubmit(changed);
-      setTouched(new Set());
-    } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : String(err));
+      // Dynamic set_config is a partial merge. Sending exactly one key makes
+      // this save independent from every other edited field on the page.
+      await onSubmit({ [schema.key]: converted });
+      setDirty(false);
+      setSaved(true);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : String(error));
     } finally {
       setSubmitting(false);
     }
   };
+
+  return (
+    <form onSubmit={save} className="rounded-md border border-[#1e2d47] bg-[#0a0e1a55] p-3">
+      <Field
+        schema={schema}
+        value={value}
+        error={fieldError}
+        canisterOptions={canisterOptionsForField(schema, installedCanisters)}
+        onChange={change}
+      />
+      {submitError && <p className="mt-2 text-[10px] text-[#ff5252]">{submitError}</p>}
+      <div className="mt-3 flex items-center gap-2">
+        <Button type="submit" variant="primary" size="sm" disabled={!dirty || submitting}>
+          {submitting ? "Saving…" : `Save ${schema.label}`}
+        </Button>
+        {dirty && !submitting && <span className="text-[10px] text-[#f6c85f]">Unsaved</span>}
+        {saved && !dirty && <span className="text-[10px] text-[#48bb78]">Saved</span>}
+      </div>
+    </form>
+  );
+}
+
+export function ConfigForm({ schema, initialValues, installedCanisters = {}, onSubmit }: ConfigFormProps) {
+  const initialProvider = (() => {
+    const value = initialValues.llm_provider;
+    return value && "Text" in value ? normalizeProvider(value.Text) : "";
+  })();
+  const [llmProvider, setLlmProvider] = useState(initialProvider);
+  useEffect(() => setLlmProvider(initialProvider), [initialProvider]);
+
+  const editableSchema = schema.filter((field) => !isReadonly(field));
+  const readonlySchema = schema.filter(isReadonly);
+  const editableGroups = groupFields(editableSchema);
+  const readonlyGroups = groupFields(readonlySchema);
 
   if (schema.length === 0) {
     return <p className="text-sm text-[#4a5568]">This module has no configurable settings.</p>;
   }
 
   return (
-    <form onSubmit={handleSubmit}>
+    <div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="rounded-lg border border-[#1e2d47] bg-[#0a0e1a66] p-4">
           <div className="mb-4">
@@ -229,28 +575,39 @@ export function ConfigForm({ schema, initialValues, onSubmit }: ConfigFormProps)
 
           {editableSchema.length > 0 ? (
             <div className="space-y-4">
-              {editableSchema.map((field) => (
-                <Field
-                  key={field.key}
-                  schema={field}
-                  value={values[field.key]}
-                  error={fieldErrors[field.key]}
-                  onChange={(v) => setField(field.key, v)}
-                />
-              ))}
-
-              {submitError && <p className="text-xs text-[#ff5252]">{submitError}</p>}
-
-              <div className="flex items-center gap-2 pt-2">
-                <Button type="submit" variant="primary" size="sm" disabled={touched.size === 0 || submitting}>
-                  {submitting ? "Saving…" : "Save changes"}
-                </Button>
-                {touched.size > 0 && !submitting && (
-                  <span className="text-[10px] text-[#4a5568]">
-                    {touched.size} field{touched.size === 1 ? "" : "s"} changed
-                  </span>
-                )}
-              </div>
+              {editableGroups.map((group) => {
+                const fields = group.fields.map((field) => {
+                  const storedInitialValue = initialValues[field.key] ?? field.default_value[0];
+                  const displayedInitialValue = field.key === "llm_provider"
+                    && storedInitialValue
+                    && "Text" in storedInitialValue
+                    ? { Text: normalizeProvider(storedInitialValue.Text) }
+                    : storedInitialValue;
+                  const displayedField = field.key === "llm_model" && "Select" in field.field_type
+                    ? {
+                        ...field,
+                        field_type: {
+                          Select: {
+                            options: modelOptionsForProvider(llmProvider, field.field_type.Select.options),
+                          },
+                        },
+                      }
+                    : field;
+                  return (
+                    <EditableField
+                      key={field.key}
+                      schema={displayedField}
+                      initialValue={displayedInitialValue}
+                      installedCanisters={installedCanisters}
+                      onSubmit={onSubmit}
+                      onRawChange={field.key === "llm_provider"
+                        ? (value) => setLlmProvider(Array.isArray(value) ? "" : String(value))
+                        : undefined}
+                    />
+                  );
+                });
+                return group.label ? <FoldableGroup key={group.key} group={group}>{fields}</FoldableGroup> : fields;
+              })}
             </div>
           ) : (
             <p className="text-xs text-[#4a5568]">This module has no editable settings.</p>
@@ -264,22 +621,27 @@ export function ConfigForm({ schema, initialValues, onSubmit }: ConfigFormProps)
           </div>
 
           {readonlySchema.length > 0 ? (
-            <dl className="divide-y divide-[#1e2d47]">
-              {readonlySchema.map((field) => (
-                <div key={field.key} className="py-3 first:pt-0 last:pb-0">
-                  <dt className="text-[10px] font-medium uppercase tracking-wide text-[#718096]">{field.label}</dt>
-                  <dd className="mt-1 break-all font-mono text-sm text-[#e2e8f0]">
-                    {displayConfigValue(initialValues[field.key])}
-                  </dd>
-                  {field.description && <p className="mt-1 text-[10px] text-[#4a5568]">{field.description}</p>}
-                </div>
-              ))}
-            </dl>
+            <div className="space-y-4">
+              {readonlyGroups.map((group) => {
+                const fields = (
+                  <dl className="divide-y divide-[#1e2d47]">
+                    {group.fields.map((field) => (
+                      <div key={field.key} className="py-3 first:pt-0 last:pb-0">
+                        <dt className="text-[10px] font-medium uppercase tracking-wide text-[#718096]">{field.label}</dt>
+                        <dd className="mt-1 break-all font-mono text-sm text-[#e2e8f0]">{displayConfigValue(initialValues[field.key])}</dd>
+                        {field.description && <p className="mt-1 text-[10px] text-[#4a5568]">{field.description}</p>}
+                      </div>
+                    ))}
+                  </dl>
+                );
+                return group.label ? <FoldableGroup key={group.key} group={group}>{fields}</FoldableGroup> : <div key={group.key}>{fields}</div>;
+              })}
+            </div>
           ) : (
             <p className="text-xs text-[#4a5568]">This module does not report read-only data.</p>
           )}
         </section>
       </div>
-    </form>
+    </div>
   );
 }

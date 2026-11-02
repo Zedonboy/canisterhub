@@ -13,9 +13,11 @@ import { getAgent } from "./agent";
 import { idlFactory as managementIdlFactory, MANAGEMENT_CANISTER_ID, type ManagementService } from "./candid/management";
 import { fetchMarketplaceWasm } from "./vetkeyDecrypt";
 import { purchaseMarketplaceAccess, recordDownload } from "./marketplace";
-import { addProjectCanisters } from "./backend";
+import { addProjectCanisters, getProject, type CanisterKind } from "./backend";
 import type { MarketplaceItem } from "../bindings/backend";
 import { runtimeValue } from "./canisterEnv";
+import { backendCanisterId } from "./actors";
+import { getModuleConfigSchema, setModuleConfig } from "./moduleConfig";
 
 async function managementActor(network: string): Promise<ManagementService> {
   const agent = await getAgent(network);
@@ -32,6 +34,18 @@ function orchestratorPrincipal(): Principal | null {
 
 function slugify(s: string): string {
   return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "item";
+}
+
+function isNotificationPackage(packageSlug: string): boolean {
+  return packageSlug.toLowerCase().trim().replaceAll("-", "_") === "notification";
+}
+
+async function ensureNotificationSlotIsAvailable(projectId: string): Promise<void> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error(`Project ${projectId} was not found`);
+  if (Object.values(project.canisters).some((info) => info.kind === "notification")) {
+    throw new Error("This project already has a notification canister. Share it with the new module instead of deploying another one.");
+  }
 }
 
 export interface DeployedCanister {
@@ -55,6 +69,8 @@ export interface DeployedCanister {
  * fabricated one - a known, disclosed gap, not something this function
  * silently works around. */
 export async function deployMarketplaceItem(item: MarketplaceItem, network: string, projectId: string, userPrincipal: Principal): Promise<DeployedCanister> {
+  const notification = isNotificationPackage(item.package_slug);
+  if (notification) await ensureNotificationSlotIsAvailable(projectId);
   // For a paid item this approves ICP, lets the backend pull payment with
   // ICRC-2 transfer_from, and grants the caller vetkey Read access. It is
   // idempotent, so a retry after a later deployment failure is not charged
@@ -81,11 +97,36 @@ export async function deployMarketplaceItem(item: MarketplaceItem, network: stri
   const controllers = orchestrator ? [userPrincipal, orchestrator] : [userPrincipal];
   await actor.update_settings({ canister_id: canisterId, settings: { controllers: [controllers] }, sender_canister_version: [] });
 
+  // Packages use this registry key when calling project-scoped protocol APIs.
+  // It is platform-owned deployment context, not something the SME should
+  // have to copy into every package manually.
+  try {
+    const schema = await getModuleConfigSchema(canisterId.toText(), network);
+    if (schema.some((field) => field.key === "project_id")) {
+      await setModuleConfig(canisterId.toText(), network, {
+        project_id: { Text: projectId },
+      });
+    }
+  } catch {
+    // Packages without the dynamic-config protocol remain installable.
+  }
+
+  // Project packages send owner notifications through the backend, which
+  // verifies project membership before forwarding to this canister. Trusting
+  // only that backend here keeps arbitrary project canisters from bypassing
+  // the project-scoped authorization gateway and selecting another recipient.
+  if (notification) {
+    await setModuleConfig(canisterId.toText(), network, {
+      trusted_senders: { Vector: [{ PrincipalId: backendCanisterId() }] },
+    });
+  }
+
   // A short suffix of the canister's own (globally unique) id keeps this
   // name collision-free within the project without needing to know its
   // other canister names ahead of time.
-  const name = `${slugify(item.title)}-${canisterId.toText().slice(0, 5)}`;
-  await addProjectCanisters(projectId, [[name, { id: canisterId.toText(), kind: "other" }]]);
+  const name = notification ? "notification" : `${slugify(item.title)}-${canisterId.toText().slice(0, 5)}`;
+  const kind: CanisterKind = notification ? "notification" : "other";
+  await addProjectCanisters(projectId, [[name, { id: canisterId.toText(), kind }]]);
   await recordDownload(item.id);
 
   return { name, id: canisterId.toText() };

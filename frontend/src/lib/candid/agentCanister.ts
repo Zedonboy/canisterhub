@@ -26,15 +26,17 @@ export interface ConversationState {
   history: StoredChatMessage[];
 }
 
-/** Deliberately omits `llm_api_key` and `admin_webhook_secret` from what
- * this frontend ever *reads* back off `Config` - both are real credentials
+/** Deliberately omits API keys, tokens, and webhook secrets from what
+ * this frontend ever *reads* back off `Config` - they are real credentials
  * on the canister side. They're still real, settable fields on
  * `AgentConfigUpdate` below (a write-only credential field, same pattern a
  * password-change form uses: you can set it, never read the current
  * value back). */
 export interface AgentConfigPublic {
-  ic_sql_canister_id: [] | [Principal];
+  project_id: [] | [string];
+  protocol_id: [] | [Principal];
   admin_webhook_url: [] | [string];
+  whatsapp_phone_number_id: [] | [string];
   system_prompt: [] | [string];
   llm_provider: [] | [string];
   max_tool_iterations: [] | [number];
@@ -47,10 +49,15 @@ export interface AgentConfigPublic {
  * outer `[]` ("not mentioned") leaves the field untouched, `[[]]` clears
  * it, `[[value]]` sets it. */
 export interface AgentConfigUpdate {
-  ic_sql_canister_id: [] | [[] | [Principal]];
+  project_id: [] | [[] | [string]];
+  protocol_id: [] | [[] | [Principal]];
   admin_webhook_url: [] | [[] | [string]];
   system_prompt: [] | [[] | [string]];
   admin_webhook_secret: [] | [[] | [string]];
+  whatsapp_verify_token: [] | [[] | [string]];
+  whatsapp_app_secret: [] | [[] | [string]];
+  whatsapp_access_token: [] | [[] | [string]];
+  whatsapp_phone_number_id: [] | [[] | [string]];
   llm_provider: [] | [[] | [string]];
   max_tool_iterations: [] | [[] | [number]];
   llm_api_key: [] | [[] | [string]];
@@ -65,7 +72,7 @@ export interface IncomingMessage {
 }
 
 export interface AgentService {
-  get_config: () => Promise<{ Ok: AgentConfigPublic } | { Err: string }>;
+  get_runtime_config: () => Promise<{ Ok: AgentConfigPublic } | { Err: string }>;
   update_config: (update: AgentConfigUpdate) => Promise<{ Ok: null } | { Err: string }>;
   get_conversation: (channel: Channel, session_id: string) => Promise<{ Ok: ConversationState } | { Err: string }>;
   receive_message: (msg: IncomingMessage) => Promise<{ Ok: null } | { Err: string }>;
@@ -76,15 +83,17 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
   const Role = IDL.Variant({ User: IDL.Null, Assistant: IDL.Null });
   const StoredChatMessage = IDL.Record({ at: IDL.Nat64, content: IDL.Text, role: Role });
   const ConversationState = IDL.Record({ history: IDL.Vec(StoredChatMessage) });
-  // The real candid record also has `llm_api_key`/`admin_webhook_secret` -
+  // The real candid record also has provider/channel credentials -
   // deliberately left out of this decode shape (see `AgentConfigPublic`'s
   // own doc comment). `@icp-sdk/core`'s candid decoder only reads the
   // fields an `IDL.Record` declares, so omitting them here means the raw
   // secret bytes are never even parsed into a JS value, not just hidden
   // from render.
   const AgentConfigPublic = IDL.Record({
-    ic_sql_canister_id: IDL.Opt(IDL.Principal),
+    project_id: IDL.Opt(IDL.Text),
+    protocol_id: IDL.Opt(IDL.Principal),
     admin_webhook_url: IDL.Opt(IDL.Text),
+    whatsapp_phone_number_id: IDL.Opt(IDL.Text),
     system_prompt: IDL.Opt(IDL.Text),
     llm_provider: IDL.Opt(IDL.Text),
     max_tool_iterations: IDL.Opt(IDL.Nat8),
@@ -92,10 +101,15 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     llm_model: IDL.Opt(IDL.Text),
   });
   const AgentConfigUpdate = IDL.Record({
-    ic_sql_canister_id: IDL.Opt(IDL.Opt(IDL.Principal)),
+    project_id: IDL.Opt(IDL.Opt(IDL.Text)),
+    protocol_id: IDL.Opt(IDL.Opt(IDL.Principal)),
     admin_webhook_url: IDL.Opt(IDL.Opt(IDL.Text)),
     system_prompt: IDL.Opt(IDL.Opt(IDL.Text)),
     admin_webhook_secret: IDL.Opt(IDL.Opt(IDL.Text)),
+    whatsapp_verify_token: IDL.Opt(IDL.Opt(IDL.Text)),
+    whatsapp_app_secret: IDL.Opt(IDL.Opt(IDL.Text)),
+    whatsapp_access_token: IDL.Opt(IDL.Opt(IDL.Text)),
+    whatsapp_phone_number_id: IDL.Opt(IDL.Opt(IDL.Text)),
     llm_provider: IDL.Opt(IDL.Opt(IDL.Text)),
     max_tool_iterations: IDL.Opt(IDL.Opt(IDL.Nat8)),
     llm_api_key: IDL.Opt(IDL.Opt(IDL.Text)),
@@ -107,7 +121,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
   const ConversationResult = IDL.Variant({ Ok: ConversationState, Err: IDL.Text });
   const UnitResult = IDL.Variant({ Ok: IDL.Null, Err: IDL.Text });
   return IDL.Service({
-    get_config: IDL.Func([], [ConfigResult], ["query"]),
+    get_runtime_config: IDL.Func([], [ConfigResult], ["query"]),
     update_config: IDL.Func([AgentConfigUpdate], [UnitResult], []),
     get_conversation: IDL.Func([Channel, IDL.Text], [ConversationResult], ["query"]),
     receive_message: IDL.Func([IncomingMessage], [UnitResult], []),

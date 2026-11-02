@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+/* Colour tokens. Dark is the default (and the only theme the SME inbox uses);
+   the customer chat page sets `data-theme` on <html> (see `lib/theme.ts`) to
+   switch to the light palette. */
+:root {
+  color-scheme: dark;
+  --bg: #0a0e1a; --surface: #0f1629; --surface2: #1a2236; --line: #1e2d47;
+  --text: #e2e8f0; --muted: #8892a4; --faint: #4a5568;
+  --accent: #00d4ff; --accent-hover: #00b8d9; --accent-active: #009ab8; --on-accent: #0a0e1a;
+  --danger: #ff5252; --operator: #7c5cff;
+  --ch-whatsapp: #25d366; --ch-telegram: #2aabee; --ch-email: #f5a623;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f8fafc; --surface: #ffffff; --surface2: #eef2f7; --line: #d5dde8;
+  --text: #0f172a; --muted: #475569; --faint: #64748b;
+  --accent: #0e7490; --accent-hover: #155e75; --accent-active: #164e63; --on-accent: #ffffff;
+  --danger: #dc2626; --operator: #6d4aff;
+  --ch-whatsapp: #15803d; --ch-telegram: #0369a1; --ch-email: #b45309;
+}
+:root {
+  --accent-a11: color-mix(in srgb, var(--accent) 7%, transparent);
+  --accent-a14: color-mix(in srgb, var(--accent) 9%, transparent);
+  --accent-a33: color-mix(in srgb, var(--accent) 20%, transparent);
+  --accent-a44: color-mix(in srgb, var(--accent) 27%, transparent);
+  --danger-a22: color-mix(in srgb, var(--danger) 13%, transparent);
+  --danger-a33: color-mix(in srgb, var(--danger) 20%, transparent);
+  --danger-a44: color-mix(in srgb, var(--danger) 27%, transparent);
+  --op-a22: color-mix(in srgb, var(--operator) 13%, transparent);
+  --op-a55: color-mix(in srgb, var(--operator) 33%, transparent);
+}
+
+/* Tailwind colour names for the tokens above, plus the dashboard's fonts
+   (see the note below the block). */
+@theme inline {
+  --color-c-bg: var(--bg); --color-c-surface: var(--surface); --color-c-surface2: var(--surface2);
+  --color-c-line: var(--line); --color-c-text: var(--text); --color-c-muted: var(--muted); --color-c-faint: var(--faint);
+  --color-c-accent: var(--accent); --color-c-accent-hover: var(--accent-hover); --color-c-accent-active: var(--accent-active);
+  --color-c-on-accent: var(--on-accent);
+  --color-c-accent-a11: var(--accent-a11); --color-c-accent-a14: var(--accent-a14);
+  --color-c-accent-a33: var(--accent-a33); --color-c-accent-a44: var(--accent-a44);
+  --color-c-danger: var(--danger); --color-c-danger-a22: var(--danger-a22);
+  --color-c-danger-a33: var(--danger-a33); --color-c-danger-a44: var(--danger-a44);
+  --color-c-op-a22: var(--op-a22); --color-c-op-a55: var(--op-a55);
+  --color-c-ch-email: var(--ch-email); --color-c-ch-whatsapp: var(--ch-whatsapp);
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
+  --font-ui: "DM Sans", "Geist", system-ui, sans-serif;
+}
+
+/* Matches `frontend/src/index.css` exactly - this app is embedded into the
+   dashboard via iframe (see `frontend/src/pages/DatabaseTable.tsx`'s own
+   embed point), so it needs to actually look like the same app, not just
+   use the same literal hex colors in its own markup. `--font-mono` in
+   particular matters here: the ported grid (`App.tsx`, straight from
+   `frontend/src/pages/DatabaseTable.tsx`) uses Tailwind's `font-mono`
+   utility throughout, which - per Tailwind v4's CSS-first config - resolves
+   from the `@theme` block above, not from Tailwind's own unrelated default
+   mono stack. Omitting it would make every `font-mono` cell/badge/id
+   render in a different typeface than the dashboard around it. */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: "DM Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  height: 100%;
+}
+
+#root { min-height: 100dvh; display: flex; flex-direction: column; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-a44); }
+
+::selection { background: var(--accent-a33); color: var(--text); }
+
+a { color: inherit; text-decoration: none; }
+
+button { cursor: pointer; }

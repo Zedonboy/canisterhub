@@ -1,0 +1,144 @@
+type AiChannel = variant { Email; WhatsApp; Telegram; Web };
+type AiContext = record { agent : principal; session_id : text; channel : AiChannel };
+type AuditEntry = record { at : nat64; id : nat64; action : text; actor : text; details : text; order_id : opt nat64 };
+type BusinessProfile = record { name : text; currency : text };
+type CanisterType = variant { Storage; Auth; Database; Custom };
+type ConfigVectorType = variant {
+  Text; CanisterPicker : record { module_type_filter : opt text }; Boolean;
+  Float; SecretText; Select : record { options : vec text }; Number;
+};
+type ConfigVectorValue = variant { Text : text; Boolean : bool; Float : float64; PrincipalId : principal; Number : int64 };
+type ConfigType = variant {
+  Text; TextArea; CanisterPicker : record { module_type_filter : opt text }; Boolean;
+  Float; SecretText; Select : record { options : vec text };
+  Vector : record { element_type : ConfigVectorType }; Number;
+};
+type ConfigValue = variant {
+  Text : text; Boolean : bool; Float : float64;
+  Vector : vec ConfigVectorValue; PrincipalId : principal; Number : int64;
+};
+type ConfigFieldSchema = record {
+  key : text; is_readonly : opt bool; is_required : bool; field_type : ConfigType;
+  description : text; label : text; canister_type : opt CanisterType;
+  group : opt text; group_label : opt text; group_description : opt text;
+  default_value : opt ConfigValue;
+};
+type CreateInventoryItem = record {
+  sku : opt text; price_minor : nat64; image_url : opt text; kind : InventoryKind;
+  name : text; description : text; currency : text; stock_quantity : opt nat64;
+};
+type CustomerIdentity = record { session_id : text; channel : AiChannel };
+type DeliveryLocation = record { latitude : opt float64; instructions : opt text; longitude : opt float64; address : text };
+type HttpRequest = record { url : text; method : text; body : blob; headers : vec record { text; text } };
+type HttpResponse = record { body : blob; headers : vec record { text; text }; upgrade : opt bool; status_code : nat16 };
+type InventoryItem = record {
+  id : nat64; sku : opt text; updated_at : nat64; price_minor : nat64;
+  active : bool; image_url : opt text; kind : InventoryKind; name : text;
+  description : text; created_at : nat64; currency : text; stock_quantity : opt nat64;
+};
+type InventoryKind = variant { Product; Service };
+type OrderItemRequest = record { inventory_id : nat64; quantity : nat64 };
+type PlaceOrder = record {
+  items : vec OrderItemRequest; customer_name : opt text; customer_phone : opt text;
+  delivery_location : DeliveryLocation; note : opt text; payment_method : opt PaymentMethod;
+};
+type Order = record {
+  id : nat64; status : OrderStatus; updated_at : nat64; customer_phone : opt text;
+  customer : CustomerIdentity; note : opt text; amount_paid_minor : nat64;
+  created_at : nat64; payment_status : PaymentStatus; payment_method : PaymentMethod;
+  stock_released : bool; reservation_expires_at : opt nat64; total_minor : nat64;
+  currency : text; items : vec OrderLine; customer_name : opt text;
+  payment_reference : opt text; delivery_location : DeliveryLocation;
+  amount_refunded_minor : nat64;
+};
+type OrderError = variant { Internal : text; InvalidInput : text; NotFound : text; Unauthorized : text; Conflict : text };
+type OrderLine = record {
+  kind : InventoryKind; name : text; line_total_minor : nat64; quantity : nat64;
+  inventory_id : nat64; unit_price_minor : nat64;
+};
+type OrderStatus = variant {
+  AwaitingPayment; Confirmed; Ready; Preparing; Cancelled;
+  OutForDelivery; Completed; Expired; Pending;
+};
+type PaymentMethod = variant { Prepaid; CashOnDelivery };
+type PaymentStatus = variant {
+  Failed; Refunded; Paid; AwaitingPayment; CashOnDeliveryCollected;
+  RefundPending; CashOnDeliveryPending; PartiallyRefunded; Expired;
+};
+type PaymentRecord = record {
+  status : PaymentStatus; method : PaymentMethod; updated_at : nat64;
+  provider : opt text; provider_transaction_id : opt text; amount_paid_minor : nat64;
+  created_at : nat64; currency : text; expected_amount_minor : nat64;
+  merchant_reference : text; order_id : nat64; last_failure : opt text;
+  amount_refunded_minor : nat64;
+};
+type RecordCashCollection = record { amount_minor : nat64; currency : text; order_id : nat64; receipt_reference : text };
+type RecordPayment = record { amount_minor : nat64; transaction_id : text; merchant_reference : text; provider : text; currency : text; order_id : nat64 };
+type RecordPaymentFailure = record { provider : text; reference : text; order_id : nat64; reason : text };
+type RecordRefund = record { amount_minor : nat64; transaction_id : text; provider : text; order_id : nat64 };
+type Settings = record {
+  prepaid_reservation_ttl_ns : nat64; trusted_payment_processors : vec principal;
+  staff : vec CustomerIdentity; business : BusinessProfile; trusted_agents : vec principal;
+};
+type UpdateInventoryItem = record {
+  sku : opt text; price_minor : opt nat64; active : opt bool; image_url : opt text;
+  kind : opt InventoryKind; name : opt text; description : opt text;
+  currency : opt text; stock_quantity : opt nat64; track_stock : opt bool;
+};
+type Result = variant { Ok : text; Err : text };
+type ResultInventory = variant { Ok : InventoryItem; Err : OrderError };
+type ResultNat = variant { Ok : nat64; Err : OrderError };
+type ResultOrder = variant { Ok : Order; Err : OrderError };
+type ResultPayment = variant { Ok : PaymentRecord; Err : OrderError };
+type ResultSettings = variant { Ok : Settings; Err : OrderError };
+type ResultInventoryList = variant { Ok : vec InventoryItem; Err : OrderError };
+type ResultAuditList = variant { Ok : vec AuditEntry; Err : OrderError };
+type ResultOrderList = variant { Ok : vec Order; Err : OrderError };
+type ResultBusiness = variant { Ok : BusinessProfile; Err : OrderError };
+type ResultConfig = variant { Ok; Err : text };
+type ResultUnit = variant { Ok; Err : OrderError };
+type LinkKind = variant { Admin; Public };
+type CanisterLink = record { label : text; url : text; kind : LinkKind };
+service : () -> {
+  ai_add_inventory : (AiContext, text) -> (Result);
+  ai_cancel_my_order : (AiContext, text) -> (Result);
+  ai_list_all_inventory : (AiContext, text) -> (Result);
+  ai_list_inventory : (AiContext, text) -> (Result);
+  ai_list_my_orders : (AiContext, text) -> (Result);
+  ai_list_order_audit : (AiContext, text) -> (Result);
+  ai_list_orders : (AiContext, text) -> (Result);
+  ai_place_order : (AiContext, text) -> (Result);
+  ai_update_inventory : (AiContext, text) -> (Result);
+  ai_update_order_status : (AiContext, text) -> (Result);
+  cancel_my_order : (nat64) -> (ResultOrder);
+  create_inventory : (CreateInventoryItem) -> (ResultInventory);
+  expire_unpaid_orders : (nat64) -> (ResultNat);
+  get_business : () -> (BusinessProfile) query;
+  get_config : () -> (vec record { text; ConfigValue }) query;
+  get_config_schema : () -> (vec ConfigFieldSchema) query;
+  get_links : () -> (vec CanisterLink) query;
+  get_inventory : (nat64) -> (opt InventoryItem) query;
+  get_order : (nat64) -> (ResultOrder) query;
+  get_payment : (nat64) -> (ResultPayment) query;
+  get_settings : () -> (ResultSettings) query;
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  list_all_inventory : () -> (ResultInventoryList) query;
+  list_audit : (opt nat64, nat64, nat64) -> (ResultAuditList) query;
+  list_my_orders : () -> (ResultOrderList) query;
+  list_inventory : () -> (vec InventoryItem) query;
+  list_orders : (opt OrderStatus) -> (ResultOrderList) query;
+  llm_context : () -> (text) query;
+  place_order : (PlaceOrder) -> (ResultOrder);
+  record_cash_collection : (RecordCashCollection) -> (ResultOrder);
+  record_payment : (RecordPayment) -> (ResultOrder);
+  record_payment_failure : (RecordPaymentFailure) -> (ResultPayment);
+  record_refund : (RecordRefund) -> (ResultOrder);
+  set_business : (BusinessProfile) -> (ResultBusiness);
+  set_config : (vec record { text; ConfigValue }) -> (ResultConfig);
+  set_payment_processor : (principal, bool) -> (ResultUnit);
+  set_prepaid_reservation_ttl_secs : (nat64) -> (ResultUnit);
+  set_staff : (CustomerIdentity, bool) -> (ResultUnit);
+  set_trusted_agent : (principal, bool) -> (ResultUnit);
+  update_inventory : (nat64, UpdateInventoryItem) -> (ResultInventory);
+  update_order_status : (nat64, OrderStatus) -> (ResultOrder);
+}

@@ -83,25 +83,48 @@ mod tests {
 
     #[test]
     fn default_update_changes_nothing() {
-        let config = Config { admins: vec![principal(1)], system_prompt: Some("hi".to_string()), ..Default::default() };
+        let config = Config {
+            admins: vec![principal(1)],
+            system_prompt: Some("hi".to_string()),
+            ..Default::default()
+        };
         assert_eq!(config.clone().apply(ConfigUpdate::default()), config);
     }
 
     #[test]
     fn admins_replaces_the_whole_list() {
-        let config = Config { admins: vec![principal(1)], ..Default::default() };
-        let updated = config.apply(ConfigUpdate { admins: Some(vec![principal(2), principal(3)]), ..Default::default() });
+        let config = Config {
+            admins: vec![principal(1)],
+            ..Default::default()
+        };
+        let updated = config.apply(ConfigUpdate {
+            admins: Some(vec![principal(2), principal(3)]),
+            ..Default::default()
+        });
         assert_eq!(updated.admins, vec![principal(2), principal(3)]);
     }
 
     #[test]
     fn each_scalar_field_is_independently_settable_and_clearable() {
-        let config = Config { system_prompt: Some("a".to_string()), ..Default::default() };
-        let updated = config.apply(ConfigUpdate { llm_model: Some(Some("qwen3:32b".to_string())), ..Default::default() });
+        let config = Config {
+            system_prompt: Some("a".to_string()),
+            ..Default::default()
+        };
+        let updated = config.apply(ConfigUpdate {
+            llm_model: Some(Some("qwen3:32b".to_string())),
+            ..Default::default()
+        });
         assert_eq!(updated.llm_model.as_deref(), Some("qwen3:32b"));
-        assert_eq!(updated.system_prompt.as_deref(), Some("a"), "unrelated field must be untouched");
+        assert_eq!(
+            updated.system_prompt.as_deref(),
+            Some("a"),
+            "unrelated field must be untouched"
+        );
 
-        let cleared = updated.apply(ConfigUpdate { system_prompt: Some(None), ..Default::default() });
+        let cleared = updated.apply(ConfigUpdate {
+            system_prompt: Some(None),
+            ..Default::default()
+        });
         assert_eq!(cleared.system_prompt, None);
     }
 }

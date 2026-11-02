@@ -133,7 +133,8 @@ fn pre_upgrade() {
 
 #[ic_cdk::post_upgrade]
 fn post_upgrade() {
-    let (snapshot,): (Snapshot,) = ic_cdk::storage::stable_restore().expect("failed to restore ic-kv state from stable memory");
+    let (snapshot,): (Snapshot,) = ic_cdk::storage::stable_restore()
+        .expect("failed to restore ic-kv state from stable memory");
     STORE.with(|store| *store.borrow_mut() = snapshot.into());
 }
 

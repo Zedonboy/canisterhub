@@ -9,10 +9,12 @@
 // anywhere in this file.
 
 import { Principal } from "@icp-sdk/core/principal";
+import { Actor } from "@icp-sdk/core/agent";
 import { AssetManager, type AssetManagerConfig } from "@icp-sdk/canisters/assets";
 import { getAgent } from "./agent";
 import type { Project, CanisterInfo } from "./backend";
 import { localIcHost } from "./canisterEnv";
+import { idlFactory as assetStorageProbeIdlFactory, type AssetStorageProbeService } from "./candid/assetStorage";
 
 export interface StorageCanister {
   name: string;
@@ -45,8 +47,17 @@ function icHostFor(network: string): string {
  * same real URL shape `lib/canisterStats.ts::staticUrl` uses for a whole
  * `static` canister's homepage, just pointed at one specific key. */
 export function assetUrl(canisterId: string, network: string, key: string): string {
-  if (network === "ic") return `https://${canisterId}.icp0.io${key}`;
-  return `${icHostFor(network)}${key}?canisterId=${canisterId}`;
+  const absoluteKey = key.startsWith("/") ? key : `/${key}`;
+  const encodedPath = absoluteKey
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  if (network === "ic") {
+    return new URL(encodedPath, `https://${canisterId}.icp0.io`).toString();
+  }
+  const url = new URL(encodedPath, icHostFor(network));
+  url.searchParams.set("canisterId", canisterId);
+  return url.toString();
 }
 
 /** One real `AssetManager` instance per (canister, network) call - cheap to
@@ -76,19 +87,55 @@ function adaptAsset(raw: RawAsset): AssetFile {
   };
 }
 
-/** Every real asset-storage canister on this project - a pure client-side
- * filter of `Project.canisters` (already fetched from `backend`), no
- * canister call needed. The conventional `assets*` entries are included,
- * as are `runtime-*` uploads whose self-declared metadata classified them
- * as Storage. The project's own UI frontend (conventionally named
- * `static`) remains excluded even though it shares the same project kind. */
-export function listStorageCanisters(project: Project): StorageCanister[] {
-  return Object.entries(project.canisters)
-    .filter(([name, info]: [string, CanisterInfo]) => {
-      const normalizedName = name.toLowerCase();
-      return info.kind === "static" && (normalizedName.startsWith("assets") || normalizedName.startsWith("runtime-"));
-    })
+/** Marketplace installs use the package title in their tracked project name
+ * and are initially recorded as `other`. Normalizing punctuation lets both
+ * `assetstorage` and `asset-storage` participate in capability discovery. */
+function isAssetStorageName(name: string): boolean {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "").includes("assetstorage");
+}
+
+const verifiedAssetStorageCanisters = new Set<string>();
+
+/** A matching project name only makes a canister a candidate. Both public
+ * capability queries from `packages/assetstorage.did` must exist and decode
+ * correctly before the canister is shown as storage. Failed probes are not
+ * cached, so a temporarily stopped or upgrading canister can reappear after
+ * the page is refreshed. */
+async function supportsAssetStorage(canisterId: string, network: string): Promise<boolean> {
+  const cacheKey = `${network}:${canisterId}`;
+  if (verifiedAssetStorageCanisters.has(cacheKey)) return true;
+
+  try {
+    const agent = await getAgent(network);
+    const actor = Actor.createActor<AssetStorageProbeService>(assetStorageProbeIdlFactory, {
+      agent,
+      canisterId: Principal.fromText(canisterId),
+    });
+    const [apiVersion, state] = await Promise.all([
+      actor.api_version(),
+      actor.get_state_info(),
+    ]);
+    if (!Number.isInteger(apiVersion) || apiVersion < 0 || typeof state.last_state_update_timestamp !== "bigint") {
+      return false;
+    }
+    verifiedAssetStorageCanisters.add(cacheKey);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Every verified ICP asset-storage canister registered on this project.
+ * Discovery first requires `assetstorage` in the tracked name, then probes
+ * both `api_version()` and `get_state_info()` on the candidate canister. */
+export async function listStorageCanisters(project: Project): Promise<StorageCanister[]> {
+  const candidates = Object.entries(project.canisters)
+    .filter(([name]: [string, CanisterInfo]) => isAssetStorageName(name))
     .map(([name, info]) => ({ name, id: info.id }));
+  const supported = await Promise.all(
+    candidates.map((canister) => supportsAssetStorage(canister.id, project.network)),
+  );
+  return candidates.filter((_, index) => supported[index]);
 }
 
 /** Every real asset on this canister - `AssetManager.list()`, no pagination

@@ -111,7 +111,9 @@ pub struct Snapshot {
 
 impl From<&Store> for Snapshot {
     fn from(store: &Store) -> Self {
-        Snapshot { entries: store.iter().map(|(k, v)| (k.clone(), v.clone())).collect() }
+        Snapshot {
+            entries: store.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        }
     }
 }
 
@@ -193,21 +195,47 @@ mod tests {
     #[test]
     fn keys_without_a_prefix_lists_everything_sorted() {
         let store = new_store();
-        let store = set_many(&store, vec![("b".to_string(), Value::Null), ("a".to_string(), Value::Null), ("c".to_string(), Value::Null)]);
-        assert_eq!(keys(&store, None), vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        let store = set_many(
+            &store,
+            vec![
+                ("b".to_string(), Value::Null),
+                ("a".to_string(), Value::Null),
+                ("c".to_string(), Value::Null),
+            ],
+        );
+        assert_eq!(
+            keys(&store, None),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
     fn keys_with_a_prefix_filters() {
         let store = new_store();
-        let store = set_many(&store, vec![("user:1".to_string(), Value::Null), ("user:2".to_string(), Value::Null), ("order:1".to_string(), Value::Null)]);
-        assert_eq!(keys(&store, Some("user:")), vec!["user:1".to_string(), "user:2".to_string()]);
+        let store = set_many(
+            &store,
+            vec![
+                ("user:1".to_string(), Value::Null),
+                ("user:2".to_string(), Value::Null),
+                ("order:1".to_string(), Value::Null),
+            ],
+        );
+        assert_eq!(
+            keys(&store, Some("user:")),
+            vec!["user:1".to_string(), "user:2".to_string()]
+        );
     }
 
     #[test]
     fn set_many_lets_a_later_entry_win_on_a_repeated_key() {
         let store = new_store();
-        let store = set_many(&store, vec![("a".to_string(), Value::Integer(1)), ("a".to_string(), Value::Integer(2))]);
+        let store = set_many(
+            &store,
+            vec![
+                ("a".to_string(), Value::Integer(1)),
+                ("a".to_string(), Value::Integer(2)),
+            ],
+        );
         assert_eq!(get(&store, "a"), Some(Value::Integer(2)));
         assert_eq!(len(&store), 1);
     }
@@ -223,7 +251,13 @@ mod tests {
     #[test]
     fn clear_empties_the_store_and_reports_how_many_entries_it_held() {
         let store = new_store();
-        let store = set_many(&store, vec![("a".to_string(), Value::Null), ("b".to_string(), Value::Null)]);
+        let store = set_many(
+            &store,
+            vec![
+                ("a".to_string(), Value::Null),
+                ("b".to_string(), Value::Null),
+            ],
+        );
         let (store, count) = clear(&store);
         assert_eq!(count, 2);
         assert_eq!(len(&store), 0);
@@ -234,7 +268,10 @@ mod tests {
         let store = new_store();
         let store = set_many(
             &store,
-            vec![("a".to_string(), Value::Integer(1)), ("b".to_string(), Value::Bytes(vec![1, 2, 3]))],
+            vec![
+                ("a".to_string(), Value::Integer(1)),
+                ("b".to_string(), Value::Bytes(vec![1, 2, 3])),
+            ],
         );
 
         let snapshot = Snapshot::from(&store);

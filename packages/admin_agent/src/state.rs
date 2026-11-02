@@ -5,12 +5,12 @@
 //! see `lib.rs`'s doc comment.
 
 use crate::config::Config;
+use candid::{CandidType, Principal};
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
     storable::Bound,
     DefaultMemoryImpl, StableBTreeMap, StableCell, Storable,
 };
-use candid::{CandidType, Principal};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -98,7 +98,13 @@ pub fn log_action(admin: Principal, action: &str, details: &str) {
         c.set(id + 1);
         id
     });
-    let entry = ActionLogEntry { id, admin, action: action.to_string(), details: details.to_string(), at: ic_cdk::api::time() };
+    let entry = ActionLogEntry {
+        id,
+        admin,
+        action: action.to_string(),
+        details: details.to_string(),
+        at: ic_cdk::api::time(),
+    };
     ACTION_LOG.with(|m| m.borrow_mut().insert(id, entry));
 }
 
@@ -108,6 +114,11 @@ pub fn list_action_log(offset: u64, limit: u64) -> Vec<ActionLogEntry> {
         let m = m.borrow();
         let mut ids_desc: Vec<u64> = m.iter().map(|entry| *entry.key()).collect();
         ids_desc.reverse();
-        ids_desc.into_iter().skip(offset as usize).take(limit as usize).filter_map(|id| m.get(&id)).collect()
+        ids_desc
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .filter_map(|id| m.get(&id))
+            .collect()
     })
 }

@@ -24,7 +24,10 @@ fn anonymous() -> Principal {
     Principal::anonymous()
 }
 
-const IC_KV_WASM: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../target/wasm32-unknown-unknown/release/ic_kv.wasm"));
+const IC_KV_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../target/wasm32-unknown-unknown/release/ic_kv.wasm"
+));
 
 fn caller() -> Principal {
     Principal::from_slice(&[7; 10])
@@ -34,32 +37,42 @@ fn setup() -> (PocketIc, Principal) {
     let pic = PocketIcBuilder::new().with_application_subnet().build();
     let canister_id = pic.create_canister_with_settings(Some(caller()), None);
     pic.add_cycles(canister_id, 10_000_000_000_000);
-    pic.install_canister(canister_id, IC_KV_WASM.to_vec(), encode_one(()).unwrap(), Some(caller()));
+    pic.install_canister(
+        canister_id,
+        IC_KV_WASM.to_vec(),
+        encode_one(()).unwrap(),
+        Some(caller()),
+    );
     (pic, canister_id)
 }
 
 fn set(pic: &PocketIc, id: Principal, key: &str, value: Value) -> Option<Value> {
-    let (old,): (Option<Value>,) = update_candid_as(pic, id, caller(), "set", (key.to_string(), value)).unwrap();
+    let (old,): (Option<Value>,) =
+        update_candid_as(pic, id, caller(), "set", (key.to_string(), value)).unwrap();
     old
 }
 
 fn get(pic: &PocketIc, id: Principal, key: &str) -> Option<Value> {
-    let (value,): (Option<Value>,) = query_candid_as(pic, id, caller(), "get", (key.to_string(),)).unwrap();
+    let (value,): (Option<Value>,) =
+        query_candid_as(pic, id, caller(), "get", (key.to_string(),)).unwrap();
     value
 }
 
 fn delete(pic: &PocketIc, id: Principal, key: &str) -> Option<Value> {
-    let (old,): (Option<Value>,) = update_candid_as(pic, id, caller(), "delete", (key.to_string(),)).unwrap();
+    let (old,): (Option<Value>,) =
+        update_candid_as(pic, id, caller(), "delete", (key.to_string(),)).unwrap();
     old
 }
 
 fn exists(pic: &PocketIc, id: Principal, key: &str) -> bool {
-    let (result,): (bool,) = query_candid_as(pic, id, caller(), "exists", (key.to_string(),)).unwrap();
+    let (result,): (bool,) =
+        query_candid_as(pic, id, caller(), "exists", (key.to_string(),)).unwrap();
     result
 }
 
 fn keys(pic: &PocketIc, id: Principal, prefix: Option<&str>) -> Vec<String> {
-    let (result,): (Vec<String>,) = query_candid_as(pic, id, caller(), "keys", (prefix.map(|p| p.to_string()),)).unwrap();
+    let (result,): (Vec<String>,) =
+        query_candid_as(pic, id, caller(), "keys", (prefix.map(|p| p.to_string()),)).unwrap();
     result
 }
 
@@ -110,21 +123,47 @@ fn keys_lists_sorted_and_can_be_filtered_by_prefix() {
     set(&pic, id, "user:1", Value::Null);
     set(&pic, id, "order:1", Value::Null);
 
-    assert_eq!(keys(&pic, id, None), vec!["order:1".to_string(), "user:1".to_string(), "user:2".to_string()]);
-    assert_eq!(keys(&pic, id, Some("user:")), vec!["user:1".to_string(), "user:2".to_string()]);
+    assert_eq!(
+        keys(&pic, id, None),
+        vec![
+            "order:1".to_string(),
+            "user:1".to_string(),
+            "user:2".to_string()
+        ]
+    );
+    assert_eq!(
+        keys(&pic, id, Some("user:")),
+        vec!["user:1".to_string(), "user:2".to_string()]
+    );
     assert_eq!(len(&pic, id), 3);
 }
 
 #[test]
 fn set_many_and_get_many_round_trip_in_one_call_each() {
     let (pic, id) = setup();
-    let entries = vec![("a".to_string(), Value::Integer(1)), ("b".to_string(), Value::Integer(2))];
+    let entries = vec![
+        ("a".to_string(), Value::Integer(1)),
+        ("b".to_string(), Value::Integer(2)),
+    ];
     let (count,): (u64,) = update_candid_as(&pic, id, caller(), "set_many", (entries,)).unwrap();
     assert_eq!(count, 2);
 
-    let (results,): (Vec<Option<Value>>,) =
-        query_candid_as(&pic, id, caller(), "get_many", (vec!["a".to_string(), "missing".to_string(), "b".to_string()],)).unwrap();
-    assert_eq!(results, vec![Some(Value::Integer(1)), None, Some(Value::Integer(2))]);
+    let (results,): (Vec<Option<Value>>,) = query_candid_as(
+        &pic,
+        id,
+        caller(),
+        "get_many",
+        (vec![
+            "a".to_string(),
+            "missing".to_string(),
+            "b".to_string(),
+        ],),
+    )
+    .unwrap();
+    assert_eq!(
+        results,
+        vec![Some(Value::Integer(1)), None, Some(Value::Integer(2))]
+    );
 }
 
 #[test]
@@ -149,7 +188,10 @@ fn llm_context_is_readable_by_anyone_and_documents_the_api() {
     // Anyone, not just an authenticated caller - there's no access control
     // at all in this canister (see the doc itself).
     assert!(doc.contains("set_many"));
-    assert!(doc.contains("TTL"), "must document that there's no expiry, not a real gap to discover the hard way");
+    assert!(
+        doc.contains("TTL"),
+        "must document that there's no expiry, not a real gap to discover the hard way"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -163,8 +205,13 @@ fn data_survives_a_canister_upgrade() {
     set(&pic, id, "a", Value::Text("alice".to_string()));
     set(&pic, id, "b", Value::Bytes(vec![1, 2, 3]));
 
-    pic.upgrade_canister(id, IC_KV_WASM.to_vec(), encode_one(()).unwrap(), Some(caller()))
-        .expect("upgrade should succeed");
+    pic.upgrade_canister(
+        id,
+        IC_KV_WASM.to_vec(),
+        encode_one(()).unwrap(),
+        Some(caller()),
+    )
+    .expect("upgrade should succeed");
 
     assert_eq!(get(&pic, id, "a"), Some(Value::Text("alice".to_string())));
     assert_eq!(get(&pic, id, "b"), Some(Value::Bytes(vec![1, 2, 3])));

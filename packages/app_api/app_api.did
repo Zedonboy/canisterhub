@@ -7,6 +7,8 @@ type ApiError = variant {
   Conflict : text;
   AuthUnavailable : text;
 };
+type AiChannel = variant { Email; WhatsApp; Telegram };
+type AiContext = record { agent : principal; channel : AiChannel; session_id : text };
 type Authorization = record { "principal" : opt principal; profile_id : nat64 };
 type CreateItem = record { name : text; payload : text };
 type Health = record { "service" : text; status : text };
@@ -34,6 +36,7 @@ type Result = variant { Ok : Item; Err : ApiError };
 type Result_1 = variant { Ok : Authorization; Err : ApiError };
 type Result_2 = variant { Ok : vec Item; Err : ApiError };
 service : {
+  ai_health : (AiContext, text) -> (variant { Ok : text; Err : text });
   create_item : (text, CreateItem) -> (Result);
   delete_item : (text, nat64) -> (Result);
   get_my_identity : (text) -> (Result_1);

@@ -1,4 +1,4 @@
-schema_version = 1
+schema_version = 2
 
 [template]
 name = "Food Order Service"
@@ -32,13 +32,9 @@ name = "storefront"
 url = "https://marketplace.candid.cloud/packages/food-order-ui"
 depends_on = ["api", "analytics"]
 
-[[configure]]
-target = "database"
-method = "update_config"
-args = '(record { auth_canister = opt opt principal "${auth.canister_id}" })'
-
-[environment]
-VITE_API_CANISTER_ID = "${api.canister_id}"
-VITE_ANALYTICS_CANISTER_ID = "${analytics.canister_id}"
-VITE_AUTH_CANISTER_ID = "${auth.canister_id}"
-VITE_NETWORK = "${network}"
+# Applied via `database`'s own `set_config` once it's installed - see
+# `spreadsheet-service/canister_hub.toml`'s matching comment for why
+# `database` must list `auth` in `depends_on` for this reference to
+# resolve.
+[config.database]
+auth_canister = "${auth.canister_id}"

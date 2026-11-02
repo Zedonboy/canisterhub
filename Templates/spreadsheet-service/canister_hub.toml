@@ -1,4 +1,4 @@
-schema_version = 1
+schema_version = 2
 
 [template]
 name = "Spreadsheet Service"
@@ -22,12 +22,10 @@ name = "spreadsheet_ui"
 url = "https://marketplace.candid.cloud/packages/silver-spreadsheet-ui"
 depends_on = ["auth", "database"]
 
-[[configure]]
-target = "database"
-method = "update_config"
-args = '(record { auth_canister = opt opt principal "${auth.canister_id}" })'
-
-[environment]
-VITE_AUTH_CANISTER_ID = "${auth.canister_id}"
-VITE_DATABASE_CANISTER_ID = "${database.canister_id}"
-VITE_NETWORK = "${network}"
+# Applied via `database`'s own `set_config` (its real `ic::config` surface -
+# see `packages/ic-sql/src/config.rs`'s `DynamicConfig` derive) once it's
+# installed. `${auth.canister_id}` resolves to `auth`'s real installed
+# canister id - only valid because `database` lists `auth` in `depends_on`
+# above, which is what guarantees that id already exists by this point.
+[config.database]
+auth_canister = "${auth.canister_id}"

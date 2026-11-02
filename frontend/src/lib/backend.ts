@@ -18,7 +18,7 @@ import {
 } from "../bindings/backend";
 
 export type ProjectState = "running" | "awaiting_answer" | "succeeded" | "failed";
-export type CanisterKind = "connector" | "agent" | "admin_agent" | "auth" | "database" | "analytics" | "static" | "other";
+export type CanisterKind = "connector" | "agent" | "admin_agent" | "notification" | "auth" | "database" | "analytics" | "static" | "other";
 
 /** A short, human label for each project-side building-block kind - shared
  * by `Overview.tsx`'s canister cards and `Wallet.tsx`'s per-service Usage
@@ -28,6 +28,7 @@ export const CANISTER_KIND_LABELS: Record<CanisterKind, string> = {
   connector: "Connector",
   agent: "Agent",
   admin_agent: "Admin Agent",
+  notification: "Notification",
   auth: "Auth",
   database: "Database",
   analytics: "Analytics",
@@ -71,6 +72,7 @@ function adaptKind(kind: RawCanisterKind): CanisterKind {
   if (kind === RawCanisterKind.Connector) return "connector";
   if (kind === RawCanisterKind.Agent) return "agent";
   if (kind === RawCanisterKind.AdminAgent) return "admin_agent";
+  if (kind === RawCanisterKind.Notification) return "notification";
   if (kind === RawCanisterKind.Auth) return "auth";
   if (kind === RawCanisterKind.Database) return "database";
   if (kind === RawCanisterKind.Analytics) return "analytics";
@@ -84,6 +86,7 @@ function encodeKind(kind: CanisterKind): RawCanisterKind {
   if (kind === "connector") return RawCanisterKind.Connector;
   if (kind === "agent") return RawCanisterKind.Agent;
   if (kind === "admin_agent") return RawCanisterKind.AdminAgent;
+  if (kind === "notification") return RawCanisterKind.Notification;
   if (kind === "auth") return RawCanisterKind.Auth;
   if (kind === "database") return RawCanisterKind.Database;
   if (kind === "analytics") return RawCanisterKind.Analytics;
@@ -100,7 +103,11 @@ function adaptProject(raw: RawProject): Project {
     state: adaptState(raw.state),
     pending_question: raw.pending_question ?? null,
     project_name: raw.project_name ?? null,
-    canisters: Object.fromEntries(raw.canisters.map(([name, info]) => [name, { id: info.id.toText(), kind: adaptKind(info.kind) }])),
+    canisters: Object.fromEntries(raw.canisters.map(([name, info]) => {
+      const kind = adaptKind(info.kind);
+      const legacyNotification = kind === "other" && name.toLowerCase() === "notification";
+      return [name, { id: info.id.toText(), kind: legacyNotification ? "notification" : kind }];
+    })),
     llm_context: raw.llm_context ?? null,
     final_message: raw.final_message ?? null,
     error: raw.error ?? null,

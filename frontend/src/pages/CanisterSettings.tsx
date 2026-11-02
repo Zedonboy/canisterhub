@@ -87,7 +87,12 @@ export default function CanisterSettings() {
             </p>
           )}
           {!loading && !error && schema && config && (
-            <ConfigForm schema={schema} initialValues={config} onSubmit={handleSave} />
+            <ConfigForm
+              schema={schema}
+              initialValues={config}
+              installedCanisters={job.canisters}
+              onSubmit={handleSave}
+            />
           )}
         </CardContent>
       </Card>

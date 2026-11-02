@@ -94,23 +94,7 @@ sigstore = { version = "0.14.0", default-features = false, features = ["rustls-t
 # otherwise used directly. Pinned to exactly the version `sigstore` 0.14.0
 # itself depends on, since this is the same type, not a redefinition of it.
 x509-cert = { version = "0.2.5", default-features = false }
-# Web Push's VAPID keypair (P-256 ECDSA) - see src/push.rs. Pinned to the
-# same 0.13.x line `sigstore` (above) already depends on - NOT the latest
-# 0.14, which switched to the `hybrid-array` crate internally. Rust trait
-# coherence is global across the whole build, so merely adding `hybrid-array`
-# anywhere in the graph makes its blanket `impl From<&Array<T, U>> for
-# Box<[T]>` visible to sigstore's own (unrelated) `sign.rs`, which has an
-# `AsRef`/`Into<Box<[u8]>>` call that was only inferrable while `[u8]`'s was
-# the sole candidate - adding the second candidate turns it into an
-# unresolvable E0283 inside a dependency we don't control. Staying on 0.13.x
-# keeps that crate out of the graph entirely.
-p256 = { version = "0.13.2", default-features = false, features = ["arithmetic", "pem"] }
-
 [dev-dependencies]
-# `examples/generate_vapid_keys.rs`'s source of real randomness. Dev-only:
-# fine to resolve independently of the main dependency tree's own
-# getrandom/rand_core versions above (see the p256 pin's comment) since it
-# never touches `src/` or the ambiguous sigstore code path.
 rand = "0.8"
 # End-to-end test only (tests/marketplace_search_and_deploy_tests.rs): a real
 # PocketIC-backed `backend`/`hnsw_index`, driven directly for setup (publish

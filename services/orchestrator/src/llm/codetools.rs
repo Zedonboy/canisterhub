@@ -72,7 +72,9 @@ pub fn resolve_path(project_dir: &Path, relative: &str) -> Result<PathBuf, Strin
         return Ok(project_dir.to_path_buf());
     }
     if Path::new(relative).is_absolute() {
-        return Err(format!("path '{relative}' must be relative to the project root, not absolute"));
+        return Err(format!(
+            "path '{relative}' must be relative to the project root, not absolute"
+        ));
     }
 
     let mut resolved = project_dir.to_path_buf();
@@ -80,8 +82,14 @@ pub fn resolve_path(project_dir: &Path, relative: &str) -> Result<PathBuf, Strin
         match component {
             std::path::Component::Normal(seg) => resolved.push(seg),
             std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => return Err(format!("path '{relative}' must not contain '..'")),
-            _ => return Err(format!("path '{relative}' contains an invalid path component")),
+            std::path::Component::ParentDir => {
+                return Err(format!("path '{relative}' must not contain '..'"))
+            }
+            _ => {
+                return Err(format!(
+                    "path '{relative}' contains an invalid path component"
+                ))
+            }
         }
     }
     Ok(resolved)
@@ -91,7 +99,10 @@ fn affects_compilation(path: &Path) -> bool {
     if path.extension().and_then(|e| e.to_str()) == Some("rs") {
         return true;
     }
-    matches!(path.file_name().and_then(|n| n.to_str()), Some("Cargo.toml") | Some("Cargo.lock"))
+    matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some("Cargo.toml") | Some("Cargo.lock")
+    )
 }
 
 fn is_excluded(path: &Path, root: &Path) -> bool {
@@ -109,7 +120,9 @@ fn is_excluded(path: &Path, root: &Path) -> bool {
 }
 
 fn walk_files(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if is_excluded(&path, root) {
@@ -141,7 +154,11 @@ async fn quick_check(ctx: &JobContext, project_dir: &Path) -> Value {
 
 /// Builds every tool in this module, scoped to one project directory and
 /// sharing one [`ReadTracker`] across the whole subagent conversation.
-pub fn build_code_tools(ctx: Arc<JobContext>, project_dir: PathBuf, read_tracker: Arc<ReadTracker>) -> Vec<DynamicTool> {
+pub fn build_code_tools(
+    ctx: Arc<JobContext>,
+    project_dir: PathBuf,
+    read_tracker: Arc<ReadTracker>,
+) -> Vec<DynamicTool> {
     vec![
         read_tool(ctx.clone(), project_dir.clone(), read_tracker.clone()),
         write_tool(ctx.clone(), project_dir.clone(), read_tracker.clone()),
@@ -160,7 +177,11 @@ pub fn build_code_tools(ctx: Arc<JobContext>, project_dir: PathBuf, read_tracker
 // read
 // ---------------------------------------------------------------------------
 
-fn read_tool(ctx: Arc<JobContext>, project_dir: PathBuf, read_tracker: Arc<ReadTracker>) -> DynamicTool {
+fn read_tool(
+    ctx: Arc<JobContext>,
+    project_dir: PathBuf,
+    read_tracker: Arc<ReadTracker>,
+) -> DynamicTool {
     DynamicTool::new(
         "read",
         "Read a file's contents (line-numbered, paginated via offset/limit - default 2000 lines from the \
@@ -237,7 +258,11 @@ fn read_tool(ctx: Arc<JobContext>, project_dir: PathBuf, read_tracker: Arc<ReadT
 // write
 // ---------------------------------------------------------------------------
 
-fn write_tool(ctx: Arc<JobContext>, project_dir: PathBuf, read_tracker: Arc<ReadTracker>) -> DynamicTool {
+fn write_tool(
+    ctx: Arc<JobContext>,
+    project_dir: PathBuf,
+    read_tracker: Arc<ReadTracker>,
+) -> DynamicTool {
     DynamicTool::new(
         "write",
         "Create a new file, or fully overwrite an existing one, at a path relative to the project root \
@@ -296,7 +321,11 @@ fn write_tool(ctx: Arc<JobContext>, project_dir: PathBuf, read_tracker: Arc<Read
 // edit
 // ---------------------------------------------------------------------------
 
-fn edit_tool(ctx: Arc<JobContext>, project_dir: PathBuf, read_tracker: Arc<ReadTracker>) -> DynamicTool {
+fn edit_tool(
+    ctx: Arc<JobContext>,
+    project_dir: PathBuf,
+    read_tracker: Arc<ReadTracker>,
+) -> DynamicTool {
     DynamicTool::new(
         "edit",
         "Replace an exact block of text in an existing file, at a path relative to the project root. Fails \
@@ -371,7 +400,11 @@ fn edit_tool(ctx: Arc<JobContext>, project_dir: PathBuf, read_tracker: Arc<ReadT
 // apply_patch
 // ---------------------------------------------------------------------------
 
-fn apply_patch_tool(ctx: Arc<JobContext>, project_dir: PathBuf, read_tracker: Arc<ReadTracker>) -> DynamicTool {
+fn apply_patch_tool(
+    ctx: Arc<JobContext>,
+    project_dir: PathBuf,
+    read_tracker: Arc<ReadTracker>,
+) -> DynamicTool {
     DynamicTool::new(
         "apply_patch",
         "Apply a multi-file patch in one call, in the standard 'apply_patch' envelope format - useful for \
@@ -443,9 +476,18 @@ mod patch {
 
     #[derive(Debug, PartialEq)]
     pub enum Op {
-        Add { path: String, content: String },
-        Delete { path: String },
-        Update { path: String, move_to: Option<String>, hunks: Vec<Hunk> },
+        Add {
+            path: String,
+            content: String,
+        },
+        Delete {
+            path: String,
+        },
+        Update {
+            path: String,
+            move_to: Option<String>,
+            hunks: Vec<Hunk>,
+        },
     }
 
     #[derive(Debug, PartialEq)]
@@ -482,13 +524,21 @@ mod patch {
                     match lines[i].strip_prefix('+') {
                         Some(rest) => content_lines.push(rest),
                         None if lines[i].is_empty() => content_lines.push(""),
-                        None => return Err(format!("expected a '+'-prefixed content line in Add File '{path}', got: {:?}", lines[i])),
+                        None => return Err(format!(
+                            "expected a '+'-prefixed content line in Add File '{path}', got: {:?}",
+                            lines[i]
+                        )),
                     }
                     i += 1;
                 }
-                ops.push(Op::Add { path, content: content_lines.join("\n") });
+                ops.push(Op::Add {
+                    path,
+                    content: content_lines.join("\n"),
+                });
             } else if let Some(path) = line.strip_prefix("*** Delete File: ") {
-                ops.push(Op::Delete { path: path.trim().to_string() });
+                ops.push(Op::Delete {
+                    path: path.trim().to_string(),
+                });
                 i += 1;
             } else if let Some(path) = line.strip_prefix("*** Update File: ") {
                 let path = path.trim().to_string();
@@ -505,7 +555,10 @@ mod patch {
                     i += 1;
                     let mut old_lines = Vec::new();
                     let mut new_lines = Vec::new();
-                    while i < lines.len() && !lines[i].starts_with("*** ") && !lines[i].starts_with("@@") {
+                    while i < lines.len()
+                        && !lines[i].starts_with("*** ")
+                        && !lines[i].starts_with("@@")
+                    {
                         let l = lines[i];
                         if let Some(rest) = l.strip_prefix('-') {
                             old_lines.push(rest);
@@ -518,16 +571,25 @@ mod patch {
                             old_lines.push("");
                             new_lines.push("");
                         } else {
-                            return Err(format!("unrecognized hunk line in Update File '{path}': {l:?}"));
+                            return Err(format!(
+                                "unrecognized hunk line in Update File '{path}': {l:?}"
+                            ));
                         }
                         i += 1;
                     }
-                    hunks.push(Hunk { old: old_lines.join("\n"), new: new_lines.join("\n") });
+                    hunks.push(Hunk {
+                        old: old_lines.join("\n"),
+                        new: new_lines.join("\n"),
+                    });
                 }
                 if hunks.is_empty() {
                     return Err(format!("Update File '{path}' has no @@ hunks"));
                 }
-                ops.push(Op::Update { path, move_to, hunks });
+                ops.push(Op::Update {
+                    path,
+                    move_to,
+                    hunks,
+                });
             } else if line.trim().is_empty() {
                 i += 1;
             } else {
@@ -537,7 +599,11 @@ mod patch {
         Ok(ops)
     }
 
-    pub fn apply(project_dir: &Path, ops: &[Op], read_tracker: &ReadTracker) -> Result<Vec<PathBuf>, String> {
+    pub fn apply(
+        project_dir: &Path,
+        ops: &[Op],
+        read_tracker: &ReadTracker,
+    ) -> Result<Vec<PathBuf>, String> {
         let mut touched = Vec::new();
         for op in ops {
             match op {
@@ -547,29 +613,44 @@ mod patch {
                         return Err(format!("Add File '{path}': already exists"));
                     }
                     if let Some(parent) = resolved.parent() {
-                        std::fs::create_dir_all(parent).map_err(|e| format!("Add File '{path}': failed to create directories: {e}"))?;
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            format!("Add File '{path}': failed to create directories: {e}")
+                        })?;
                     }
-                    std::fs::write(&resolved, content).map_err(|e| format!("Add File '{path}': {e}"))?;
+                    std::fs::write(&resolved, content)
+                        .map_err(|e| format!("Add File '{path}': {e}"))?;
                     touched.push(resolved);
                 }
                 Op::Delete { path } => {
                     let resolved = resolve_path(project_dir, path)?;
                     if !read_tracker.was_read(&resolved) {
-                        return Err(format!("Delete File '{path}': hasn't been read in this conversation yet"));
+                        return Err(format!(
+                            "Delete File '{path}': hasn't been read in this conversation yet"
+                        ));
                     }
-                    std::fs::remove_file(&resolved).map_err(|e| format!("Delete File '{path}': {e}"))?;
+                    std::fs::remove_file(&resolved)
+                        .map_err(|e| format!("Delete File '{path}': {e}"))?;
                     touched.push(resolved);
                 }
-                Op::Update { path, move_to, hunks } => {
+                Op::Update {
+                    path,
+                    move_to,
+                    hunks,
+                } => {
                     let resolved = resolve_path(project_dir, path)?;
                     if !read_tracker.was_read(&resolved) {
-                        return Err(format!("Update File '{path}': hasn't been read in this conversation yet"));
+                        return Err(format!(
+                            "Update File '{path}': hasn't been read in this conversation yet"
+                        ));
                     }
-                    let mut content = std::fs::read_to_string(&resolved).map_err(|e| format!("Update File '{path}': {e}"))?;
+                    let mut content = std::fs::read_to_string(&resolved)
+                        .map_err(|e| format!("Update File '{path}': {e}"))?;
                     for hunk in hunks {
                         let occurrences = content.matches(&hunk.old).count();
                         if occurrences == 0 {
-                            return Err(format!("Update File '{path}': a hunk's context/old lines weren't found"));
+                            return Err(format!(
+                                "Update File '{path}': a hunk's context/old lines weren't found"
+                            ));
                         }
                         if occurrences > 1 {
                             return Err(format!("Update File '{path}': a hunk's context/old lines matched more than once - make it more specific"));
@@ -586,9 +667,14 @@ mod patch {
                         }
                         None => resolved.clone(),
                     };
-                    std::fs::write(&dest, &content).map_err(|e| format!("Update File '{path}': {e}"))?;
+                    std::fs::write(&dest, &content)
+                        .map_err(|e| format!("Update File '{path}': {e}"))?;
                     if move_to.is_some() {
-                        std::fs::remove_file(&resolved).map_err(|e| format!("Update File '{path}': failed to remove old path after move: {e}"))?;
+                        std::fs::remove_file(&resolved).map_err(|e| {
+                            format!(
+                                "Update File '{path}': failed to remove old path after move: {e}"
+                            )
+                        })?;
                     }
                     touched.push(dest);
                 }
@@ -602,7 +688,10 @@ mod patch {
         use super::*;
 
         fn test_dir(name: &str) -> PathBuf {
-            let dir = std::env::temp_dir().join(format!("codetools-patch-test-{name}-{}", uuid::Uuid::new_v4()));
+            let dir = std::env::temp_dir().join(format!(
+                "codetools-patch-test-{name}-{}",
+                uuid::Uuid::new_v4()
+            ));
             std::fs::create_dir_all(&dir).unwrap();
             dir
         }
@@ -628,9 +717,19 @@ mod patch {
             let text = text.as_str();
             let ops = parse(text).unwrap();
             assert_eq!(ops.len(), 3);
-            assert_eq!(ops[0], Op::Add { path: "src/new.rs".into(), content: "fn new() {}".into() });
+            assert_eq!(
+                ops[0],
+                Op::Add {
+                    path: "src/new.rs".into(),
+                    content: "fn new() {}".into()
+                }
+            );
             match &ops[1] {
-                Op::Update { path, move_to, hunks } => {
+                Op::Update {
+                    path,
+                    move_to,
+                    hunks,
+                } => {
                     assert_eq!(path, "src/lib.rs");
                     assert_eq!(*move_to, None);
                     assert_eq!(hunks.len(), 1);
@@ -639,7 +738,12 @@ mod patch {
                 }
                 other => panic!("expected Update, got {other:?}"),
             }
-            assert_eq!(ops[2], Op::Delete { path: "src/gone.rs".into() });
+            assert_eq!(
+                ops[2],
+                Op::Delete {
+                    path: "src/gone.rs".into()
+                }
+            );
         }
 
         #[test]
@@ -672,10 +776,16 @@ mod patch {
         fn apply_add_creates_a_new_file() {
             let dir = test_dir("add");
             let tracker = ReadTracker::default();
-            let ops = vec![Op::Add { path: "new.rs".to_string(), content: "hello".to_string() }];
+            let ops = vec![Op::Add {
+                path: "new.rs".to_string(),
+                content: "hello".to_string(),
+            }];
             let touched = apply(&dir, &ops, &tracker).unwrap();
             assert_eq!(touched, vec![dir.join("new.rs")]);
-            assert_eq!(std::fs::read_to_string(dir.join("new.rs")).unwrap(), "hello");
+            assert_eq!(
+                std::fs::read_to_string(dir.join("new.rs")).unwrap(),
+                "hello"
+            );
         }
 
         #[test]
@@ -683,7 +793,10 @@ mod patch {
             let dir = test_dir("add-existing");
             std::fs::write(dir.join("existing.rs"), "old").unwrap();
             let tracker = ReadTracker::default();
-            let ops = vec![Op::Add { path: "existing.rs".to_string(), content: "new".to_string() }];
+            let ops = vec![Op::Add {
+                path: "existing.rs".to_string(),
+                content: "new".to_string(),
+            }];
             assert!(apply(&dir, &ops, &tracker).is_err());
         }
 
@@ -692,7 +805,14 @@ mod patch {
             let dir = test_dir("update-unread");
             std::fs::write(dir.join("f.rs"), "fn a() {}\n").unwrap();
             let tracker = ReadTracker::default();
-            let ops = vec![Op::Update { path: "f.rs".to_string(), move_to: None, hunks: vec![Hunk { old: "a".to_string(), new: "b".to_string() }] }];
+            let ops = vec![Op::Update {
+                path: "f.rs".to_string(),
+                move_to: None,
+                hunks: vec![Hunk {
+                    old: "a".to_string(),
+                    new: "b".to_string(),
+                }],
+            }];
             assert!(apply(&dir, &ops, &tracker).is_err());
         }
 
@@ -703,7 +823,14 @@ mod patch {
             std::fs::write(&path, "fn a() {}\nfn b() {}\n").unwrap();
             let tracker = ReadTracker::default();
             tracker.mark_read(&path);
-            let ops = vec![Op::Update { path: "f.rs".to_string(), move_to: None, hunks: vec![Hunk { old: "fn a() {}".to_string(), new: "fn a() { changed(); }".to_string() }] }];
+            let ops = vec![Op::Update {
+                path: "f.rs".to_string(),
+                move_to: None,
+                hunks: vec![Hunk {
+                    old: "fn a() {}".to_string(),
+                    new: "fn a() { changed(); }".to_string(),
+                }],
+            }];
             apply(&dir, &ops, &tracker).unwrap();
             let content = std::fs::read_to_string(&path).unwrap();
             assert!(content.contains("fn a() { changed(); }"));
@@ -717,7 +844,14 @@ mod patch {
             std::fs::write(&path, "same\nsame\n").unwrap();
             let tracker = ReadTracker::default();
             tracker.mark_read(&path);
-            let ops = vec![Op::Update { path: "f.rs".to_string(), move_to: None, hunks: vec![Hunk { old: "same".to_string(), new: "different".to_string() }] }];
+            let ops = vec![Op::Update {
+                path: "f.rs".to_string(),
+                move_to: None,
+                hunks: vec![Hunk {
+                    old: "same".to_string(),
+                    new: "different".to_string(),
+                }],
+            }];
             assert!(apply(&dir, &ops, &tracker).is_err());
         }
 
@@ -728,10 +862,20 @@ mod patch {
             std::fs::write(&old_path, "content\n").unwrap();
             let tracker = ReadTracker::default();
             tracker.mark_read(&old_path);
-            let ops = vec![Op::Update { path: "old.rs".to_string(), move_to: Some("new.rs".to_string()), hunks: vec![Hunk { old: "content".to_string(), new: "changed".to_string() }] }];
+            let ops = vec![Op::Update {
+                path: "old.rs".to_string(),
+                move_to: Some("new.rs".to_string()),
+                hunks: vec![Hunk {
+                    old: "content".to_string(),
+                    new: "changed".to_string(),
+                }],
+            }];
             apply(&dir, &ops, &tracker).unwrap();
             assert!(!old_path.exists());
-            assert_eq!(std::fs::read_to_string(dir.join("new.rs")).unwrap(), "changed\n");
+            assert_eq!(
+                std::fs::read_to_string(dir.join("new.rs")).unwrap(),
+                "changed\n"
+            );
         }
 
         #[test]
@@ -740,8 +884,13 @@ mod patch {
             let path = dir.join("gone.rs");
             std::fs::write(&path, "x").unwrap();
             let tracker = ReadTracker::default();
-            let ops = vec![Op::Delete { path: "gone.rs".to_string() }];
-            assert!(apply(&dir, &ops, &tracker).is_err(), "must refuse before the file has been read");
+            let ops = vec![Op::Delete {
+                path: "gone.rs".to_string(),
+            }];
+            assert!(
+                apply(&dir, &ops, &tracker).is_err(),
+                "must refuse before the file has been read"
+            );
             tracker.mark_read(&path);
             apply(&dir, &ops, &tracker).unwrap();
             assert!(!path.exists());
@@ -981,7 +1130,12 @@ fn shell_send_tool(ctx: Arc<JobContext>) -> DynamicTool {
 
 /// Shared by `shell` and `shell_send`: logs the outcome and shapes a
 /// [`crate::process::SessionResult`] into the JSON both tools return.
-fn session_result_to_tool_output(ctx: &JobContext, tool: &str, command_or_input: &str, result: crate::process::SessionResult) -> ToolOutput {
+fn session_result_to_tool_output(
+    ctx: &JobContext,
+    tool: &str,
+    command_or_input: &str,
+    result: crate::process::SessionResult,
+) -> ToolOutput {
     let output_tail = tail_chars(&result.output, 6000);
     ctx.log(
         tool,
@@ -993,7 +1147,9 @@ fn session_result_to_tool_output(ctx: &JobContext, tool: &str, command_or_input:
         ),
     );
     if result.exited {
-        ToolOutput::json(json!({ "success": result.success.unwrap_or(false), "exited": true, "output": output_tail }))
+        ToolOutput::json(
+            json!({ "success": result.success.unwrap_or(false), "exited": true, "output": output_tail }),
+        )
     } else {
         ToolOutput::json(json!({
             "exited": false,
@@ -1015,7 +1171,9 @@ fn tail_chars(s: &str, max_chars: usize) -> String {
         return s.to_string();
     }
     let min_start = s.len() - max_chars;
-    let start = (min_start..=s.len()).find(|&i| s.is_char_boundary(i)).unwrap_or(s.len());
+    let start = (min_start..=s.len())
+        .find(|&i| s.is_char_boundary(i))
+        .unwrap_or(s.len());
     format!("[...truncated...]\n{}", &s[start..])
 }
 
@@ -1156,7 +1314,10 @@ mod resolve_path_tests {
 
     #[test]
     fn resolves_a_simple_relative_path() {
-        assert_eq!(resolve_path(&root(), "src/lib.rs").unwrap(), root().join("src/lib.rs"));
+        assert_eq!(
+            resolve_path(&root(), "src/lib.rs").unwrap(),
+            root().join("src/lib.rs")
+        );
     }
 
     #[test]

@@ -23,6 +23,8 @@
 //!     pub api_key: Option<String>,
 //!     #[config(label = "Build hash", readonly)]
 //!     pub build_hash: Option<String>,
+//!     #[config(label = "Allowed origins")]
+//!     pub allowed_origins: Vec<String>,
 //! }
 //!
 //! # use ic_stable_structures::memory_manager::{MemoryId, MemoryManager};
@@ -68,8 +70,9 @@
 //!
 //! ## Struct attributes
 //!
-//! - `#[config_urls(admin_panel_url = "...", home_page_url = "...")]` - see
-//!   "Endpoint semantics" below.
+//! - `#[config_links(("Admin", "/admin", Admin), ("Home", "/", Public))]`
+//!   declares the webpages returned by `get_links` - see "Endpoint
+//!   semantics" below.
 //!
 //! ## Field attributes
 //!
@@ -78,7 +81,12 @@
 //! - `label = "..."` (defaults to the field name in Title Case, e.g. `retry_count` -> `"Retry Count"`)
 //! - `description = "..."` (defaults to `""`)
 //! - `key = "..."` (defaults to the field name)
+//! - `group = "..."` places related fields in one foldable settings section.
+//!   `group_label = "..."` and `group_description = "..."` customize that
+//!   section's heading and helper text. Fields with the same group key are
+//!   collected together; metadata only needs to be declared on one of them.
 //! - `default = <literal>` (marks the field optional; literal type must match the field)
+//! - `multiline` (`String`/`Option<String>` only -> `ConfigType::TextArea`)
 //! - `secret` (`String`/`Option<String>` only -> `ConfigType::SecretText`, masked by `get_config` for non-controllers)
 //! - `readonly` (shown to settings clients but rejected by `set_config`;
 //!   canister code populates it with [`set_readonly`]). Combine it with
@@ -86,12 +94,15 @@
 //! - `select(options = ["a", "b"])` (`String`/`Option<String>` only -> `ConfigType::Select`; a `default` must be one of `options`)
 //! - `canister_picker` or `canister_picker(module_type = "...")` (`Principal`/`Option<Principal>` only -> `ConfigType::CanisterPicker`)
 //! - `canister_type = "auth" | "storage" | "database" | "custom"`
-//!   (`Principal`/`Option<Principal>` only). This is typed metadata for a
-//!   canister picker. If omitted, consumers must treat it as `custom`.
+//!   (`Principal`, `Vec<Principal>`, or optional forms). This is typed
+//!   metadata for a canister picker. If omitted, consumers must treat it as
+//!   `custom`.
 //!
 //! Supported field types: `String`, `i64` (-> `Number`), `f64` (-> `Float`),
-//! `bool` (-> `Boolean`), `candid::Principal` (-> `CanisterPicker`), and
-//! `Option<T>` of any of those. `Option<T>` makes the field optional
+//! `bool` (-> `Boolean`), `candid::Principal` (-> `CanisterPicker`), and a
+//! homogeneous `Vec<T>` of any of those. Vector fields start with an empty
+//! default and settings clients can add or remove individual entries.
+//! `Option<T>` makes the field optional
 //! (`is_required: false`) even without an explicit `default`; a bare
 //! (non-`Option`) field with no `default` is `is_required: true`.
 //!
@@ -130,14 +141,13 @@
 //!   caller that isn't a controller, since a plain unauthenticated query is
 //!   exactly the channel a settings UI reads it over. Internal code always
 //!   sees the real value via the env mirror, which isn't caller-scoped.
-//! - `get_admin_panel_url`/`get_home_page_url` are public queries returning
-//!   `Option<String>`, `None` unless the struct declared a struct-level
-//!   `#[config_urls(admin_panel_url = "...", home_page_url = "...")]`
-//!   (either or both). A literal may contain the placeholder
-//!   `{canister_id}`, substituted at call time with this canister's own
-//!   principal (see [`resolve_url_template`]) - the common case, since a
-//!   module's admin/home route is almost always `https://{canister_id}
-//!   .icp0.io/...` rather than a fixed external URL.
+//! - `get_links` is a public query returning the webpages declared by
+//!   `#[config_links((label, url, kind), ...)]`, in declaration order. The
+//!   kind is [`LinkKind::Admin`] for an owner-only embedded page or
+//!   [`LinkKind::Public`] for a public-facing page. With no declarations it
+//!   returns an empty vector. A URL may contain `{canister_id}`, substituted
+//!   at call time with this canister's own principal (see
+//!   [`resolve_url_template`]).
 //!
 //! A canister's own self-declared identity (name/description/type) is a
 //! separate, decoupled concern - see [`crate::ic::metadata`]'s
@@ -159,6 +169,9 @@ pub type Memory = VirtualMemory<DefaultMemoryImpl>;
 #[derive(CandidType, Deserialize, Clone, Debug, PartialEq)]
 pub enum ConfigType {
     Text,
+    /// Same stored value as `Text`, presented by settings clients as a
+    /// multiline text area.
+    TextArea,
     Number,
     Float,
     Boolean,
@@ -170,6 +183,22 @@ pub enum ConfigType {
     },
     /// Same wire shape as `Text`; `get_config` masks the value for any
     /// caller that isn't a controller (see this module's doc comment).
+    SecretText,
+    /// A repeatable setting whose entries all share one scalar type. The
+    /// settings UI renders this as a list with per-entry Add/Remove controls.
+    Vector {
+        element_type: ConfigVectorType,
+    },
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq)]
+pub enum ConfigVectorType {
+    Text,
+    Number,
+    Float,
+    Boolean,
+    Select { options: Vec<String> },
+    CanisterPicker { module_type_filter: Option<String> },
     SecretText,
 }
 
@@ -188,6 +217,33 @@ pub enum ConfigValue {
     Float(f64),
     Boolean(bool),
     PrincipalId(Principal),
+    Vector(Vec<ConfigVectorValue>),
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq)]
+pub enum ConfigVectorValue {
+    Text(String),
+    Number(i64),
+    Float(f64),
+    Boolean(bool),
+    PrincipalId(Principal),
+}
+
+impl ConfigVectorValue {
+    fn matches(&self, element_type: &ConfigVectorType) -> bool {
+        match (element_type, self) {
+            (ConfigVectorType::Text, ConfigVectorValue::Text(_)) => true,
+            (ConfigVectorType::SecretText, ConfigVectorValue::Text(_)) => true,
+            (ConfigVectorType::Number, ConfigVectorValue::Number(_)) => true,
+            (ConfigVectorType::Float, ConfigVectorValue::Float(_)) => true,
+            (ConfigVectorType::Boolean, ConfigVectorValue::Boolean(_)) => true,
+            (ConfigVectorType::CanisterPicker { .. }, ConfigVectorValue::PrincipalId(_)) => true,
+            (ConfigVectorType::Select { options }, ConfigVectorValue::Text(value)) => {
+                options.iter().any(|option| option == value)
+            }
+            _ => false,
+        }
+    }
 }
 
 impl ConfigValue {
@@ -199,6 +255,7 @@ impl ConfigValue {
             ConfigValue::Float(_) => "Float",
             ConfigValue::Boolean(_) => "Boolean",
             ConfigValue::PrincipalId(_) => "PrincipalId",
+            ConfigValue::Vector(_) => "Vector",
         }
     }
 
@@ -207,6 +264,7 @@ impl ConfigValue {
     pub fn matches(&self, field_type: &ConfigType) -> bool {
         match (field_type, self) {
             (ConfigType::Text, ConfigValue::Text(_)) => true,
+            (ConfigType::TextArea, ConfigValue::Text(_)) => true,
             (ConfigType::SecretText, ConfigValue::Text(_)) => true,
             (ConfigType::Number, ConfigValue::Number(_)) => true,
             (ConfigType::Float, ConfigValue::Float(_)) => true,
@@ -214,6 +272,9 @@ impl ConfigValue {
             (ConfigType::CanisterPicker { .. }, ConfigValue::PrincipalId(_)) => true,
             (ConfigType::Select { options }, ConfigValue::Text(value)) => {
                 options.iter().any(|option| option == value)
+            }
+            (ConfigType::Vector { element_type }, ConfigValue::Vector(values)) => {
+                values.iter().all(|value| value.matches(element_type))
             }
             _ => false,
         }
@@ -225,6 +286,11 @@ pub struct ConfigFieldSchema {
     pub key: String,
     pub label: String,
     pub description: String,
+    /// Optional presentation metadata. These are optional on the wire so a
+    /// new dashboard can still decode schemas from older module canisters.
+    pub group: Option<String>,
+    pub group_label: Option<String>,
+    pub group_description: Option<String>,
     pub field_type: ConfigType,
     /// Optional typed filter for canister-picker fields. `None` has the
     /// same meaning as `Some(CanisterType::Custom)`.
@@ -237,12 +303,34 @@ pub struct ConfigFieldSchema {
     pub default_value: Option<ConfigValue>,
 }
 
+/// How a dashboard should present one webpage exposed by a module.
+#[derive(CandidType, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkKind {
+    /// An authenticated internal page suitable for the dashboard iframe.
+    Admin,
+    /// A public-facing page opened as an ordinary external link.
+    Public,
+}
+
+#[derive(CandidType, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CanisterLink {
+    pub label: String,
+    pub url: String,
+    pub kind: LinkKind,
+}
+
 impl ConfigFieldSchema {
     /// Returns the effective picker type. An omitted type deliberately
     /// resolves to `Custom`; non-picker fields have no canister type.
     pub fn resolved_canister_type(&self) -> Option<CanisterType> {
-        matches!(self.field_type, ConfigType::CanisterPicker { .. })
-            .then_some(self.canister_type.unwrap_or(CanisterType::Custom))
+        matches!(
+            self.field_type,
+            ConfigType::CanisterPicker { .. }
+                | ConfigType::Vector {
+                    element_type: ConfigVectorType::CanisterPicker { .. }
+                }
+        )
+        .then_some(self.canister_type.unwrap_or(CanisterType::Custom))
     }
 
     pub fn readonly(&self) -> bool {
@@ -259,6 +347,8 @@ pub trait ConfigSchema {
     fn schema() -> Vec<ConfigFieldSchema>;
     /// Only the fields that declared a `default_value`.
     fn defaults() -> HashMap<String, ConfigValue>;
+    /// Webpages declared by `#[config_links(...)]`, in declaration order.
+    fn links() -> Vec<CanisterLink>;
 }
 
 struct StorableConfig(HashMap<String, ConfigValue>);
@@ -287,6 +377,7 @@ impl Storable for StorableConfig {
 thread_local! {
     static STORE: RefCell<Option<StableCell<StorableConfig, Memory>>> = const { RefCell::new(None) };
     static ENV: RefCell<HashMap<String, ConfigValue>> = RefCell::new(HashMap::new());
+    static CHANGE_HOOK: RefCell<Option<fn()>> = const { RefCell::new(None) };
 }
 
 const NOT_INITIALIZED: &str =
@@ -333,6 +424,18 @@ fn persist(map: HashMap<String, ConfigValue>) {
             .set(StorableConfig(map.clone()));
     });
     mirror_env(&map);
+    CHANGE_HOOK.with(|hook| {
+        if let Some(callback) = *hook.borrow() {
+            callback();
+        }
+    });
+}
+
+/// Registers a heap-only callback invoked after a dynamic configuration
+/// mutation has been persisted and mirrored into the runtime environment.
+/// Register it again during `post_upgrade`.
+pub fn set_change_hook(callback: fn()) {
+    CHANGE_HOOK.with(|hook| *hook.borrow_mut() = Some(callback));
 }
 
 fn caller_is_controller() -> bool {
@@ -351,6 +454,17 @@ fn mask_secrets<T: ConfigSchema>(
     for field in T::schema() {
         if matches!(field.field_type, ConfigType::SecretText) && map.contains_key(&field.key) {
             map.insert(field.key, ConfigValue::Text("••••••••".to_string()));
+        } else if matches!(
+            field.field_type,
+            ConfigType::Vector {
+                element_type: ConfigVectorType::SecretText
+            }
+        ) && map.contains_key(&field.key)
+        {
+            map.insert(
+                field.key,
+                ConfigValue::Vector(vec![ConfigVectorValue::Text("••••••••".to_string())]),
+            );
         }
     }
     map
@@ -455,9 +569,8 @@ pub fn unset<T: ConfigSchema>(key: &str) -> Result<(), String> {
 }
 
 /// Substitutes the placeholder `{canister_id}` in `template` with this
-/// canister's own principal (text form). Used by the generated
-/// `get_admin_panel_url`/`get_home_page_url` when the struct declared
-/// `#[config_urls(...)]` - see this module's doc comment.
+/// canister's own principal (text form). Used by the generated `get_links`
+/// when a link URL contains the placeholder.
 pub fn resolve_url_template(template: &str) -> String {
     template.replace("{canister_id}", &ic_cdk::api::canister_self().to_text())
 }
@@ -507,6 +620,13 @@ pub fn get_env_principal(key: &str) -> Option<Principal> {
     }
 }
 
+pub fn get_env_vector(key: &str) -> Option<Vec<ConfigVectorValue>> {
+    match get_env(key) {
+        Some(ConfigValue::Vector(value)) => Some(value),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,6 +639,9 @@ mod tests {
             key: "upstream".to_string(),
             label: "Upstream".to_string(),
             description: String::new(),
+            group: None,
+            group_label: None,
+            group_description: None,
             field_type: ConfigType::CanisterPicker {
                 module_type_filter: None,
             },
@@ -538,6 +661,9 @@ mod tests {
                     key: "greeting".to_string(),
                     label: "Greeting".to_string(),
                     description: String::new(),
+                    group: None,
+                    group_label: None,
+                    group_description: None,
                     field_type: ConfigType::Text,
                     canister_type: None,
                     is_required: false,
@@ -548,6 +674,9 @@ mod tests {
                     key: "retries".to_string(),
                     label: "Retries".to_string(),
                     description: String::new(),
+                    group: None,
+                    group_label: None,
+                    group_description: None,
                     field_type: ConfigType::Number,
                     canister_type: None,
                     is_required: true,
@@ -558,6 +687,9 @@ mod tests {
                     key: "api_key".to_string(),
                     label: "API Key".to_string(),
                     description: String::new(),
+                    group: None,
+                    group_label: None,
+                    group_description: None,
                     field_type: ConfigType::SecretText,
                     canister_type: None,
                     is_required: false,
@@ -568,6 +700,9 @@ mod tests {
                     key: "build_hash".to_string(),
                     label: "Build Hash".to_string(),
                     description: String::new(),
+                    group: None,
+                    group_label: None,
+                    group_description: None,
                     field_type: ConfigType::Text,
                     canister_type: None,
                     is_required: false,
@@ -584,6 +719,10 @@ mod tests {
                 ConfigValue::Text("hello".to_string()),
             );
             map
+        }
+
+        fn links() -> Vec<CanisterLink> {
+            Vec::new()
         }
     }
 

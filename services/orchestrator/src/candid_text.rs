@@ -25,7 +25,11 @@
 /// else) undone. `None` if `candid_text` doesn't look like a single quoted
 /// string at all (e.g. it's a record, or call failed).
 pub fn extract_text_reply(candid_text: &str) -> Option<String> {
-    let inner = candid_text.trim().strip_prefix('(')?.strip_suffix(')')?.trim();
+    let inner = candid_text
+        .trim()
+        .strip_prefix('(')?
+        .strip_suffix(')')?
+        .trim();
     // icp-cli's pretty-printer treats every return as a one-element tuple:
     // a short value stays on one line with no trailing comma
     // (`("hello")`), but once it wraps across lines (real observed case:
@@ -91,7 +95,10 @@ mod tests {
     #[test]
     fn extract_text_reply_unescapes_newlines_and_quotes() {
         let raw = "(\n  \"line one\\nline two \\\"quoted\\\"\"\n)";
-        assert_eq!(extract_text_reply(raw).as_deref(), Some("line one\nline two \"quoted\""));
+        assert_eq!(
+            extract_text_reply(raw).as_deref(),
+            Some("line one\nline two \"quoted\"")
+        );
     }
 
     #[test]
@@ -102,11 +109,17 @@ mod tests {
         // call - `extract_text_reply` silently returned `None` on this
         // exact shape before this test/fix existed).
         let raw = "(\n  \"# connector\\n\\nsome long body text\\n\",\n)";
-        assert_eq!(extract_text_reply(raw).as_deref(), Some("# connector\n\nsome long body text\n"));
+        assert_eq!(
+            extract_text_reply(raw).as_deref(),
+            Some("# connector\n\nsome long body text\n")
+        );
     }
 
     #[test]
     fn extract_text_reply_returns_none_for_a_record_not_a_string() {
-        assert_eq!(extract_text_reply("(record { messages_processed = 0 : nat64 })"), None);
+        assert_eq!(
+            extract_text_reply("(record { messages_processed = 0 : nat64 })"),
+            None
+        );
     }
 }

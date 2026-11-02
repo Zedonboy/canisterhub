@@ -1,0 +1,5 @@
+{
+  "tasks": {
+    "upload-catalog": "deno run -A upload_marketplace_catalog.js"
+  }
+}

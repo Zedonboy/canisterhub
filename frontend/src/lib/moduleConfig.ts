@@ -6,14 +6,10 @@
 // wire types.
 
 import { getModuleConfigActor } from "./actors";
-import type { ConfigFieldSchema, ConfigType, ConfigValue } from "./candid/moduleConfig";
+import type { CanisterLink, ConfigFieldSchema, ConfigType, ConfigValue, ConfigVectorType, ConfigVectorValue } from "./candid/moduleConfig";
 import { localIcHost, mainnetIcHost } from "./canisterEnv";
 
-export type { ConfigFieldSchema, ConfigType, ConfigValue };
-
-function optToNullable<T>(opt: [] | [T]): T | null {
-  return opt.length === 0 ? null : opt[0];
-}
+export type { CanisterLink, ConfigFieldSchema, ConfigType, ConfigValue, ConfigVectorType, ConfigVectorValue };
 
 /** Expands a module-owned route such as `/admin/` against the target
  * canister's gateway origin. Modules deliberately return only their route;
@@ -71,18 +67,15 @@ export async function setModuleConfig(canisterId: string, network: string, newSe
   if ("Err" in result) throw new Error(result.Err);
 }
 
-/** Best-effort: `null` for either URL a module never declared via
- * `#[config_urls(...)]`. See `canisterStats.ts::moduleLinksFor` for the
- * "this canister doesn't implement the SDK at all" case - that's handled
- * there, not here, since it also decides whether to show the Settings
- * action at all, not just these two links. */
-export async function getModuleLinks(canisterId: string, network: string): Promise<{ adminPanelUrl: string | null; homePageUrl: string | null }> {
+/** Returns every webpage declared by the module, preserving declaration
+ * order and resolving canister-relative routes for the active network. */
+export async function getModuleLinks(canisterId: string, network: string): Promise<CanisterLink[]> {
   const actor = await getModuleConfigActor(canisterId, network);
-  const [adminPanelUrl, homePageUrl] = await Promise.all([actor.get_admin_panel_url(), actor.get_home_page_url()]);
-  return {
-    adminPanelUrl: resolveModuleUrl(canisterId, network, optToNullable(adminPanelUrl)),
-    homePageUrl: resolveModuleUrl(canisterId, network, optToNullable(homePageUrl)),
-  };
+  const links = await actor.get_links();
+  return links.map((link) => ({
+    ...link,
+    url: resolveModuleUrl(canisterId, network, link.url) ?? link.url,
+  }));
 }
 
 /** Whether this canister implements `canister-hub-sdk`'s `ic::config`

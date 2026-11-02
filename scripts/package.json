@@ -5,7 +5,8 @@
   "description": "Marketplace publishing + setup helper scripts (see README.md).",
   "scripts": {
     "generate": "icp-bindgen --did-file ../backend/backend.did --out-dir ./bindings --actor-disabled --declarations-flat --force",
-    "publish": "npm run generate && node publish_to_marketplace.js"
+    "publish": "npm run generate && node publish_to_marketplace.js",
+    "upload-catalog": "deno run -A upload_marketplace_catalog.js"
   },
   "dependencies": {
     "@dfinity/vetkeys": "0.4.0",

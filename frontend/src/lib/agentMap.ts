@@ -1,11 +1,9 @@
 // Real cross-canister wiring for the "Agent Map" - reads and writes the
-// actual `Config` fields that link a project's own connector/agent/
-// database canisters together (`connector.agent_canister` <->
-// `agent.connector_principal`, `agent.ic_sql_canister_id`), via direct
-// `update_config` calls. No orchestrator HTTP call anywhere in this file,
-// and no fabricated wiring: `wireAgentToStorage` deliberately doesn't
-// exist - the real `agent` canister has no config field for it (see
-// `AgentMapPage`'s own doc comment).
+// actual `Config` fields that link a project's own connector and agent
+// canisters (`connector.agent_canister` <-> `agent.connector_principal`),
+// via direct `update_config` calls. Database and storage canisters remain
+// visible architecture nodes, but the agent stores its own state and has no
+// external database/storage wiring field.
 
 import { Principal } from "@icp-sdk/core/principal";
 import { getConnectorActor, getAgentCanisterActor, getIcSqlActor, getLlmContext } from "./actors";
@@ -24,7 +22,7 @@ export interface MapNode {
 }
 
 export interface MapEdge {
-  kind: "connector-agent" | "agent-database";
+  kind: "connector-agent";
   from: MapNode;
   to: MapNode;
 }
@@ -58,7 +56,7 @@ export async function loadAgentMap(project: Project): Promise<AgentMapData> {
   const databases = listDatabaseCanisters(project)
     .filter((d) => d.kind === "sql")
     .map((d) => toNode("database", d));
-  const storages = listStorageCanisters(project).map((c) => toNode("storage", c));
+  const storages = (await listStorageCanisters(project)).map((c) => toNode("storage", c));
 
   const edges: MapEdge[] = [];
   const readErrors: Record<string, string> = {};
@@ -70,10 +68,6 @@ export async function loadAgentMap(project: Project): Promise<AgentMapData> {
         if (config.connectorPrincipal) {
           const connector = connectors.find((c) => c.id === config.connectorPrincipal);
           if (connector) edges.push({ kind: "connector-agent", from: connector, to: agent });
-        }
-        if (config.icSqlCanisterId) {
-          const database = databases.find((d) => d.id === config.icSqlCanisterId);
-          if (database) edges.push({ kind: "agent-database", from: agent, to: database });
         }
       } catch (e) {
         readErrors[agent.id] = e instanceof Error ? e.message : String(e);
@@ -91,10 +85,15 @@ export async function loadAgentMap(project: Project): Promise<AgentMapData> {
  * never the write-only `llm_api_key`/`admin_webhook_secret`). */
 function untouchedAgentFields() {
   return {
-    ic_sql_canister_id: [] as [] | [[] | [Principal]],
+    project_id: [] as [] | [[] | [string]],
+    protocol_id: [] as [] | [[] | [Principal]],
     admin_webhook_url: [] as [] | [[] | [string]],
     system_prompt: [] as [] | [[] | [string]],
     admin_webhook_secret: [] as [] | [[] | [string]],
+    whatsapp_verify_token: [] as [] | [[] | [string]],
+    whatsapp_app_secret: [] as [] | [[] | [string]],
+    whatsapp_access_token: [] as [] | [[] | [string]],
+    whatsapp_phone_number_id: [] as [] | [[] | [string]],
     llm_provider: [] as [] | [[] | [string]],
     max_tool_iterations: [] as [] | [[] | [number]],
     llm_api_key: [] as [] | [[] | [string]],
@@ -131,21 +130,6 @@ export async function unwireConnectorFromAgent(connector: MapNode, agent: MapNod
   const agentActor = await getAgentCanisterActor(agent.id, network);
   const agentResult = await agentActor.update_config({ ...untouchedAgentFields(), connector_principal: [[]] });
   if ("Err" in agentResult) throw new Error(`${agent.name}: ${agentResult.Err}`);
-}
-
-/** Sets `agent.Config.ic_sql_canister_id` - the real field
- * `tools.rs::QueryDatabaseTool` reads to know which `ic-sql` deployment to
- * query. */
-export async function wireAgentToDatabase(agent: MapNode, database: MapNode, network: string): Promise<void> {
-  const actor = await getAgentCanisterActor(agent.id, network);
-  const result = await actor.update_config({ ...untouchedAgentFields(), ic_sql_canister_id: [[Principal.fromText(database.id)]] });
-  if ("Err" in result) throw new Error(`${agent.name}: ${result.Err}`);
-}
-
-export async function unwireAgentFromDatabase(agent: MapNode, network: string): Promise<void> {
-  const actor = await getAgentCanisterActor(agent.id, network);
-  const result = await actor.update_config({ ...untouchedAgentFields(), ic_sql_canister_id: [[]] });
-  if ("Err" in result) throw new Error(`${agent.name}: ${result.Err}`);
 }
 
 /** Real `llm_context()` text for any node that has one - connector, agent,

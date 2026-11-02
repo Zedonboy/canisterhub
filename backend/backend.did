@@ -13,11 +13,14 @@ type AccessRights = variant {
 type ByteBuf = record { inner : blob };
 // One tracked canister's identity.
 type CanisterInfo = record { id : principal; kind : CanisterKind };
-// Which building block a tracked canister actually is. A marketplace-item
-// deploy (see `frontend/src/lib/deploy.ts`) always records `Other` - a
-// `MarketplaceItem` has no kind classification of its own.
+// Which building block a tracked canister actually is. Most generic
+// marketplace deploys record `Other`; the project-wide notification module
+// is classified explicitly so the one-per-project invariant can be enforced.
 type CanisterKind = variant {
   Analytics;
+  // The single project-wide Web Push service. Every module that needs
+  // notifications shares this canister instead of deploying its own.
+  Notification;
   Auth;
   Static;
   Connector;
@@ -26,28 +29,194 @@ type CanisterKind = variant {
   Agent;
   Other;
 };
-// The IC http gateway's standard inbound request shape - served by
-// `http_request` below, which serves the embedded CanisterHub landing page
-// (see backend/src/lib.rs's "Landing page assets" section). Field names and
-// shapes are fixed by the IC interface spec, not this canister's own design.
+// A Candid-encodable representation of an HTTP request. This struct is used by
+// the `http_request` method of the HTTP Gateway Protocol's Candid interface.
+//
+// # Examples
+//
+// ```
+// use ic_http_certification::{HttpRequest, Method};
+//
+// let request = HttpRequest::builder()
+// .with_method(Method::GET)
+// .with_url("/")
+// .with_headers(vec![("X-Custom-Foo".into(), "Bar".into())])
+// .with_body(&[1, 2, 3])
+// .with_certificate_version(2)
+// .build();
+//
+// assert_eq!(request.method(), Method::GET);
+// assert_eq!(request.url(), "/");
+// assert_eq!(request.headers(), &[("X-Custom-Foo".into(), "Bar".into())]);
+// assert_eq!(request.body(), &[1, 2, 3]);
+// assert_eq!(request.certificate_version(), Some(2));
+// ```
+//
+// # Helpers
+//
+// There are also a number of convenience methods for quickly creating an [HttpRequest] with
+// commonly used HTTP methods:
+//
+// - [GET](HttpRequest::get)
+// - [POST](HttpRequest::post)
+// - [PUT](HttpRequest::put)
+// - [PATCH](HttpRequest::patch)
+// - [DELETE](HttpRequest::delete)
+//
+// ```
+// use ic_http_certification::HttpRequest;
+//
+// let request = HttpRequest::get("/").build();
+//
+// assert_eq!(request.method(), "GET");
+// assert_eq!(request.url(), "/");
+// ```
 type HttpRequest = record {
-  method : text;
+  // HTTP request URL.
   url : text;
-  headers : vec record { text; text };
+  // HTTP request method.
+  method : text;
+  // HTTP request body as an array of bytes.
   body : blob;
+  // HTTP request headers.
+  headers : vec record { text; text };
+  // The max response verification version to use in the response's
+  // certificate.
   certificate_version : opt nat16;
 };
+// A Candid-encodable representation of an HTTP response. This struct is used
+// by the `http_request` method of the HTTP Gateway Protocol's Candid interface.
+//
+// # Examples
+//
+// ```
+// use ic_http_certification::{HttpResponse, StatusCode};
+//
+// let response = HttpResponse::builder()
+// .with_status_code(StatusCode::OK)
+// .with_headers(vec![("Content-Type".into(), "text/plain".into())])
+// .with_body(b"Hello, World!")
+// .with_upgrade(false)
+// .build();
+//
+// assert_eq!(response.status_code(), StatusCode::OK);
+// assert_eq!(response.headers(), &[("Content-Type".into(), "text/plain".into())]);
+// assert_eq!(response.body(), b"Hello, World!");
+// assert_eq!(response.upgrade(), Some(false));
+// ```
+//
+// # Helpers
+//
+// There are also a number of convenience methods for quickly creating an [HttpResponse] with
+// commonly used HTTP status codes:
+//
+// - [OK](HttpResponse::ok)
+// - [CREATED](HttpResponse::created)
+// - [NO_CONTENT](HttpResponse::no_content)
+// - [MOVED_PERMANENTLY](HttpResponse::moved_permanently)
+// - [TEMPORARY_REDIRECT](HttpResponse::temporary_redirect)
+// - [BAD_REQUEST](HttpResponse::bad_request)
+// - [UNAUTHORIZED](HttpResponse::unauthorized)
+// - [FORBIDDEN](HttpResponse::forbidden)
+// - [NOT_FOUND](HttpResponse::not_found)
+// - [METHOD_NOT_ALLOWED](HttpResponse::method_not_allowed)
+// - [TOO_MANY_REQUESTS](HttpResponse::too_many_requests)
+// - [INTERNAL_SERVER_ERROR](HttpResponse::internal_server_error)
+//
+// ```
+// use ic_http_certification::{HttpResponse, StatusCode};
+//
+// let response = HttpResponse::ok(b"Hello, World!", vec![("Content-Type".into(), "text/plain".into())]).build();
+//
+// assert_eq!(response.status_code(), StatusCode::OK);
+// assert_eq!(response.headers(), &[("Content-Type".into(), "text/plain".into())]);
+// assert_eq!(response.body(), b"Hello, World!");
+// ```
 type HttpResponse = record {
-  status_code : nat16;
-  headers : vec record { text; text };
+  // HTTP response body as an array of bytes.
   body : blob;
+  // HTTP response headers.
+  headers : vec record { text; text };
+  // Whether the corresponding HTTP request should be upgraded to an update
+  // call.
   upgrade : opt bool;
+  // HTTP response status code.
+  status_code : nat16;
 };
-type MarketplaceItemType = variant { Package; Template };
+type ManagedAiChoice = variant { Message : text; ToolCallsJson : text };
+// Provider-neutral completion request used by agent canisters. Messages and
+// tools use `ic-rig`'s JSON representation so tool-call ids/results survive
+// the inter-canister hop without coupling Candid to one provider's schema.
+type ManagedAiCompletionRequest = record {
+  "service" : ManagedAiService;
+  model : opt text;
+  messages_json : text;
+  temperature : opt float64;
+  max_output_tokens : opt nat32;
+  tools_json : text;
+};
+type ManagedAiCompletionResponse = record {
+  model : text;
+  usage_reported : bool;
+  provider : text;
+  remaining_token_credits : nat64;
+  reserved_token_credits : nat64;
+  cumulative_usage : ManagedAiUsage;
+  usage : TokenUsage;
+  choice : ManagedAiChoice;
+};
+type ManagedAiConfigUpdate = record {
+  model : text;
+  provider : text;
+  // Write-only. `None` retains the configured credential.
+  api_key : opt text;
+  enabled : bool;
+  // Explicitly removes the credential. Cannot be combined with `api_key`.
+  clear_api_key : bool;
+};
+type ManagedAiMessage = record { content : text; role : ManagedAiRole };
+type ManagedAiRequest = record {
+  system_prompt : opt text;
+  messages : vec ManagedAiMessage;
+  temperature : opt float64;
+  max_output_tokens : opt nat32;
+  project_id : text;
+};
+type ManagedAiResponse = record {
+  model : text;
+  usage_reported : bool;
+  provider : text;
+  remaining_token_credits : nat64;
+  "text" : text;
+  // Conservative pre-call ceiling used to reserve the provider request.
+  reserved_token_credits : nat64;
+  cumulative_usage : ManagedAiUsage;
+  usage : TokenUsage;
+};
+type ManagedAiRole = variant { User; Assistant };
+// Platform-managed model families an SME-owned canister may spend token
+// credits on. BYOK providers never use this API.
+type ManagedAiService = variant { IcLlm; DeepSeek };
+type ManagedAiStatus = record {
+  model : text;
+  provider : text;
+  enabled : bool;
+  api_key_configured : bool;
+};
+type ManagedAiUsage = record {
+  successful_requests : nat64;
+  last_used_at : nat64;
+  owner : principal;
+  completion_tokens : nat64;
+  failed_requests : nat64;
+  consumer : principal;
+  prompt_tokens : nat64;
+  project_id : text;
+  total_tokens : nat64;
+};
 // A package or project template published to the marketplace.
 type MarketplaceItem = record {
   id : nat64;
-  item_type : MarketplaceItemType;
   // Present if and only if `price` is: an Identity-Based-Encryption
   // ciphertext (`@dfinity/vetkeys`' `IbeCiphertext`) of the random
   // AES-256 key the publisher's CI encrypted the package manifest's Wasm
@@ -60,29 +229,39 @@ type MarketplaceItem = record {
   encrypted_key : opt blob;
   title : text;
   publisher : principal;
+  // Absolute URL of the listing's public `canister_hub.toml` manifest.
+  // The manifest, rather than this row, describes the actual Wasm package
+  // or the packages/configuration that make up a template.
+  download_url : text;
   description : text;
   web_url : opt text;
   created_at : nat64;
-  // Absolute URL of the public canister_hub.toml manifest.
-  download_url : text;
-  // SHA-256 of the exact bytes an installer fetches from the manifest's
-  // wasm_url — the encrypted artifact for a paid item, the raw Wasm for a
-  // free one. Supplied by the verified publisher at publish time; anchors
-  // install-time integrity against the manifest/release asset (both
-  // off-chain and otherwise publisher-mutable after the fact) being
-  // swapped post-publish.
-  wasm_hash : blob;
+  // Older stored rows predate this field and are package releases.
+  item_type : MarketplaceItemType;
   git_repo_url : text;
   // One idempotent ICP payment journal entry per buyer. A `None` block
   // height means the transfer outcome has not yet been confirmed; retries
   // reuse `created_at_time`, allowing the ledger to reject a second charge
-  // as an ICRC-2 duplicate.
+  // as an ICRC-2 duplicate. This intentionally changes the development
+  // storage schema.
   purchases : vec record { principal; MarketplacePurchase };
   // Exact ICP price in e8s. `None` means free.
   price : opt nat64;
-  // Stable identity within the repository. Publishing the same slug updates
-  // this item; a different slug creates an independent item.
+  // Stable identity within `git_repo_url`. Releases with the same slug
+  // update this item; different slugs create independent listings.
   package_slug : text;
+  // SHA-256 of the exact bytes an installer fetches from the manifest's
+  // `wasm_url` — the AES-GCM-encrypted artifact for a paid item, the raw
+  // Wasm itself for a free one. Supplied by the verified publisher at
+  // publish time; this canister never downloads or recomputes it. This is
+  // what anchors install-time integrity to something immutable once
+  // published, since `download_url`'s manifest and the GitHub Release
+  // asset at `wasm_url` both live off-chain and could otherwise be
+  // swapped after the fact with no on-chain trace. `#[serde(default)]` so
+  // rows published before this field existed still decode — they come
+  // back with an empty hash, which `is_current_marketplace_item` then
+  // excludes from every read/install/payment path until republished.
+  wasm_hash : blob;
   // Popularity signal `orchestrator` uses to break ties between
   // semantically-similar marketplace items (see `record_download` and
   // `services/orchestrator/src/embeddings.rs`'s ranking) - not tied to any real
@@ -92,7 +271,23 @@ type MarketplaceItem = record {
   // rather than failing to load after an upgrade.
   downloads : nat64;
 };
+type MarketplaceItemType = variant { Package; Template };
+// Controller-supplied metadata for an official marketplace template.
+// Templates are public/free and `manifest_hash` is the SHA-256 of the exact
+// `canister_hub.toml` bytes at `download_url`.
+type MarketplaceTemplateInput = record {
+  title : text;
+  description : text;
+  web_url : opt text;
+  git_repo_url : text;
+  download_url : text;
+  release_tag : text;
+  package_slug : text;
+  manifest_hash : blob;
+};
 type MarketplacePurchase = record {
+  // Immutable amount used by every retry, even if the publisher changes
+  // the current listing price while the ledger result is pending.
   amount_e8s : nat64;
   created_at_time : nat64;
   block_height : opt nat;
@@ -133,20 +328,48 @@ type Project = record {
 // reflect it - `backend` itself has no opinion on what drives these
 // transitions, only that the caller is the project's own owner.
 type ProjectState = variant { Failed; AwaitingAnswer; Succeeded; Running };
-// A browser's `PushSubscription.toJSON()` shape, mirrored exactly from
-// services/orchestrator/src/push.rs::PushSubscription - this canister just
-// persists it, it never interprets `p256dh`/`auth` itself.
-type PushSubscription = record { endpoint : text; p256dh : text; auth : text };
+type PushDelivery = record {
+  status : opt nat16;
+  endpoint : text;
+  error : opt text;
+  subscription_removed : bool;
+};
+type PushNotification = record { url : text; title : text; body : text };
+type PushSubscription = record { endpoint : text; auth : text; p256dh : text };
 type Result = variant { Ok; Err : text };
-type Result_1 = variant { Ok : ByteBuf; Err : text };
-type Result_2 = variant { Ok : blob; Err : text };
-type Result_3 = variant { Ok : opt AccessRights; Err : text };
-type Result_4 = variant { Ok : bool; Err : text };
-type Result_5 = variant { Ok : text; Err : text };
-type Result_6 = variant { Ok : nat64; Err : text };
-type Result_7 = variant { Ok : MarketplacePurchaseReceipt; Err : text };
-type Result_8 = variant { Ok : vec PushSubscription; Err : text };
+type Result_1 = variant { Ok : ManagedAiStatus; Err : text };
+type Result_10 = variant { Ok : ManagedAiResponse; Err : text };
+type Result_11 = variant { Ok : ManagedAiCompletionResponse; Err : text };
+type Result_12 = variant { Ok : nat64; Err : text };
+type Result_13 = variant { Ok : MarketplacePurchaseReceipt; Err : text };
+type Result_14 = variant { Ok : vec PushSubscription; Err : text };
+type Result_15 = variant { Ok : vec PushDelivery; Err : text };
+type Result_2 = variant { Ok : ByteBuf; Err : text };
+type Result_3 = variant { Ok : blob; Err : text };
+type Result_4 = variant { Ok : vec ManagedAiUsage; Err : text };
+type Result_5 = variant { Ok : opt TokenCreditBalance; Err : text };
+type Result_6 = variant { Ok : opt AccessRights; Err : text };
+type Result_7 = variant { Ok : TokenCreditBalance; Err : text };
+type Result_8 = variant { Ok : bool; Err : text };
+type Result_9 = variant { Ok : text; Err : text };
+// The token-credit portion of an internal system account that is safe to
+// expose through the public Candid interface.
+type TokenCreditBalance = record {
+  balance : nat64;
+  "reserved" : nat64;
+  available : nat64;
+};
+type TokenUsage = record {
+  completion_tokens : nat64;
+  prompt_tokens : nat64;
+  total_tokens : nat64;
+};
 service : () -> {
+  // Adds or updates an official project template. Controller-only; unlike
+  // publisher uploads this does not require prior repository registration.
+  // Reusing a repository/package slug updates the existing listing while
+  // retaining its id, creation time, and download count.
+  add_marketplace_template : (MarketplaceTemplateInput) -> (Result_12);
   // Merges newly deployed canister ids into a project's running set.
   // Additive, never replacing: called at every point a canister id becomes
   // known (e.g. right after the frontend's own direct `install_code` call
@@ -155,6 +378,9 @@ service : () -> {
   // dashboard which canisters exist to call directly. Owner-gated, same
   // shape as `remove_project_canister` below.
   add_project_canisters : (text, vec record { text; CanisterInfo }) -> (Result);
+  // Controller-only setup for the shared provider account. The credential is
+  // intentionally never returned by any query.
+  configure_managed_ai : (ManagedAiConfigUpdate) -> (Result_1);
   // Creates a new `Project` record - called directly by the frontend, as the
   // signed-in user themselves. The orchestrator has no part in this at all
   // (see the `decouple-orchestrator-api` project notes): `backend` is a
@@ -166,7 +392,7 @@ service : () -> {
   // Permanently deletes a project's own record - the Settings page's "Delete
   // Project" (Danger Zone). Owner-gated, same "indistinguishable from not
   // existing" behavior as `get_project`/`remove_project_canister`.
-  // 
+  //
   // Deliberately does **not** touch any real IC canister - a `Project` here
   // is only ever a *record of* canisters this canister never itself
   // controls or could reach. Deleting it just stops tracking whatever it
@@ -193,13 +419,17 @@ service : () -> {
   // decrypt it (see `@dfinity/vetkeys`' `TransportSecretKey` /
   // `EncryptedVetKey.decryptAndVerify`, or the Rust equivalent, on the caller
   // side — pair with `get_vetkey_verification_key` for verification).
-  get_encrypted_vetkey : (principal, ByteBuf, ByteBuf) -> (Result_1);
+  get_encrypted_vetkey : (principal, ByteBuf, ByteBuf) -> (Result_2);
   // Lets the orchestrator (or any other controller-run verifier) fetch this
   // canister's JWT signing key once and verify tokens locally from then on,
   // instead of calling back into this canister on every HTTP request it
   // serves. This is controller-only because it is a symmetric key, so anyone
   // who can read it can forge tokens for any principal.
-  get_jwt_signing_key : () -> (Result_2) query;
+  get_jwt_signing_key : () -> (Result_3) query;
+  get_managed_ai_status : () -> (ManagedAiStatus) query;
+  // Project owners can inspect their own breakdown. Controllers can inspect
+  // every project for billing and support operations.
+  get_managed_ai_usage : (text) -> (Result_4) query;
   // Fetches a single marketplace item by id.
   get_marketplace_item : (nat64) -> (opt MarketplaceItem) query;
   // Fetches one project by id - but only for its own owner (see `Project::owner`'s
@@ -207,30 +437,43 @@ service : () -> {
   // from the project not existing at all, rather than an error revealing that
   // it does.
   get_project : (text) -> (opt Project) query;
+  // Owners can read their own token credits; backend controllers can inspect
+  // any token-credit balance for billing and support.
+  get_token_credits : (principal) -> (Result_5) query;
   // Reports a principal's access rights to a vetkey this canister manages.
   // Same authorization as `set_user_rights` (this canister has no
   // self-service "check my own rights" path — attempt `get_encrypted_vetkey`
   // instead, which will simply fail for an unauthorized caller).
-  get_user_rights : (principal, ByteBuf, principal) -> (Result_3) query;
+  get_user_rights : (principal, ByteBuf, principal) -> (Result_6) query;
   // Returns this canister's vetKD verification key, needed by clients to
   // authenticate (`decryptAndVerify`) whatever `get_encrypted_vetkey` returns.
   // Public and side-effect-free, but still `#[update]`: fetching it is itself
   // an inter-canister call to the management canister, which a `#[query]`
   // cannot make.
   get_vetkey_verification_key : () -> (ByteBuf);
+  // Adds prepaid token credits after the platform's billing layer confirms a
+  // purchase. Controller-only so callers cannot mint their own AI balance.
+  grant_token_credits : (principal, nat64) -> (Result_7);
   greet : (text) -> (text) query;
   // Returns whether the caller may download a paid marketplace item without
-  // paying again. The caller principal is derived from the signed query.
-  has_purchased_marketplace_item : (nat64) -> (Result_4) query;
-  // Serves the embedded CanisterHub marketing landing page as certified
-  // HTTP assets - the IC http gateway's standard entry point for a browser
-  // visiting this canister's own URL directly. See backend/src/lib.rs's
-  // "Landing page assets" section.
+  // paying again. Completed payment records are authoritative even if the
+  // subsequent access grant was interrupted; explicit publisher/controller
+  // grants also count as access. Anonymous callers simply receive `false`, so
+  // public marketplace pages can render their signed-out state without an
+  // avoidable query error.
+  has_purchased_marketplace_item : (nat64) -> (Result_8) query;
+  // Serves the embedded landing page - the IC http gateway's standard entry
+  // point, called for any ordinary browser request to this canister's own
+  // URL. Every response is certified (`AssetRouter::serve_asset` adds the
+  // `IC-Certificate` header itself from this canister's `data_certificate`),
+  // so it's independently verifiable and not just trusted on the replica's
+  // word - the same guarantee a dedicated asset canister provides, without
+  // needing a separate canister for it.
   http_request : (HttpRequest) -> (HttpResponse) query;
   // One-time setup: generates this canister's JWT signing key from `raw_rand`
   // (the IC's own verifiable randomness — not `getrandom`, which this canister
   // can't use; see the top of this file) and stores it in stable memory.
-  // 
+  //
   // Deliberately not "generate lazily on first `issue_jwt` call": two callers
   // racing to be first would each see no key set, each trigger a generation,
   // and whichever write loses would silently invalidate any token already
@@ -244,26 +487,34 @@ service : () -> {
   // authenticated (consensus-certified) call rather than an unsigned fast
   // query anyone could send as anyone — same reasoning as
   // `register_repo_publisher` and `get_encrypted_vetkey` above.
-  issue_jwt : () -> (Result_5);
-  // Returns the vetkey name for a marketplace item's `git_repo_url` (see
-  // `item_key_id`) — the same URL you'd pass to `publish_marketplace_item` — so a
+  issue_jwt : () -> (Result_9);
+  // Returns the vetkey name for a marketplace item's repository/package pair
+  // (see `item_key_id`) — the same values passed to `publish_marketplace_item` — so a
   // publisher's CI doesn't have to reimplement the parsing/SHA-256
   // derivation itself to know what identity to IBE-encrypt to before
   // calling `publish_marketplace_item`.
-  item_key_name : (text, text) -> (Result_2) query;
+  item_key_name : (text, text) -> (Result_3) query;
   // Lists all marketplace items.
   list_marketplace_items : () -> (vec MarketplaceItem) query;
   // Every project the caller owns, newest first - mirrors
   // `orchestrator::job::JobStore::list_for`. The real data behind the
   // dashboard's project list, called directly - no orchestrator HTTP call.
   list_my_projects : () -> (vec Project) query;
+  // Calls the configured external provider and accounts for every token the
+  // provider reports. Provider failures are also counted, without inventing a
+  // token value when the provider supplied none.
+  managed_ai_complete : (ManagedAiRequest) -> (Result_10);
+  // Provider-neutral managed completion endpoint for agent canisters. Unlike
+  // the legacy text-only endpoint, this preserves tool calls so the agent's
+  // normal `ic-rig` loop can execute its scoped business tools.
+  managed_ai_completion : (ManagedAiCompletionRequest) -> (Result_11);
   // Publishes a package or template manifest to the marketplace.
-  // 
+  //
   // The caller must have already claimed this GitHub repository via
   // `register_repo_publisher` - a different (or not-yet-registered)
   // principal calling this for the same repo is rejected outright, not
   // silently re-verified or auto-claimed.
-  // 
+  //
   // `encrypted_key` gates whether the release is protected at all: it must
   // be `Some` exactly when `price` is `Some`, and `None` exactly when the
   // item is free — there's nothing worth encryption-gating behind a price of
@@ -272,6 +523,15 @@ service : () -> {
   // key* to this item's vetkey identity (`item_key_id`, via
   // `get_vetkey_verification_key`) before calling this method — this
   // canister only ever stores the resulting ciphertext, never a usable key.
+  //
+  // `wasm_hash` must be the SHA-256 of the exact bytes an installer will
+  // fetch from the manifest's `wasm_url` (the encrypted artifact for a paid
+  // item, the raw Wasm for a free one) — computed by the publisher's own CI
+  // at build time, before this call. This canister never downloads the
+  // artifact itself to verify it; recording the hash here is what lets an
+  // installer detect the manifest or release asset being swapped after
+  // publishing, since both live off-chain and are otherwise fully
+  // publisher-mutable.
   publish_marketplace_item : (
       MarketplaceItemType,
       opt text,
@@ -284,27 +544,23 @@ service : () -> {
       opt blob,
       text,
       blob,
-    ) -> (Result_6);
+    ) -> (Result_12);
   // Pulls the exact listing price from the caller's approved ICP allowance and
   // grants that caller read access to the item's vetkey only after the ledger
   // confirms the transfer. Pending calls are journaled before the await, and a
   // retry accepts ICRC-2 `Duplicate` as the original successful payment.
-  purchase_marketplace_item : (nat64) -> (Result_7);
-  // `principal`'s own currently-stored push subscriptions - persistence for
-  // services/orchestrator's `/push/subscriptions` route. Controller-only
-  // (the orchestrator, after verifying the caller's own JWT itself).
-  push_list_subscriptions : (principal) -> (Result_8) query;
-  // Records (or updates) `principal`'s push subscription - persistence for
-  // services/orchestrator's `/push/subscribe` route. Controller-only, same
-  // reasoning as `register_repo_publisher`: only the orchestrator can prove
-  // which end-user principal a request actually came from. Idempotent on
-  // `endpoint`.
-  push_subscribe : (principal, PushSubscription) -> (Result);
-  // Drops one of `principal`'s push subscriptions by `endpoint` -
-  // persistence for services/orchestrator's `/push/unsubscribe` route.
-  // Controller-only, same as `push_subscribe`. Not finding a match is not
-  // an error.
-  push_unsubscribe : (principal, text) -> (Result);
+  purchase_marketplace_item : (nat64) -> (Result_13);
+  // Called by a package canister with its project id. The backend verifies
+  // that the caller is registered in that project, then forwards the push to
+  // the project's notification canister with the project owner as recipient.
+  send_project_notification : (text, PushNotification) -> (Result_15);
+  push_import_vapid : (text, text) -> (Result_3);
+  push_init_vapid : (text) -> (Result_3);
+  push_list_subscriptions : () -> (Result_14) query;
+  push_send : (principal, PushNotification) -> (Result_15);
+  push_subscribe : (PushSubscription) -> (Result);
+  push_unsubscribe : (text) -> (Result);
+  push_vapid_public_key : () -> (Result_3) query;
   // Bumps an item's download counter by one - a bare popularity signal, not
   // tied to any real payment/entitlement check (a production deployment would
   // call this from wherever a purchase/download is actually confirmed, e.g.
@@ -313,13 +569,19 @@ service : () -> {
   // break ties between semantically-similar search results.
   record_download : (nat64) -> (Result);
   // Registers an explicit publisher principal for a GitHub repository.
-  // Controller-only - called by the orchestrator after it independently
-  // verifies GitHub repository ownership via OAuth (see
-  // services/orchestrator/src/github.rs), never directly by an end user's
-  // dashboard session. `publisher` is the separate CI identity
-  // `publish_marketplace_item` must later be signed by. The first
-  // registration wins; repeating it with the same publisher is a no-op,
-  // while replacing it with a different publisher is rejected.
+  //
+  // Controller-only: a bare authenticated caller cannot prove they actually
+  // control `git_repo_url` (this canister has no HTTPS outcall-based GitHub
+  // verification), so this is never called by an end user's own dashboard
+  // session directly. The orchestrator - itself a controller of this
+  // canister (see `services/orchestrator/src/github.rs`) - calls this on a
+  // user's behalf only after independently verifying GitHub repository
+  // ownership via OAuth (the dashboard's "Connect Git" flow in
+  // `PublisherSetup.tsx`). `publisher` is the separate CI identity
+  // `publish_marketplace_item` must later be signed by - it need not be, and
+  // usually isn't, the same principal as the GitHub-verified owner. The
+  // first registration wins; repeating it with the same publisher is a
+  // no-op, while replacing it with a different publisher is rejected.
   register_repo_publisher : (text, principal) -> (Result);
   // Drops one canister from a project's tracked set - the owner's own
   // counterpart to `add_project_canisters`. Called directly by the frontend
@@ -332,7 +594,7 @@ service : () -> {
   remove_project_canister : (text, text) -> (Result);
   // Revokes a principal's access to a vetkey this canister manages (e.g.
   // after a refund or chargeback). Same authorization as `set_user_rights`.
-  remove_user : (principal, ByteBuf, principal) -> (Result_3);
+  remove_user : (principal, ByteBuf, principal) -> (Result_6);
   // Records a project-wide LLM context document. Owner-gated, same shape as
   // `remove_project_canister` below.
   set_project_llm_context : (text, text) -> (Result);
@@ -344,7 +606,7 @@ service : () -> {
   // marketplace purchases use `purchase_marketplace_item`, which grants
   // `Read` automatically only after its ICRC-2 payment succeeds; this method
   // remains the explicit administrative grant/override surface.
-  // 
+  //
   // Unlike a single-use redemption token, this grant is durable: the caller
   // may derive the same key as many times as it needs to (re-installs,
   // multiple devices, a dropped download) until revoked via `remove_user`.
@@ -352,7 +614,7 @@ service : () -> {
   // changes what the key *is* — so there is no replay risk to guard against
   // the way there was when this canister held (and handed out copies of) the
   // raw key material itself.
-  set_user_rights : (principal, ByteBuf, principal, AccessRights) -> (Result_3);
+  set_user_rights : (principal, ByteBuf, principal, AccessRights) -> (Result_6);
   // Updates a project's state - `Running`/`AwaitingAnswer` transitions, with
   // `pending_question` set exactly when `state == AwaitingAnswer`. Owner-gated,
   // same shape as `remove_project_canister` below - called directly by the

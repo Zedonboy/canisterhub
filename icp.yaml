@@ -12,8 +12,9 @@ canisters:
   - backend
   - frontend
   # - hnsw_index
-  # - packages/connector
   # - packages/agent
+  # - packages/order_inventory
+  # - packages/notification
   # - packages/admin_agent
   # - packages/ic-sql
   # - packages/ic-kv

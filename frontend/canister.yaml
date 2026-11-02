@@ -8,8 +8,10 @@ recipe:
   type: "@dfinity/static-site@v0.3.3"
   configuration:
     build:
-      # Install the dependencies
-      # Eventually you might want to use `npm ci` to lock your dependencies
-      - npm install
-      - npm run build
+      # Deno provides the npm compatibility layer in this workspace, so the
+      # recipe does not depend on a separate system-wide npm executable.
+      - deno install --node-modules-dir=auto
+      - deno run --node-modules-dir=auto -A npm:@icp-sdk/bindgen@0.4.0 --did-file ../backend/backend.did --out-dir ./src/bindings --force
+      - deno run --node-modules-dir=auto -A npm:typescript@5.9.3/bin/tsc -b
+      - deno run --node-modules-dir=auto -A npm:vite@7.3.1 build
     dir: dist

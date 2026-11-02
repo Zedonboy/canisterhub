@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a0e1a" />
+    <script>
+      // Resolve the theme before first paint (keep in sync with src/lib/theme.ts).
+      (function () {
+        var p = "system";
+        try { p = localStorage.getItem("storefront-theme") || "system"; } catch (e) {}
+        var light = p === "light" || (p !== "dark" && matchMedia("(prefers-color-scheme: light)").matches);
+        document.documentElement.dataset.theme = light ? "light" : "dark";
+        document.querySelector('meta[name="theme-color"]').setAttribute("content", light ? "#f8fafc" : "#0a0e1a");
+      })();
+    </script>
+    <meta name="description" content="Browse products and services, search and filter, and place an order online. Sign in securely with Internet Identity - no password or email needed." />
+    <meta name="robots" content="index, follow" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Online Store" />
+    <meta property="og:title" content="Online Store" />
+    <meta property="og:description" content="Browse products and services, search and filter, and place an order online. Sign in securely with Internet Identity - no password or email needed." />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Online Store" />
+    <meta name="twitter:description" content="Browse products and services, search and filter, and place an order online. Sign in securely with Internet Identity - no password or email needed." />
+    <title>Online Store</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

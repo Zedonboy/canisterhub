@@ -35,7 +35,10 @@ pub async fn answer_job(
     Json(body): Json<AnswerRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let Some(handle) = state.jobs.get(&id) else {
-        return Err((StatusCode::NOT_FOUND, Json(json!({ "error": "no such job" }))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such job" })),
+        ));
     };
     // Same visibility rule `get_canister_stats`/`get_job` used to (before
     // they moved to direct `backend`/canister calls): with `REQUIRE_AUTH=false`
@@ -43,14 +46,23 @@ pub async fn answer_job(
     // meaningful to isolate; otherwise a job is only answerable by whoever's
     // token created it.
     if state.jwt_secret.is_some() && handle.lock().unwrap().requested_by != caller.to_text() {
-        return Err((StatusCode::NOT_FOUND, Json(json!({ "error": "no such job" }))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such job" })),
+        ));
     }
 
     let answer = body.answer.trim().to_string();
     if answer.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "`answer` must not be empty" }))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "`answer` must not be empty" })),
+        ));
     }
 
-    state.jobs.submit_answer(&id, answer).map_err(|e| (StatusCode::CONFLICT, Json(json!({ "error": e }))))?;
+    state
+        .jobs
+        .submit_answer(&id, answer)
+        .map_err(|e| (StatusCode::CONFLICT, Json(json!({ "error": e }))))?;
     Ok(Json(json!({ "success": true })))
 }

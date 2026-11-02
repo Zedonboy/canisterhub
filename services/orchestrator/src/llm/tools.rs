@@ -8,9 +8,12 @@
 //! tool *does*, not the plan (see `src/llm/mod.rs`'s `PREAMBLE` for that).
 
 use crate::config::Config;
-use crate::ic::{deploy, marketplace, types::{MarketplaceItem, MarketplaceItemType}};
-use crate::process;
+use crate::ic::{
+    deploy, marketplace,
+    types::{MarketplaceItem, MarketplaceItemType},
+};
 use crate::job::{JobHandle, JobStore};
+use crate::process;
 use crate::provenance;
 use candid::Principal;
 use ic_agent::Agent as IcAgent;
@@ -91,7 +94,11 @@ impl JobContext {
                 return Ok(items.clone());
             }
         }
-        let items = marketplace::list_marketplace_items(&self.ic_agent, self.config.marketplace_canister_id).await?;
+        let items = marketplace::list_marketplace_items(
+            &self.ic_agent,
+            self.config.marketplace_canister_id,
+        )
+        .await?;
         *self.marketplace_cache.lock().unwrap() = Some(items.clone());
         Ok(items)
     }
@@ -209,9 +216,15 @@ fn search_marketplace_tool(ctx: Arc<JobContext>) -> DynamicTool {
                     .collect();
                 ctx.log(
                     "search_marketplace",
-                    format!("query={:?} -> {} relevant match(es)", args.query, results.len()),
+                    format!(
+                        "query={:?} -> {} relevant match(es)",
+                        args.query,
+                        results.len()
+                    ),
                 );
-                Ok(ToolOutput::json(json!({ "success": true, "matches": results })))
+                Ok(ToolOutput::json(
+                    json!({ "success": true, "matches": results }),
+                ))
             })
         },
     )
@@ -222,7 +235,10 @@ fn search_marketplace_tool(ctx: Arc<JobContext>) -> DynamicTool {
 /// `MarketplaceItem`s, and ranks them closest-distance-first with download
 /// count as the tie-break - exactly the "closest, then most popular" rule
 /// this tool's callers are told to expect.
-async fn semantic_search(ctx: &JobContext, query: &str) -> anyhow::Result<Vec<(MarketplaceItem, f32)>> {
+async fn semantic_search(
+    ctx: &JobContext,
+    query: &str,
+) -> anyhow::Result<Vec<(MarketplaceItem, f32)>> {
     let embedding = crate::embeddings::embed_text(query).await?;
 
     let req = crate::ic::hnsw::SearchRequest {
@@ -297,13 +313,23 @@ fn deploy_marketplace_item_tool(ctx: Arc<JobContext>) -> DynamicTool {
 
                 let items = match ctx.marketplace_items().await {
                     Ok(items) => items,
-                    Err(e) => return Ok(err_json(format!("failed to query the marketplace canister: {e}"))),
+                    Err(e) => {
+                        return Ok(err_json(format!(
+                            "failed to query the marketplace canister: {e}"
+                        )))
+                    }
                 };
                 let Some(item) = items.into_iter().find(|i| i.id == args.item_id) else {
-                    return Ok(err_json(format!("no marketplace item with id {}", args.item_id)));
+                    return Ok(err_json(format!(
+                        "no marketplace item with id {}",
+                        args.item_id
+                    )));
                 };
                 if item.item_type != MarketplaceItemType::Package {
-                    return Ok(err_json(format!("item {} ('{}') is a template, not an installable package", item.id, item.title)));
+                    return Ok(err_json(format!(
+                        "item {} ('{}') is a template, not an installable package",
+                        item.id, item.title
+                    )));
                 }
                 if item.is_gated() {
                     return Ok(err_json(format!(
@@ -313,25 +339,41 @@ fn deploy_marketplace_item_tool(ctx: Arc<JobContext>) -> DynamicTool {
                     )));
                 }
 
-                ctx.log("deploy_marketplace_item", format!("downloading manifest {}", item.download_url));
+                ctx.log(
+                    "deploy_marketplace_item",
+                    format!("downloading manifest {}", item.download_url),
+                );
                 let manifest_bytes = match download_wasm(&ctx.http, &item.download_url).await {
                     Ok(bytes) => bytes,
-                    Err(e) => return Ok(err_json(format!("failed to download canister_hub.toml: {e}"))),
+                    Err(e) => {
+                        return Ok(err_json(format!(
+                            "failed to download canister_hub.toml: {e}"
+                        )))
+                    }
                 };
                 let manifest: PackageManifest = match std::str::from_utf8(&manifest_bytes)
                     .map_err(anyhow::Error::from)
-                    .and_then(|text| toml::from_str::<PackageManifest>(text).map_err(anyhow::Error::from))
-                {
+                    .and_then(|text| {
+                        toml::from_str::<PackageManifest>(text).map_err(anyhow::Error::from)
+                    }) {
                     Ok(manifest) if manifest.schema_version == 1 => manifest,
                     Ok(_) => return Ok(err_json("unsupported package manifest schema_version")),
-                    Err(e) => return Ok(err_json(format!("invalid package canister_hub.toml: {e}"))),
+                    Err(e) => {
+                        return Ok(err_json(format!("invalid package canister_hub.toml: {e}")))
+                    }
                 };
-                if !(manifest.package.wasm_url.starts_with("https://") || manifest.package.wasm_url.starts_with("http://")) {
+                if !(manifest.package.wasm_url.starts_with("https://")
+                    || manifest.package.wasm_url.starts_with("http://"))
+                {
                     return Ok(err_json("package.wasm_url must be absolute HTTP(S)"));
                 }
                 let wasm = match download_wasm(&ctx.http, &manifest.package.wasm_url).await {
                     Ok(bytes) => bytes,
-                    Err(e) => return Ok(err_json(format!("failed to download release artifact: {e}"))),
+                    Err(e) => {
+                        return Ok(err_json(format!(
+                            "failed to download release artifact: {e}"
+                        )))
+                    }
                 };
                 if let Err(e) = verify_wasm_hash(&wasm, &item.wasm_hash) {
                     return Ok(err_json(format!(
@@ -339,7 +381,10 @@ fn deploy_marketplace_item_tool(ctx: Arc<JobContext>) -> DynamicTool {
                         item.id, item.title
                     )));
                 }
-                if let Err(e) = provenance::verify_build_provenance(&ctx.config, &item.git_repo_url, &wasm).await {
+                if let Err(e) =
+                    provenance::verify_build_provenance(&ctx.config, &item.git_repo_url, &wasm)
+                        .await
+                {
                     return Ok(err_json(format!(
                         "refusing to install item {} ('{}'): {e}",
                         item.id, item.title
@@ -348,17 +393,37 @@ fn deploy_marketplace_item_tool(ctx: Arc<JobContext>) -> DynamicTool {
 
                 match run_deploy(&ctx, &wasm).await {
                     Ok(canister_id) => {
-                        let final_message = format!("Deployed marketplace item {} ('{}') as {canister_id}", item.id, item.title);
-                        ctx.job.lock().unwrap().succeed(Some(canister_id.to_string()), final_message.clone());
-                        ctx.log("deploy_marketplace_item", format!("deployed as {canister_id}"));
+                        let final_message = format!(
+                            "Deployed marketplace item {} ('{}') as {canister_id}",
+                            item.id, item.title
+                        );
+                        ctx.job
+                            .lock()
+                            .unwrap()
+                            .succeed(Some(canister_id.to_string()), final_message.clone());
+                        ctx.log(
+                            "deploy_marketplace_item",
+                            format!("deployed as {canister_id}"),
+                        );
                         // No `backend` write here - see the
                         // `decouple-orchestrator-api` project notes.
                         // Best-effort popularity bump - a failure here shouldn't
                         // undo an otherwise-successful deploy.
-                        if let Err(e) = marketplace::record_download(&ctx.ic_agent, ctx.config.marketplace_canister_id, item.id).await {
-                            ctx.log("deploy_marketplace_item", format!("record_download failed (non-fatal): {e}"));
+                        if let Err(e) = marketplace::record_download(
+                            &ctx.ic_agent,
+                            ctx.config.marketplace_canister_id,
+                            item.id,
+                        )
+                        .await
+                        {
+                            ctx.log(
+                                "deploy_marketplace_item",
+                                format!("record_download failed (non-fatal): {e}"),
+                            );
                         }
-                        Ok(ToolOutput::json(json!({ "success": true, "canister_id": canister_id.to_string() })))
+                        Ok(ToolOutput::json(
+                            json!({ "success": true, "canister_id": canister_id.to_string() }),
+                        ))
                     }
                     Err(e) => {
                         ctx.log("deploy_marketplace_item", format!("deploy failed: {e}"));
@@ -374,12 +439,17 @@ async fn download_wasm(http: &reqwest::Client, url: &str) -> anyhow::Result<Vec<
     let response = http.get(url).send().await?.error_for_status()?;
     if let Some(len) = response.content_length() {
         if len as usize > MAX_DOWNLOAD_BYTES {
-            anyhow::bail!("release artifact is {len} bytes, over the {MAX_DOWNLOAD_BYTES}-byte limit");
+            anyhow::bail!(
+                "release artifact is {len} bytes, over the {MAX_DOWNLOAD_BYTES}-byte limit"
+            );
         }
     }
     let bytes = response.bytes().await?;
     if bytes.len() > MAX_DOWNLOAD_BYTES {
-        anyhow::bail!("release artifact is {} bytes, over the {MAX_DOWNLOAD_BYTES}-byte limit", bytes.len());
+        anyhow::bail!(
+            "release artifact is {} bytes, over the {MAX_DOWNLOAD_BYTES}-byte limit",
+            bytes.len()
+        );
     }
     Ok(bytes.to_vec())
 }
@@ -404,10 +474,11 @@ fn verify_wasm_hash(wasm: &[u8], expected_hash: &[u8]) -> anyhow::Result<()> {
 
 async fn run_deploy(ctx: &JobContext, wasm: &[u8]) -> anyhow::Result<Principal> {
     let outcome = if ctx.network == "ic" {
-        let wallet_id = ctx
-            .config
-            .cycles_wallet_canister_id
-            .ok_or_else(|| anyhow::anyhow!("CYCLES_WALLET_CANISTER_ID is not configured - required to deploy to mainnet"))?;
+        let wallet_id = ctx.config.cycles_wallet_canister_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "CYCLES_WALLET_CANISTER_ID is not configured - required to deploy to mainnet"
+            )
+        })?;
         deploy::create_and_install_mainnet(
             &ctx.ic_agent,
             wallet_id,
@@ -421,8 +492,14 @@ async fn run_deploy(ctx: &JobContext, wasm: &[u8]) -> anyhow::Result<Principal> 
         // to route this call's certificate verification through - see
         // `deploy::create_and_install_local`'s doc comment - not otherwise
         // related to the marketplace.
-        deploy::create_and_install_local(&ctx.ic_agent, ctx.caller_principal, ctx.config.canister_creation_cycles, wasm, ctx.config.marketplace_canister_id)
-            .await?
+        deploy::create_and_install_local(
+            &ctx.ic_agent,
+            ctx.caller_principal,
+            ctx.config.canister_creation_cycles,
+            wasm,
+            ctx.config.marketplace_canister_id,
+        )
+        .await?
     };
     Ok(outcome.canister_id)
 }
@@ -481,7 +558,9 @@ fn scaffold_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
 
                 let workspace = ctx.workspace_dir();
                 if workspace.join(&name).exists() {
-                    return Ok(err_json(format!("project '{name}' already exists in this job's workspace")));
+                    return Ok(err_json(format!(
+                        "project '{name}' already exists in this job's workspace"
+                    )));
                 }
 
                 let command = format!(
@@ -497,7 +576,10 @@ fn scaffold_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
                     }
                 };
                 let log_tail = result.combined_tail(4000);
-                ctx.log("scaffold_project", format!("name={name} success={} \n{log_tail}", result.success));
+                ctx.log(
+                    "scaffold_project",
+                    format!("name={name} success={} \n{log_tail}", result.success),
+                );
 
                 if !result.success {
                     return Ok(ToolOutput::json(json!({
@@ -511,7 +593,10 @@ fn scaffold_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
                 let lib_rs = read_file_lossy(&project_dir.join("src/lib.rs"));
                 let cargo_toml = read_file_lossy(&project_dir.join("Cargo.toml"));
                 let did_file = find_did_file(&project_dir);
-                let did_contents = did_file.as_ref().map(|p| read_file_lossy(p)).unwrap_or_default();
+                let did_contents = did_file
+                    .as_ref()
+                    .map(|p| read_file_lossy(p))
+                    .unwrap_or_default();
 
                 ctx.job.lock().unwrap().set_project_name(name.clone());
                 // No `backend` write here - see the
@@ -644,7 +729,9 @@ fn write_and_compile_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
                 let workspace = ctx.workspace_dir();
                 let project_dir = workspace.join(&name);
                 if !project_dir.is_dir() {
-                    return Ok(err_json(format!("project '{name}' doesn't exist - call scaffold_project first")));
+                    return Ok(err_json(format!(
+                        "project '{name}' doesn't exist - call scaffold_project first"
+                    )));
                 }
 
                 // Only when deploying the whole project (no canister_name)
@@ -673,10 +760,17 @@ fn write_and_compile_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
 
                 ctx.log(
                     "write_and_compile_project",
-                    format!("starting coding subagent for '{name}' (canister_name={:?})", canister_name),
+                    format!(
+                        "starting coding subagent for '{name}' (canister_name={:?})",
+                        canister_name
+                    ),
                 );
                 let read_tracker = Arc::new(crate::llm::codetools::ReadTracker::default());
-                let subagent_tools = crate::llm::codetools::build_code_tools(ctx.clone(), project_dir.clone(), read_tracker);
+                let subagent_tools = crate::llm::codetools::build_code_tools(
+                    ctx.clone(),
+                    project_dir.clone(),
+                    read_tracker,
+                );
                 let max_turns = ctx.config.llm_subagent_max_turns as usize;
                 let situation_header = match &canister_name {
                     Some(cname) => format!("You're working on one canister: canister_name = \"{cname}\".\n\n"),
@@ -690,8 +784,19 @@ fn write_and_compile_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
                 // read fresh each call rather than captured once, so it's
                 // never stale relative to the job it actually belongs to.
                 let business_requirements = ctx.job.lock().unwrap().request.clone();
-                let preamble = crate::llm::coding_subagent_preamble(&ctx.config, &business_requirements, &ctx.network);
-                let outcome = crate::llm::run_agent(&ctx.config, &preamble, subagent_tools, request, max_turns).await;
+                let preamble = crate::llm::coding_subagent_preamble(
+                    &ctx.config,
+                    &business_requirements,
+                    &ctx.network,
+                );
+                let outcome = crate::llm::run_agent(
+                    &ctx.config,
+                    &preamble,
+                    subagent_tools,
+                    request,
+                    max_turns,
+                )
+                .await;
                 // Recorded before any of the cleanup below, so a real spend
                 // is never lost even if something after this panics - see
                 // `AgentRunOutcome`'s doc comment for why this is populated
@@ -712,19 +817,28 @@ fn write_and_compile_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
                         let response = match &canister_name {
                             Some(cname) => {
                                 let canister_dir = project_dir.join(cname);
-                                let wasm_found = process::find_wasm_artifact(&canister_dir, cname).is_some();
+                                let wasm_found =
+                                    process::find_wasm_artifact(&canister_dir, cname).is_some();
                                 ctx.log("write_and_compile_project", format!("subagent finished for '{name}/{cname}': wasm_found={wasm_found}"));
                                 json!({ "success": wasm_found, "summary": summary, "wasm_found": wasm_found })
                             }
                             None => {
-                                let canister_ids = verify_deployed_canister_ids(&ctx, &project_dir).await;
+                                let canister_ids =
+                                    verify_deployed_canister_ids(&ctx, &project_dir).await;
                                 ctx.log(
                                     "write_and_compile_project",
                                     format!("subagent finished deploying '{name}': verified {} canister id(s)", canister_ids.len()),
                                 );
-                                let confirmed: Vec<(String, String)> =
-                                    canister_ids.iter().filter_map(|(name, id)| id.as_str().map(|id| (name.clone(), id.to_string()))).collect();
-                                ctx.job.lock().unwrap().add_canisters(confirmed.iter().cloned());
+                                let confirmed: Vec<(String, String)> = canister_ids
+                                    .iter()
+                                    .filter_map(|(name, id)| {
+                                        id.as_str().map(|id| (name.clone(), id.to_string()))
+                                    })
+                                    .collect();
+                                ctx.job
+                                    .lock()
+                                    .unwrap()
+                                    .add_canisters(confirmed.iter().cloned());
                                 // Add the real requesting user - proven via the JWT bridge,
                                 // never the orchestrator's own deploy identity's principal
                                 // (`ctx.caller_principal` is that identity's own principal, not
@@ -737,7 +851,9 @@ fn write_and_compile_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
                                 let requested_by = ctx.job.lock().unwrap().requested_by.clone();
                                 let is_mainnet = ctx.network == "ic";
                                 for (canister_name, _) in &confirmed {
-                                    let timeout = std::time::Duration::from_secs(ctx.config.command_timeout_secs.min(60));
+                                    let timeout = std::time::Duration::from_secs(
+                                        ctx.config.command_timeout_secs.min(60),
+                                    );
                                     match process::add_controller(&project_dir, canister_name, &requested_by, is_mainnet, timeout).await {
                                         Ok(result) if result.success => {}
                                         Ok(result) => ctx.log(
@@ -751,10 +867,21 @@ fn write_and_compile_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
                                 // `decouple-orchestrator-api` project notes.
                                 let (project_name, request, network) = {
                                     let job = ctx.job.lock().unwrap();
-                                    (job.project_name.clone().unwrap_or_else(|| job.id.clone()), job.request.clone(), job.network.clone())
+                                    (
+                                        job.project_name.clone().unwrap_or_else(|| job.id.clone()),
+                                        job.request.clone(),
+                                        job.network.clone(),
+                                    )
                                 };
-                                let llm_context =
-                                    generate_llm_context(&project_name, &request, &network, ctx.config.command_timeout_secs, &project_dir, &canister_ids).await;
+                                let llm_context = generate_llm_context(
+                                    &project_name,
+                                    &request,
+                                    &network,
+                                    ctx.config.command_timeout_secs,
+                                    &project_dir,
+                                    &canister_ids,
+                                )
+                                .await;
                                 ctx.job.lock().unwrap().set_llm_context(llm_context.clone());
                                 json!({ "success": !canister_ids.is_empty(), "summary": summary, "canister_ids": canister_ids })
                             }
@@ -762,7 +889,10 @@ fn write_and_compile_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
                         Ok(ToolOutput::json(response))
                     }
                     Err(e) => {
-                        ctx.log("write_and_compile_project", format!("coding subagent errored: {e}"));
+                        ctx.log(
+                            "write_and_compile_project",
+                            format!("coding subagent errored: {e}"),
+                        );
                         Ok(err_json(format!("coding subagent failed to run: {e}")))
                     }
                 }
@@ -777,15 +907,22 @@ fn write_and_compile_project_tool(ctx: Arc<JobContext>) -> DynamicTool {
 /// `coding_subagent_preamble`'s deploy-and-wire instructions for which file
 /// to expect and which `icp identity import` flag it pairs with. Returns the path
 /// written, for the caller to clean up afterward.
-fn write_deploy_identity_file(config: &Config, project_dir: &std::path::Path) -> Result<PathBuf, String> {
+fn write_deploy_identity_file(
+    config: &Config,
+    project_dir: &std::path::Path,
+) -> Result<PathBuf, String> {
     if let Some(pem_path) = &config.deploy_identity_pem {
         let dest = project_dir.join(".orchestrator-identity.pem");
-        std::fs::copy(pem_path, &dest).map_err(|e| format!("failed to stage the deploy identity PEM into the project: {e}"))?;
+        std::fs::copy(pem_path, &dest).map_err(|e| {
+            format!("failed to stage the deploy identity PEM into the project: {e}")
+        })?;
         return Ok(dest);
     }
     if let Some(seed_phrase) = &config.identity_seed_phrase {
         let dest = project_dir.join(".orchestrator-identity.seed");
-        std::fs::write(&dest, seed_phrase.as_bytes()).map_err(|e| format!("failed to stage the deploy identity seed phrase into the project: {e}"))?;
+        std::fs::write(&dest, seed_phrase.as_bytes()).map_err(|e| {
+            format!("failed to stage the deploy identity seed phrase into the project: {e}")
+        })?;
         return Ok(dest);
     }
     Err("no identity configured (set IDENTITY_SEED_PHRASE or DEPLOY_IDENTITY_PEM) - deploying requires a real identity".to_string())
@@ -803,12 +940,18 @@ fn write_deploy_identity_file(config: &Config, project_dir: &std::path::Path) ->
 /// build). Returns a name-to-id JSON object; a canister missing from it
 /// means its id couldn't be independently confirmed, whatever the subagent
 /// itself may have claimed.
-async fn verify_deployed_canister_ids(ctx: &JobContext, project_dir: &std::path::Path) -> serde_json::Map<String, Value> {
+async fn verify_deployed_canister_ids(
+    ctx: &JobContext,
+    project_dir: &std::path::Path,
+) -> serde_json::Map<String, Value> {
     let mut confirmed = serde_json::Map::new();
     let names = match parse_icp_yaml_canister_names(&project_dir.join("icp.yaml")) {
         Ok(names) => names,
         Err(e) => {
-            ctx.log("write_and_compile_project", format!("could not read this project's icp.yaml to verify canister ids: {e}"));
+            ctx.log(
+                "write_and_compile_project",
+                format!("could not read this project's icp.yaml to verify canister ids: {e}"),
+            );
             return confirmed;
         }
     };
@@ -819,7 +962,10 @@ async fn verify_deployed_canister_ids(ctx: &JobContext, project_dir: &std::path:
         let result = match process::run(project_dir, &command, timeout).await {
             Ok(r) => r,
             Err(e) => {
-                ctx.log("write_and_compile_project", format!("failed to verify canister id for '{name}': {e}"));
+                ctx.log(
+                    "write_and_compile_project",
+                    format!("failed to verify canister id for '{name}': {e}"),
+                );
                 continue;
             }
         };
@@ -827,7 +973,13 @@ async fn verify_deployed_canister_ids(ctx: &JobContext, project_dir: &std::path:
         if result.success && Principal::from_text(id_text).is_ok() {
             confirmed.insert(name, Value::String(id_text.to_string()));
         } else {
-            ctx.log("write_and_compile_project", format!("could not confirm a deployed id for '{name}': {}", result.combined_tail(500)));
+            ctx.log(
+                "write_and_compile_project",
+                format!(
+                    "could not confirm a deployed id for '{name}': {}",
+                    result.combined_tail(500)
+                ),
+            );
         }
     }
     confirmed
@@ -864,22 +1016,33 @@ pub async fn generate_llm_context(
     let mut doc = format!("# {project_name}\n\nBusiness requirement this project was built for:\n\n> {request}\n\nNetwork: {network}\n\n## Canisters\n\n");
 
     for (name, id_value) in canister_ids {
-        let Some(id) = id_value.as_str() else { continue };
+        let Some(id) = id_value.as_str() else {
+            continue;
+        };
         let kind = crate::job::infer_canister_kind(name);
         doc.push_str(&format!("### `{name}` ({id})\n\n"));
 
-        let exposes_llm_context = matches!(
-            kind,
-            crate::job::CanisterKind::Connector
-                | crate::job::CanisterKind::Agent
-                | crate::job::CanisterKind::AdminAgent
-                | crate::job::CanisterKind::Auth
-                | crate::job::CanisterKind::Database
-        );
+        let exposes_llm_context =
+            matches!(
+                kind,
+                crate::job::CanisterKind::Connector
+                    | crate::job::CanisterKind::Agent
+                    | crate::job::CanisterKind::AdminAgent
+                    | crate::job::CanisterKind::Auth
+                    | crate::job::CanisterKind::Database
+            ) || matches!(name.as_str(), "order_inventory" | "order-inventory");
         let fetched = if exposes_llm_context {
-            crate::canister_query::call_candid_text(project_dir, name, "llm_context", "()", true, is_mainnet, timeout)
-                .await
-                .and_then(|candid_text| crate::candid_text::extract_text_reply(&candid_text))
+            crate::canister_query::call_candid_text(
+                project_dir,
+                name,
+                "llm_context",
+                "()",
+                true,
+                is_mainnet,
+                timeout,
+            )
+            .await
+            .and_then(|candid_text| crate::candid_text::extract_text_reply(&candid_text))
         } else {
             None
         };
@@ -887,7 +1050,9 @@ pub async fn generate_llm_context(
         match fetched {
             Some(text) => doc.push_str(&text),
             None => doc.push_str(match kind {
-                crate::job::CanisterKind::Static => "Serves this project's public web UI over HTTP.",
+                crate::job::CanisterKind::Static => {
+                    "Serves this project's public web UI over HTTP."
+                }
                 crate::job::CanisterKind::Analytics => {
                     "Records counters, gauges, logs, and histograms under arbitrary named keys \
                      (`ic-analytics`'s prebuilt release) - see its own candid interface for the \
@@ -921,7 +1086,8 @@ pub async fn generate_llm_context(
 /// `coding_subagent_preamble`), so this matters most for the one canister
 /// already there before it starts.
 fn parse_icp_yaml_canister_names(path: &std::path::Path) -> Result<Vec<String>, String> {
-    let content = std::fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let mut names = Vec::new();
     let mut canisters_indent: Option<usize> = None;
     let mut list_item_indent: Option<usize> = None;
@@ -969,7 +1135,13 @@ fn parse_icp_yaml_canister_names(path: &std::path::Path) -> Result<Vec<String>, 
             // subfolder's own canister.yaml names itself to match its
             // basename, the same convention every building block and every
             // hand-written static/assets canister.yaml already follows.
-            None => item.trim().trim_matches('"').rsplit('/').next().unwrap_or(item.trim()).to_string(),
+            None => item
+                .trim()
+                .trim_matches('"')
+                .rsplit('/')
+                .next()
+                .unwrap_or(item.trim())
+                .to_string(),
         };
         names.push(name);
     }
@@ -992,7 +1164,14 @@ mod tests {
         .unwrap();
 
         let names = parse_icp_yaml_canister_names(&path).unwrap();
-        assert_eq!(names, vec!["connector".to_string(), "agent".to_string(), "quoted-name".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "connector".to_string(),
+                "agent".to_string(),
+                "quoted-name".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -1042,7 +1221,14 @@ mod tests {
         .unwrap();
 
         let names = parse_icp_yaml_canister_names(&path).unwrap();
-        assert_eq!(names, vec!["backend".to_string(), "connector".to_string(), "agent".to_string()]);
+        assert_eq!(
+            names,
+            vec![
+                "backend".to_string(),
+                "connector".to_string(),
+                "agent".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -1058,7 +1244,8 @@ mod tests {
 
     #[test]
     fn parse_icp_yaml_canister_names_errors_on_a_missing_file() {
-        let missing = std::env::temp_dir().join(format!("no-such-icp-yaml-{}.yaml", uuid::Uuid::new_v4()));
+        let missing =
+            std::env::temp_dir().join(format!("no-such-icp-yaml-{}.yaml", uuid::Uuid::new_v4()));
         assert!(parse_icp_yaml_canister_names(&missing).is_err());
     }
 
@@ -1093,8 +1280,6 @@ mod tests {
             github_oauth_client_secret: None,
             public_base_url: None,
             github_api_token: None,
-            vapid_public_key: None,
-            vapid_private_key: None,
         }
     }
 
@@ -1103,7 +1288,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("identity-file-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let err = write_deploy_identity_file(&config_with_no_identity(), &dir).unwrap_err();
-        assert!(err.contains("no identity configured"), "unexpected error: {err}");
+        assert!(
+            err.contains("no identity configured"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1111,11 +1299,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("identity-file-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut config = config_with_no_identity();
-        config.identity_seed_phrase = Some(crate::config::Redacted::for_test("my seed phrase words"));
+        config.identity_seed_phrase =
+            Some(crate::config::Redacted::for_test("my seed phrase words"));
 
         let path = write_deploy_identity_file(&config, &dir).unwrap();
         assert_eq!(path, dir.join(".orchestrator-identity.seed"));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "my seed phrase words");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "my seed phrase words"
+        );
     }
 
     #[test]
@@ -1123,7 +1315,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("identity-file-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let pem_path = dir.join("source-identity.pem");
-        std::fs::write(&pem_path, "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n").unwrap();
+        std::fs::write(
+            &pem_path,
+            "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+        )
+        .unwrap();
         let mut config = config_with_no_identity();
         config.deploy_identity_pem = Some(pem_path.clone());
 
@@ -1131,7 +1327,10 @@ mod tests {
         std::fs::create_dir_all(&dest_dir).unwrap();
         let path = write_deploy_identity_file(&config, &dest_dir).unwrap();
         assert_eq!(path, dest_dir.join(".orchestrator-identity.pem"));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), std::fs::read_to_string(&pem_path).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            std::fs::read_to_string(&pem_path).unwrap()
+        );
     }
 
     #[test]

@@ -27,7 +27,10 @@ pub async fn orchestrate(
     Json(body): Json<OrchestrateRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     if body.request.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({ "error": "`request` must not be empty" }))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "`request` must not be empty" })),
+        ));
     }
     if body.network != "local" && body.network != "ic" {
         return Err((
@@ -43,7 +46,13 @@ pub async fn orchestrate(
     // `Project` record (see the `decouple-orchestrator-api` project notes).
     // This job's own in-memory tracking (`state.jobs`) is independent of
     // anything the frontend does on `backend` directly.
-    let job = Job::new(id.clone(), body.request, body.network, caller.to_text(), workspace_dir);
+    let job = Job::new(
+        id.clone(),
+        body.request,
+        body.network,
+        caller.to_text(),
+        workspace_dir,
+    );
     let handle = state.jobs.insert(job);
 
     pipeline::spawn(state.config.clone(), state.jobs.clone(), handle);

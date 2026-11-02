@@ -133,8 +133,6 @@ All configuration is environment variables (see `src/config.rs`):
 | `GITHUB_OAUTH_CLIENT_SECRET` | for "Connect Git" | - | That OAuth App's client secret |
 | `PUBLIC_BASE_URL` | for "Connect Git" | - | This server's own externally-reachable base URL, no trailing slash (e.g. `https://orchestrator.example.com`) - must match the OAuth App's configured callback host |
 | `GITHUB_API_TOKEN` | no | - | Optional GitHub token (read-only "Attestations" permission) for the build-provenance check below. Unset sends that one API call unauthenticated, which GitHub still serves for public repos at a lower rate limit |
-| `VAPID_PUBLIC_KEY` | for push notifications | - | Base64url-encoded 65-byte uncompressed P-256 point - see "Push notifications" below |
-| `VAPID_PRIVATE_KEY` | for push notifications | - | Base64url-encoded 32-byte P-256 scalar, paired with `VAPID_PUBLIC_KEY` |
 
 Plus `OPENAI_API_KEY` (always needed - embeddings are always OpenAI, regardless
 of `LLM_PROVIDER`; see "Semantic marketplace search" below) and whichever
@@ -155,8 +153,7 @@ cargo run
 
 ## Authentication
 
-Mutation endpoints such as `POST /orchestrate` and
-`POST /marketplace/templates/:slug/deploy` require an
+Mutation endpoints such as `POST /orchestrate` require an
 `Authorization: Bearer <token>` header, where `<token>` is a JWT `backend`
 issued (see `backend/README.md`'s "API access tokens" section for the full
 canister-side flow):
@@ -184,16 +181,15 @@ for local development without an Internet Identity setup.
 
 ## API
 
-### Project template marketplace
-
-- `POST /marketplace/items/:id/template/deploy` accepts
-  `{ "project_name": "...", "network": "local" }`, authenticates the caller,
-  loads the `Template` marketplace item's public `canister_hub.toml`, validates
-  it, and starts a normal observable orchestration job.
-
-There is no separate template catalog. Both packages and templates are stored
-as backend `MarketplaceItem`s; the item type selects the manifest schema and
-install path. Invalid or oversized manifests are rejected before deployment.
+Project template deployment is not part of this API - it's entirely
+client-side now (`frontend/src/lib/templates.ts`): the browser downloads
+and validates a `Template` marketplace item's `canister_hub.toml` itself,
+installs each declared package directly via the management canister (the
+same direct-install pattern `lib/deploy.ts` uses for a single marketplace
+item), and configures each one through its own `ic::config` surface
+(`get_config_schema`/`set_config`), prompting the user for anything the
+manifest didn't already supply a default for. No LLM, no orchestrator
+involvement, no job to observe.
 
 ### `POST /orchestrate`
 
@@ -330,46 +326,10 @@ skipped.
 
 ## Push notifications
 
-Web Push splits across both services: the orchestrator
-(`src/push.rs`/`src/routes/push.rs`) owns the HTTP surface, VAPID key
-config, and JWT auth; `backend` is a pure persistence layer for the actual
-subscription records (`push_subscribe`/`push_unsubscribe`/
-`push_list_subscriptions` in `backend/src/lib.rs`) - the same
-controller-gated shape as `register_repo_publisher` above, and for the same
-reason: only the orchestrator can prove which end-user principal a real
-subscribe request came from (it already verified a JWT before calling
-`backend`), so these take that principal as an explicit argument rather
-than trusting `backend`'s own `msg_caller()`. `agent`'s identity must
-therefore be a controller of `backend` - same requirement as
-`register_repo_publisher`.
-
-Sending a real push means ECDSA-signing a VAPID JWT and POSTing an
-encrypted payload to each subscription's own push service - off-chain work
-only this server can do - but nothing decides *when* to notify a user yet,
-so only subscribe/unsubscribe/list exist so far; sending is the obvious
-next step.
-
-Generate a keypair once per deployment with:
-
-```sh
-cargo run --example generate_vapid_keys
-```
-
-and set the two printed lines as `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` in
-that deployment's environment - never commit the private key. Leaving both
-unset is fine: `GET /push/vapid-public-key` then returns 404 and the
-frontend's Settings page just shows push notifications as unavailable.
-
-- `GET /push/vapid-public-key` - the raw public key bytes a browser's
-  `PushManager.subscribe({ applicationServerKey })` expects. Not secret; no
-  auth required.
-- `POST /push/subscribe` - records (or updates, keyed on `endpoint`) the
-  caller's own browser subscription on `backend`. Requires a signed-in
-  caller.
-- `POST /push/unsubscribe` - drops one of the caller's own subscriptions by
-  `endpoint` on `backend`. Not finding a match is not an error.
-- `GET /push/subscriptions` - the caller's own currently-stored
-  subscriptions, read from `backend`.
+The orchestrator has no Web Push role. Each SME project installs its own
+`notification` module, which owns VAPID configuration, caller-scoped
+subscriptions, payload encryption, and HTTPS delivery; see
+`packages/notification/README.md`.
 
 ## Semantic marketplace search
 

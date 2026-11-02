@@ -91,9 +91,18 @@ use std::time::{Duration, Instant};
 /// provider env vars - see this file's own header comment.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-const IC_SQL_WASM: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/ic-sql/target/wasm32-unknown-unknown/release/ic_sql.wasm"));
-const BACKEND_WASM: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../backend/target/wasm32-unknown-unknown/release/backend.wasm"));
-const HNSW_WASM: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ic_hnsw.wasm"));
+const IC_SQL_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../packages/ic-sql/target/wasm32-unknown-unknown/release/ic_sql.wasm"
+));
+const BACKEND_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../backend/target/wasm32-unknown-unknown/release/backend.wasm"
+));
+const HNSW_WASM: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/ic_hnsw.wasm"
+));
 
 /// The same fixed test mnemonic `orchestrator`'s own
 /// `ic::agent::tests::seed_phrase_derivation_matches_dfx` unit test uses -
@@ -104,7 +113,8 @@ const HNSW_WASM: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/te
 /// (see the `decouple-orchestrator-api` project notes); creating
 /// `hnsw_index`'s collection or a new canister via provisional creation
 /// needs no pre-existing permission either.
-const ORCHESTRATOR_SEED_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const ORCHESTRATOR_SEED_PHRASE: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
 fn test_principal(byte: u8) -> Principal {
     Principal::from_slice(&[byte; 10])
@@ -124,12 +134,10 @@ struct MockLlmState {
 }
 
 async fn mock_chat_completions(State(state): State<MockLlmState>) -> Json<Value> {
-    let response = state
-        .completions
-        .lock()
-        .unwrap()
-        .pop_front()
-        .expect("mock LLM server received more /chat/completions requests than this test queued");
+    let response =
+        state.completions.lock().unwrap().pop_front().expect(
+            "mock LLM server received more /chat/completions requests than this test queued",
+        );
     Json(response)
 }
 
@@ -137,7 +145,9 @@ async fn mock_embeddings(State(_state): State<MockLlmState>) -> Json<Value> {
     // A fixed, arbitrary vector - returned identically for both the
     // indexing call and the search call, guaranteeing cosine distance 0
     // between them regardless of what text was actually sent to embed.
-    let vector: Vec<f64> = (0..1536).map(|i| if i % 7 == 0 { 1.0 } else { 0.0 }).collect();
+    let vector: Vec<f64> = (0..1536)
+        .map(|i| if i % 7 == 0 { 1.0 } else { 0.0 })
+        .collect();
     Json(json!({
         "object": "list",
         "data": [{ "object": "embedding", "index": 0, "embedding": vector }],
@@ -157,24 +167,34 @@ async fn mock_release_wasm(State(state): State<MockLlmState>) -> Vec<u8> {
 /// binary, nothing shuts it down explicitly.
 fn start_mock_server(ic_sql_wasm: Vec<u8>) -> (String, Arc<Mutex<VecDeque<Value>>>) {
     let completions: Arc<Mutex<VecDeque<Value>>> = Arc::new(Mutex::new(VecDeque::new()));
-    let state = MockLlmState { completions: completions.clone(), ic_sql_wasm: Arc::new(ic_sql_wasm) };
+    let state = MockLlmState {
+        completions: completions.clone(),
+        ic_sql_wasm: Arc::new(ic_sql_wasm),
+    };
 
     let (addr_tx, addr_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("failed to build the mock LLM server's runtime");
+        let rt =
+            tokio::runtime::Runtime::new().expect("failed to build the mock LLM server's runtime");
         rt.block_on(async move {
             let app = Router::new()
                 .route("/chat/completions", post(mock_chat_completions))
                 .route("/embeddings", post(mock_embeddings))
                 .route("/release/ic-sql.wasm", get(mock_release_wasm))
                 .with_state(state);
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("failed to bind mock LLM server");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("failed to bind mock LLM server");
             addr_tx.send(listener.local_addr().unwrap()).unwrap();
-            axum::serve(listener, app).await.expect("mock LLM server crashed");
+            axum::serve(listener, app)
+                .await
+                .expect("mock LLM server crashed");
         });
     });
 
-    let addr = addr_rx.recv_timeout(Duration::from_secs(5)).expect("mock LLM server failed to start");
+    let addr = addr_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("mock LLM server failed to start");
     (format!("http://{addr}"), completions)
 }
 
@@ -231,7 +251,13 @@ fn assistant_tool_call(call_id: &str, tool_name: &str, arguments: &Value) -> Val
 // controller, same as `backend/tests/marketplace_tests.rs`'s `claim_and_publish`.
 // ---------------------------------------------------------------------------
 
-fn publish_ic_sql_item(pic: &PocketIc, backend_id: Principal, admin: Principal, publisher: Principal, release_download_url: &str) -> u64 {
+fn publish_ic_sql_item(
+    pic: &PocketIc,
+    backend_id: Principal,
+    admin: Principal,
+    publisher: Principal,
+    release_download_url: &str,
+) -> u64 {
     let repo_url = "https://github.com/canister-hub-test/ic-sql";
     // `register_repo_publisher` is controller-only - `admin` stands in for
     // the orchestrator here (it's the canister's installed controller, same
@@ -292,7 +318,16 @@ struct RunningOrchestrator {
 /// file's header comment on `ENV_LOCK`), so they're still set via
 /// `std::env::set_var` here, under the caller's `ENV_LOCK` guard.
 #[allow(clippy::too_many_arguments)]
-fn start_orchestrator(ic_url: &str, backend_id: Principal, hnsw_id: Principal, workspace_root: std::path::PathBuf, llm_provider: &str, llm_model: Option<&str>, ollama_tool_result_shim: bool, llm_env: &[(&str, &str)]) -> RunningOrchestrator {
+fn start_orchestrator(
+    ic_url: &str,
+    backend_id: Principal,
+    hnsw_id: Principal,
+    workspace_root: std::path::PathBuf,
+    llm_provider: &str,
+    llm_model: Option<&str>,
+    ollama_tool_result_shim: bool,
+    llm_env: &[(&str, &str)],
+) -> RunningOrchestrator {
     for (key, value) in llm_env {
         std::env::set_var(key, value);
     }
@@ -331,8 +366,6 @@ fn start_orchestrator(ic_url: &str, backend_id: Principal, hnsw_id: Principal, w
         github_oauth_client_secret: None,
         public_base_url: None,
         github_api_token: None,
-        vapid_public_key: None,
-        vapid_private_key: None,
     });
 
     let jobs = JobStore::default();
@@ -340,18 +373,26 @@ fn start_orchestrator(ic_url: &str, backend_id: Principal, hnsw_id: Principal, w
 
     let (addr_tx, addr_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("failed to build the orchestrator router's runtime");
+        let rt = tokio::runtime::Runtime::new()
+            .expect("failed to build the orchestrator router's runtime");
         rt.block_on(async move {
             // Same one-time bootstrap `main.rs` does before ever serving a
             // request - real `search_marketplace` calls need this
             // collection to already exist (see `main.rs`'s own doc comment
             // on why even a read-only search needs a real identity for it).
-            let (startup_agent, _) = orchestrator::ic::agent::build_agent_for_network(&config, &config.auth_network, true)
-                .await
-                .expect("failed to build the startup agent");
-            orchestrator::ic::hnsw::ensure_marketplace_items_collection(&startup_agent, config.hnsw_canister_id)
-                .await
-                .expect("failed to ensure hnsw_index's marketplace_items collection exists");
+            let (startup_agent, _) = orchestrator::ic::agent::build_agent_for_network(
+                &config,
+                &config.auth_network,
+                true,
+            )
+            .await
+            .expect("failed to build the startup agent");
+            orchestrator::ic::hnsw::ensure_marketplace_items_collection(
+                &startup_agent,
+                config.hnsw_canister_id,
+            )
+            .await
+            .expect("failed to ensure hnsw_index's marketplace_items collection exists");
 
             let state = AppState {
                 config,
@@ -361,14 +402,23 @@ fn start_orchestrator(ic_url: &str, backend_id: Principal, hnsw_id: Principal, w
                 github_connect: Arc::new(orchestrator::github::GithubConnectState::default()),
             };
             let app = routes::router(state);
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("failed to bind the orchestrator router");
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("failed to bind the orchestrator router");
             addr_tx.send(listener.local_addr().unwrap()).unwrap();
-            axum::serve(listener, app).await.expect("orchestrator router crashed");
+            axum::serve(listener, app)
+                .await
+                .expect("orchestrator router crashed");
         });
     });
-    let addr = addr_rx.recv_timeout(Duration::from_secs(10)).expect("orchestrator router failed to start");
+    let addr = addr_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("orchestrator router failed to start");
 
-    RunningOrchestrator { base_url: format!("http://{addr}"), jobs }
+    RunningOrchestrator {
+        base_url: format!("http://{addr}"),
+        jobs,
+    }
 }
 
 /// Polls `JobStore` directly (see this file's header comment for why - no
@@ -377,7 +427,12 @@ fn start_orchestrator(ic_url: &str, backend_id: Principal, hnsw_id: Principal, w
 fn poll_job(jobs: &JobStore, job_id: &str, timeout: Duration) -> Job {
     let deadline = Instant::now() + timeout;
     loop {
-        let job = jobs.get(job_id).unwrap_or_else(|| panic!("orchestrator has no job {job_id} yet")).lock().unwrap().clone();
+        let job = jobs
+            .get(job_id)
+            .unwrap_or_else(|| panic!("orchestrator has no job {job_id} yet"))
+            .lock()
+            .unwrap()
+            .clone();
         if job.state != JobState::Running {
             return job;
         }
@@ -446,15 +501,28 @@ fn setup_marketplace_with_ic_sql_item() -> MarketplaceSetup {
     // mode (not live yet) - publishing below needs to mock a canister HTTP
     // outcall, which is easiest to reason about before `make_live` switches
     // the instance into auto-progress.
-    let pic = PocketIcBuilder::new().with_test_threshold_keys_subnet().with_application_subnet().build();
+    let pic = PocketIcBuilder::new()
+        .with_test_threshold_keys_subnet()
+        .with_application_subnet()
+        .build();
 
     let backend_id = pic.create_canister_with_settings(Some(admin), None);
     pic.add_cycles(backend_id, 30_000_000_000_000);
-    pic.install_canister(backend_id, BACKEND_WASM.to_vec(), encode_one(()).unwrap(), Some(admin));
+    pic.install_canister(
+        backend_id,
+        BACKEND_WASM.to_vec(),
+        encode_one(()).unwrap(),
+        Some(admin),
+    );
 
     let hnsw_id = pic.create_canister_with_settings(Some(admin), None);
     pic.add_cycles(hnsw_id, 30_000_000_000_000);
-    pic.install_canister(hnsw_id, HNSW_WASM.to_vec(), encode_one(()).unwrap(), Some(admin));
+    pic.install_canister(
+        hnsw_id,
+        HNSW_WASM.to_vec(),
+        encode_one(()).unwrap(),
+        Some(admin),
+    );
 
     // Mock LLM/release server, started early - the release_download_url
     // published below needs to point at it.
@@ -464,7 +532,15 @@ fn setup_marketplace_with_ic_sql_item() -> MarketplaceSetup {
     let release_url = format!("{mock_base_url}/release/ic-sql.wasm");
     let item_id = publish_ic_sql_item(&pic, backend_id, admin, publisher, &release_url);
 
-    MarketplaceSetup { pic, admin, backend_id, hnsw_id, item_id, mock_base_url, completions }
+    MarketplaceSetup {
+        pic,
+        admin,
+        backend_id,
+        hnsw_id,
+        item_id,
+        mock_base_url,
+        completions,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -473,7 +549,15 @@ fn setup_marketplace_with_ic_sql_item() -> MarketplaceSetup {
 
 #[test]
 fn deepseek_agent_finds_and_deploys_the_published_ic_sql_marketplace_item() {
-    let MarketplaceSetup { mut pic, admin, backend_id, hnsw_id, item_id, mock_base_url, completions } = setup_marketplace_with_ic_sql_item();
+    let MarketplaceSetup {
+        mut pic,
+        admin,
+        backend_id,
+        hnsw_id,
+        item_id,
+        mock_base_url,
+        completions,
+    } = setup_marketplace_with_ic_sql_item();
 
     // Go live: PocketIC's HTTP gateway is what the real orchestrator router
     // (driven purely over HTTP from here on) will treat as its local
@@ -489,14 +573,25 @@ fn deepseek_agent_finds_and_deploys_the_published_ic_sql_marketplace_item() {
         queue.push_back(assistant_text(
             r#"{"summary": "A small SQL database canister - execute/query run SQL directly.", "keywords": ["sql", "database", "query"]}"#,
         ));
-        queue.push_back(assistant_tool_call("call_1", "search_marketplace", &json!({ "query": "a canister that acts as a simple SQL database" })));
-        queue.push_back(assistant_tool_call("call_2", "deploy_marketplace_item", &json!({ "item_id": item_id })));
-        queue.push_back(assistant_text("Found a matching marketplace item (ic-sql) and deployed it."));
+        queue.push_back(assistant_tool_call(
+            "call_1",
+            "search_marketplace",
+            &json!({ "query": "a canister that acts as a simple SQL database" }),
+        ));
+        queue.push_back(assistant_tool_call(
+            "call_2",
+            "deploy_marketplace_item",
+            &json!({ "item_id": item_id }),
+        ));
+        queue.push_back(assistant_text(
+            "Found a matching marketplace item (ic-sql) and deployed it.",
+        ));
     }
 
     // 6. Start the real orchestrator router against the live PocketIC
     //    gateway and the mock LLM server.
-    let workspace_root = std::env::temp_dir().join(format!("orchestrator-e2e-test-{}", uuid::Uuid::new_v4()));
+    let workspace_root =
+        std::env::temp_dir().join(format!("orchestrator-e2e-test-{}", uuid::Uuid::new_v4()));
     let orchestrator = start_orchestrator(
         &ic_url,
         backend_id,
@@ -524,7 +619,10 @@ fn deepseek_agent_finds_and_deploys_the_published_ic_sql_marketplace_item() {
         .expect("POST /index_marketplace_item failed")
         .json()
         .expect("bad JSON from /index_marketplace_item");
-    assert_eq!(index_response["success"], true, "indexing failed: {index_response}");
+    assert_eq!(
+        index_response["success"], true,
+        "indexing failed: {index_response}"
+    );
 
     // 8. Ask the top-level agent - a real request over HTTP - for something
     //    only `ic-sql` should satisfy.
@@ -535,7 +633,10 @@ fn deepseek_agent_finds_and_deploys_the_published_ic_sql_marketplace_item() {
         .expect("POST /orchestrate failed")
         .json()
         .expect("bad JSON from /orchestrate");
-    let job_id = orchestrate_response["job_id"].as_str().expect("no job_id in /orchestrate's response").to_string();
+    let job_id = orchestrate_response["job_id"]
+        .as_str()
+        .expect("no job_id in /orchestrate's response")
+        .to_string();
 
     // 9. Poll the real in-process `JobStore` (see `poll_job`'s own doc
     //    comment) until it finishes, and confirm it actually found +
@@ -546,23 +647,43 @@ fn deepseek_agent_finds_and_deploys_the_published_ic_sql_marketplace_item() {
     //    `deploy_marketplace_item_tool`'s own success path - see
     //    `llm/tools.rs`) is this test's proof of that.
     let job = poll_job(&orchestrator.jobs, &job_id, Duration::from_secs(30));
-    assert_eq!(job.state, JobState::Succeeded, "job did not succeed: {job:?}");
+    assert_eq!(
+        job.state,
+        JobState::Succeeded,
+        "job did not succeed: {job:?}"
+    );
     let final_message = job.final_message.as_deref().unwrap_or_default();
-    assert!(final_message.contains("Deployed marketplace item"), "expected a deploy_marketplace_item-shaped final_message: {final_message:?}");
+    assert!(
+        final_message.contains("Deployed marketplace item"),
+        "expected a deploy_marketplace_item-shaped final_message: {final_message:?}"
+    );
     // `deploy_marketplace_item` sets the legacy single-canister `canister_id`
     // field, not `canisters` (that map is only ever populated by the
     // building-block/`write_and_compile_project` flow - see `Job::canister_id`'s
     // own doc comment).
-    let deployed_id = Principal::from_text(job.canister_id.as_deref().expect("no canister_id recorded on the job")).unwrap();
+    let deployed_id = Principal::from_text(
+        job.canister_id
+            .as_deref()
+            .expect("no canister_id recorded on the job"),
+    )
+    .unwrap();
 
     // 10. Prove the deployed canister is genuinely `ic-sql`, not just "some
     //     canister id was returned" - call its own `execute` method for
     //     real, directly via PocketIC.
-    let (result,): (Result<QueryResultMirror, String>,) = update_candid_as(&pic, deployed_id, admin, "execute", ("CREATE TABLE t (id INT)".to_string(),)).unwrap();
+    let (result,): (Result<QueryResultMirror, String>,) = update_candid_as(
+        &pic,
+        deployed_id,
+        admin,
+        "execute",
+        ("CREATE TABLE t (id INT)".to_string(),),
+    )
+    .unwrap();
     let result = result.expect("the deployed canister doesn't behave like ic-sql (execute failed)");
     assert_eq!(result.message, "Table 't' created successfully");
 
-    let (tables,): (Vec<String>,) = query_candid_as(&pic, deployed_id, admin, "list_tables", ()).unwrap();
+    let (tables,): (Vec<String>,) =
+        query_candid_as(&pic, deployed_id, admin, "list_tables", ()).unwrap();
     assert_eq!(tables, vec!["t".to_string()]);
 }
 
@@ -577,7 +698,14 @@ fn deepseek_agent_finds_and_deploys_the_published_ic_sql_marketplace_item() {
 
 #[test]
 fn a_final_answer_with_no_canisters_deployed_is_recorded_as_a_failure_not_a_false_success() {
-    let MarketplaceSetup { mut pic, backend_id, hnsw_id, mock_base_url, completions, .. } = setup_marketplace_with_ic_sql_item();
+    let MarketplaceSetup {
+        mut pic,
+        backend_id,
+        hnsw_id,
+        mock_base_url,
+        completions,
+        ..
+    } = setup_marketplace_with_ic_sql_item();
     let ic_url = pic.make_live(None).to_string();
     let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -592,7 +720,8 @@ fn a_final_answer_with_no_canisters_deployed_is_recorded_as_a_failure_not_a_fals
         ));
     }
 
-    let workspace_root = std::env::temp_dir().join(format!("orchestrator-e2e-test-{}", uuid::Uuid::new_v4()));
+    let workspace_root =
+        std::env::temp_dir().join(format!("orchestrator-e2e-test-{}", uuid::Uuid::new_v4()));
     let orchestrator = start_orchestrator(
         &ic_url,
         backend_id,
@@ -617,13 +746,23 @@ fn a_final_answer_with_no_canisters_deployed_is_recorded_as_a_failure_not_a_fals
         .expect("POST /orchestrate failed")
         .json()
         .expect("bad JSON from /orchestrate");
-    let job_id = orchestrate_response["job_id"].as_str().expect("no job_id in /orchestrate's response").to_string();
+    let job_id = orchestrate_response["job_id"]
+        .as_str()
+        .expect("no job_id in /orchestrate's response")
+        .to_string();
 
     let job = poll_job(&orchestrator.jobs, &job_id, Duration::from_secs(30));
-    assert_eq!(job.state, JobState::Failed, "a zero-canister finish must not be recorded as Succeeded: {job:?}");
+    assert_eq!(
+        job.state,
+        JobState::Failed,
+        "a zero-canister finish must not be recorded as Succeeded: {job:?}"
+    );
     assert!(job.canisters.is_empty());
     let error = job.error.as_deref().unwrap_or_default();
-    assert!(error.contains("without deploying any canister"), "expected the real pipeline::run error message, got: {error:?}");
+    assert!(
+        error.contains("without deploying any canister"),
+        "expected the real pipeline::run error message, got: {error:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -664,7 +803,15 @@ fn a_final_answer_with_no_canisters_deployed_is_recorded_as_a_failure_not_a_fals
 /// models are verified either way (`qwen2.5-coder:7b`/`llama3.1:8b` need
 /// it; `qwen3`/`qwen3.5` don't).
 fn run_real_ollama_scenario(model: &str, shim_enabled: bool) {
-    let MarketplaceSetup { mut pic, admin, backend_id, hnsw_id, item_id, mock_base_url, .. } = setup_marketplace_with_ic_sql_item();
+    let MarketplaceSetup {
+        mut pic,
+        admin,
+        backend_id,
+        hnsw_id,
+        item_id,
+        mock_base_url,
+        ..
+    } = setup_marketplace_with_ic_sql_item();
 
     let ic_url = pic.make_live(None).to_string();
     let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -674,7 +821,10 @@ fn run_real_ollama_scenario(model: &str, shim_enabled: bool) {
     // `OLLAMA_API_BASE_URL`, defaulting to the real `localhost:11434`,
     // entirely independent of `OPENAI_BASE_URL` below). Only embeddings are
     // redirected to the mock.
-    let workspace_root = std::env::temp_dir().join(format!("orchestrator-e2e-ollama-test-{}", uuid::Uuid::new_v4()));
+    let workspace_root = std::env::temp_dir().join(format!(
+        "orchestrator-e2e-ollama-test-{}",
+        uuid::Uuid::new_v4()
+    ));
     let orchestrator = start_orchestrator(
         &ic_url,
         backend_id,
@@ -683,7 +833,10 @@ fn run_real_ollama_scenario(model: &str, shim_enabled: bool) {
         "ollama",
         Some(model),
         shim_enabled,
-        &[("OPENAI_API_KEY", "mock-key"), ("OPENAI_BASE_URL", &mock_base_url)],
+        &[
+            ("OPENAI_API_KEY", "mock-key"),
+            ("OPENAI_BASE_URL", &mock_base_url),
+        ],
     );
     // Not `Client::new()`: reqwest 0.13 defaults every connection to a 30s
     // `TCP_USER_TIMEOUT`, which a real model's genuinely-slow response
@@ -691,7 +844,10 @@ fn run_real_ollama_scenario(model: &str, shim_enabled: bool) {
     // through, killing the connection out from under a request the server
     // is still legitimately working on. Disabled here - not something the
     // mocked test above ever approaches, so it doesn't need this.
-    let client = reqwest::blocking::Client::builder().tcp_user_timeout(None).build().unwrap();
+    let client = reqwest::blocking::Client::builder()
+        .tcp_user_timeout(None)
+        .build()
+        .unwrap();
 
     // Indexing also goes through the configured LLM_PROVIDER (the
     // summarizer step) - so this, too, is a real local-model call, not just
@@ -703,7 +859,10 @@ fn run_real_ollama_scenario(model: &str, shim_enabled: bool) {
         .expect("POST /index_marketplace_item failed")
         .json()
         .expect("bad JSON from /index_marketplace_item");
-    assert_eq!(index_response["success"], true, "indexing failed: {index_response}");
+    assert_eq!(
+        index_response["success"], true,
+        "indexing failed: {index_response}"
+    );
 
     let orchestrate_response: Value = client
         .post(format!("{}/orchestrate", orchestrator.base_url))
@@ -712,22 +871,45 @@ fn run_real_ollama_scenario(model: &str, shim_enabled: bool) {
         .expect("POST /orchestrate failed")
         .json()
         .expect("bad JSON from /orchestrate");
-    let job_id = orchestrate_response["job_id"].as_str().expect("no job_id in /orchestrate's response").to_string();
+    let job_id = orchestrate_response["job_id"]
+        .as_str()
+        .expect("no job_id in /orchestrate's response")
+        .to_string();
 
     // Real inference on CPU-only local hardware is slow across several
     // tool-calling turns - a generous timeout, not a tight one.
     let job = poll_job(&orchestrator.jobs, &job_id, Duration::from_secs(300));
     eprintln!("job:\n{job:#?}");
-    assert_eq!(job.state, JobState::Succeeded, "job did not succeed: {job:?}");
+    assert_eq!(
+        job.state,
+        JobState::Succeeded,
+        "job did not succeed: {job:?}"
+    );
     let final_message = job.final_message.as_deref().unwrap_or_default();
-    assert!(final_message.contains("Deployed marketplace item"), "expected a deploy_marketplace_item-shaped final_message: {final_message:?}");
-    let deployed_id = Principal::from_text(job.canister_id.as_deref().expect("no canister_id recorded on the job")).unwrap();
+    assert!(
+        final_message.contains("Deployed marketplace item"),
+        "expected a deploy_marketplace_item-shaped final_message: {final_message:?}"
+    );
+    let deployed_id = Principal::from_text(
+        job.canister_id
+            .as_deref()
+            .expect("no canister_id recorded on the job"),
+    )
+    .unwrap();
 
-    let (result,): (Result<QueryResultMirror, String>,) = update_candid_as(&pic, deployed_id, admin, "execute", ("CREATE TABLE t (id INT)".to_string(),)).unwrap();
+    let (result,): (Result<QueryResultMirror, String>,) = update_candid_as(
+        &pic,
+        deployed_id,
+        admin,
+        "execute",
+        ("CREATE TABLE t (id INT)".to_string(),),
+    )
+    .unwrap();
     let result = result.expect("the deployed canister doesn't behave like ic-sql (execute failed)");
     assert_eq!(result.message, "Table 't' created successfully");
 
-    let (tables,): (Vec<String>,) = query_candid_as(&pic, deployed_id, admin, "list_tables", ()).unwrap();
+    let (tables,): (Vec<String>,) =
+        query_candid_as(&pic, deployed_id, admin, "list_tables", ()).unwrap();
     assert_eq!(tables, vec!["t".to_string()]);
 }
 

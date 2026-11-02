@@ -13,7 +13,7 @@ const Auth = lazy(() => import("@/pages/Auth"));
 const AuthDetail = lazy(() => import("@/pages/AuthDetail"));
 const Storage = lazy(() => import("@/pages/Storage"));
 const StorageDetail = lazy(() => import("@/pages/StorageDetail"));
-const DatabasePage = lazy(() => import("@/pages/Database"));
+// const DatabasePage = lazy(() => import("@/pages/Database"));
 const CanisterSettings = lazy(() => import("@/pages/CanisterSettings"));
 const CanisterViewData = lazy(() => import("@/pages/CanisterViewData"));
 const Analytics = lazy(() => import("@/pages/Analytics"));
@@ -26,6 +26,7 @@ const ProductInstall = lazy(() => import("@/pages/ProductInstall"));
 const PublisherSetup = lazy(() => import("@/pages/PublisherSetup"));
 // const Orchestrate = lazy(() => import("@/pages/Orchestrate"));
 const Runtime = lazy(() => import("@/pages/Runtime"));
+const NotFound = lazy(() => import("@/pages/NotFound"));
 const TemplateInstall = lazy(() => import("@/pages/TemplateInstall"));
 
 function Fallback() {
@@ -54,7 +55,7 @@ export default function App() {
             <Route path="auth/:canisterId" element={<AuthDetail />} />
             <Route path="storage" element={<Storage />} />
             <Route path="storage/:canisterId" element={<StorageDetail />} />
-            <Route path="database" element={<DatabasePage />} />
+            {/* <Route path="database" element={<DatabasePage />} /> */}
             <Route path="canister/:canisterId/settings" element={<CanisterSettings />} />
             <Route path="canister/:canisterId/view-data" element={<CanisterViewData />} />
             <Route path="analytics" element={<Analytics />} />
@@ -74,7 +75,9 @@ export default function App() {
                 the remaining "Ask AI" buttons to Overview instead of a blank page. */}
             <Route path="orchestrate" element={<Navigate to="../overview" replace />} />
             <Route path="runtime" element={<Runtime />} />
+            <Route path="*" element={<NotFound />} />
           </Route>
+          <Route path="*" element={<NotFound />} />
         </Routes>
       </Suspense>
     </Router>

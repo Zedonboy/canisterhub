@@ -63,13 +63,23 @@ impl GithubConnectState {
     /// out anything already past `PENDING_TTL`, bounding memory to roughly
     /// "attempts started in the last ten minutes" rather than growing
     /// forever.
-    pub fn start(&self, dashboard_principal: Principal, publisher: Principal, git_repo_url: String) -> String {
+    pub fn start(
+        &self,
+        dashboard_principal: Principal,
+        publisher: Principal,
+        git_repo_url: String,
+    ) -> String {
         let state_token = uuid::Uuid::new_v4().to_string();
         let mut pending = self.0.lock().unwrap();
         pending.retain(|_, p| p.created_at.elapsed() < PENDING_TTL);
         pending.insert(
             state_token.clone(),
-            PendingConnect { dashboard_principal, publisher, git_repo_url, created_at: Instant::now() },
+            PendingConnect {
+                dashboard_principal,
+                publisher,
+                git_repo_url,
+                created_at: Instant::now(),
+            },
         );
         state_token
     }
@@ -113,7 +123,11 @@ fn parse_github_owner_repo(git_repo_url: &str) -> anyhow::Result<(String, String
 /// read a public repo's collaborator permissions - this flow has no reason
 /// to ask for private-repo access, since every marketplace release is a
 /// public GitHub Release asset anyway (see `validate_manifest_download_url`).
-pub fn authorize_url(config: &Config, git_repo_url: &str, state_token: &str) -> anyhow::Result<String> {
+pub fn authorize_url(
+    config: &Config,
+    git_repo_url: &str,
+    state_token: &str,
+) -> anyhow::Result<String> {
     parse_github_owner_repo(git_repo_url)?; // fail fast on a malformed repo URL, before sending the user to GitHub at all
     let client_id = config
         .github_oauth_client_id
@@ -129,7 +143,10 @@ pub fn authorize_url(config: &Config, git_repo_url: &str, state_token: &str) -> 
         .append_pair("client_id", client_id)
         .append_pair("scope", "public_repo")
         .append_pair("state", state_token)
-        .append_pair("redirect_uri", &format!("{base_url}/github/connect/callback"));
+        .append_pair(
+            "redirect_uri",
+            &format!("{base_url}/github/connect/callback"),
+        );
     Ok(url.to_string())
 }
 
@@ -164,7 +181,10 @@ pub async fn exchange_code_for_token(config: &Config, code: &str) -> anyhow::Res
             ("client_id", client_id),
             ("client_secret", client_secret),
             ("code", code),
-            ("redirect_uri", &format!("{base_url}/github/connect/callback")),
+            (
+                "redirect_uri",
+                &format!("{base_url}/github/connect/callback"),
+            ),
         ])
         .send()
         .await?
@@ -173,7 +193,9 @@ pub async fn exchange_code_for_token(config: &Config, code: &str) -> anyhow::Res
     body.access_token.ok_or_else(|| {
         anyhow::anyhow!(
             "GitHub token exchange failed: {}",
-            body.error_description.or(body.error).unwrap_or_else(|| "unknown error".to_string())
+            body.error_description
+                .or(body.error)
+                .unwrap_or_else(|| "unknown error".to_string())
         )
     })
 }
@@ -194,7 +216,10 @@ struct RepoResponse {
 /// repository's settings" (an org repo's non-admin collaborator, e.g., does
 /// not qualify), which is the right proxy for "may claim this repo as a
 /// marketplace publisher".
-pub async fn verify_repo_admin_access(access_token: &str, git_repo_url: &str) -> anyhow::Result<bool> {
+pub async fn verify_repo_admin_access(
+    access_token: &str,
+    git_repo_url: &str,
+) -> anyhow::Result<bool> {
     let (owner, repo) = parse_github_owner_repo(git_repo_url)?;
     let response = reqwest::Client::new()
         .get(format!("https://api.github.com/repos/{owner}/{repo}"))

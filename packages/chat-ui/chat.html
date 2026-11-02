@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a0e1a" />
+    <script>
+      // Resolve the theme before first paint (keep in sync with src/lib/theme.ts).
+      (function () {
+        var p = "system";
+        try { p = localStorage.getItem("chat-theme") || "system"; } catch (e) {}
+        var light = p === "light" || (p !== "dark" && matchMedia("(prefers-color-scheme: light)").matches);
+        document.documentElement.dataset.theme = light ? "light" : "dark";
+        document.querySelector('meta[name="theme-color"]').setAttribute("content", light ? "#f8fafc" : "#0a0e1a");
+      })();
+    </script>
+    <meta name="description" content="Chat with our team and assistant: ask a question, check on an order or get help. Sign in securely with Internet Identity - no password or email needed." />
+    <meta name="robots" content="index, follow" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Chat with us" />
+    <meta property="og:title" content="Chat with us" />
+    <meta property="og:description" content="Chat with our team and assistant: ask a question, check on an order or get help. Sign in securely with Internet Identity - no password or email needed." />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Chat with us" />
+    <meta name="twitter:description" content="Chat with our team and assistant: ask a question, check on an order or get help. Sign in securely with Internet Identity - no password or email needed." />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon-192.png" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
+    <title>Chat with us</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/web/main.tsx"></script>
+  </body>
+</html>

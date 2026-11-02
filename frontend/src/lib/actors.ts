@@ -18,9 +18,10 @@ import { idlFactory as agentCanisterIdlFactory, type AgentService } from "./cand
 import { connectorIdlFactory, agentIdlFactory, llmContextIdlFactory, type ConnectorStats, type AgentStats } from "./candid/buildingBlock";
 import { idlFactory as moduleConfigIdlFactory, type ModuleConfigService } from "./candid/moduleConfig";
 import { idlFactory as canisterMetadataIdlFactory, type CanisterMetadataService } from "./candid/canisterMetadata";
+import { idlFactory as notificationIdlFactory, type NotificationService } from "./candid/notification";
 
 export type MarketplaceService = BackendService;
-export type { BackendService, IcSqlService, AuthService, ConnectorService, AgentService, ConnectorStats, AgentStats, ModuleConfigService, CanisterMetadataService };
+export type { BackendService, IcSqlService, AuthService, ConnectorService, AgentService, ConnectorStats, AgentStats, ModuleConfigService, CanisterMetadataService, NotificationService };
 
 /** `backend`'s own canister id - required, no sane default (unlike the IC
  * host, this differs per deployment, not per network) - see
@@ -112,6 +113,11 @@ export async function getAgentCanisterActor(canisterId: Principal | string, netw
 export async function getModuleConfigActor(canisterId: Principal | string, network: string): Promise<ModuleConfigService> {
   const agent = await getAgent(network);
   return Actor.createActor<ModuleConfigService>(moduleConfigIdlFactory, { agent, canisterId });
+}
+
+export async function getNotificationActor(canisterId: Principal | string, network: string): Promise<NotificationService> {
+  const agent = await getAgent(network);
+  return Actor.createActor<NotificationService>(notificationIdlFactory, { agent, canisterId });
 }
 
 /** `canister-hub-sdk`'s `ic::metadata` surface (see

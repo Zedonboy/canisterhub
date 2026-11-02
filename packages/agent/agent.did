@@ -41,18 +41,44 @@ type AgentStats = record {
   messages_in : nat64;
   prompt_tokens : nat64;
 };
+type AiCanister = record {
+  methods : vec AiMethod;
+  canister_id : principal;
+  description : text;
+};
+type AiMethod = record { name : text; parameters : text; description : text };
+type AuthResult = variant {
+  Fail;
+  None;
+  Pass;
+  TempError;
+  SoftFail;
+  PermError;
+  Neutral;
+};
+type CanisterLink = record { url : text; kind : LinkKind; label : text };
+type CanisterType = variant { Storage; Auth; Database; Custom };
 // Matches `connector`'s `Channel` type field-for-field (candid matches by
 // shape, not by the two crates sharing a Rust type - see
 // `IncomingMessage`'s doc comment).
-type Channel = variant { Email; WhatsApp; Telegram };
+type Channel = variant {
+  // Customers chatting on the canister's own web page (`chat-ui`), signed
+  // in with Internet Identity: `session_id` is the caller's principal text.
+  // Also hosts the SME's private agent console (`CONSOLE_SESSION`). Replies
+  // are stored in history only - there is nothing to deliver outbound.
+  Web;
+  Email;
+  WhatsApp;
+  Telegram;
+};
 type Config = record {
-  // The `ic-sql` canister (`packages/ic-sql`) this deployment's
-  // `query_database` tool reads from, if any - see `db.rs` and
-  // `tools.rs::QueryDatabaseTool`. Unset = the tool is still registered
-  // (so the model can attempt it and get a clear error) but every call
-  // fails immediately rather than reaching for a canister id that isn't
-  // there.
-  ic_sql_canister_id : opt principal;
+  // Project registry key used when this package calls protocol APIs.
+  project_id : opt text;
+  // Optional override for the compiled CanisterHub protocol principal.
+  // Dynamic config exposes the compiled principal as this field's default.
+  protocol_id : opt principal;
+  telegram_secret_token : opt text;
+  mail_bridge_api_key : opt text;
   // Base URL an administrative system's callback listens on -
   // `request_admin_action`-triggered requests are POSTed to
   // `<this>/admin/requests` (see `admin.rs`). Unset = administrative
@@ -65,6 +91,9 @@ type Config = record {
   // (see `llm_context.md`'s "Writing a good system prompt" section). If
   // unset, a generic fallback is used (see `llm::default_system_prompt`).
   system_prompt : opt text;
+  mail_bridge_url : opt text;
+  whatsapp_access_token : opt text;
+  whatsapp_verify_token : opt text;
   // Shared HMAC-SHA256 key used both directions: signing this
   // canister's outbound request to `admin_webhook_url` (so the receiving
   // system can verify it really came from here), and verifying the
@@ -74,52 +103,107 @@ type Config = record {
   // into two independent keys is a straightforward hardening step for a
   // production deployment - see README.md's "Hardening ideas".
   admin_webhook_secret : opt text;
-  // Which LLM provider to call - one of `"openai"` (default),
-  // `"anthropic"`, `"gemini"`, `"deepseek"` (each makes its own HTTPS
-  // outcall directly to that provider's API, and needs `llm_api_key`),
-  // or `"platform"` (the real on-chain LLM canister via `ic_llm` - no API
-  // key, but only DFINITY's own hosted models and that canister's own
-  // prompt/token/message caps) - see `llm.rs`'s doc comment for the full
-  // tradeoff.
+  // `managed` routes through CanisterHub's backend and selects IC LLM or
+  // DeepSeek from `llm_model`. `openai`, `anthropic`, and `deepseek` call
+  // the provider directly with the SME's own `llm_api_key`. Legacy
+  // `managed_ic_llm`, `managed_deepseek`, `platform`, and `gemini` values
+  // remain accepted.
   llm_provider : opt text;
+  whatsapp_app_secret : opt text;
   // Upper bound on how many LLM <-> tool round trips one incoming
   // message may cause before this canister gives up and escalates to a
   // human (see `llm::run_agent_loop`) - bounds cycle spend and stable
   // storage growth from a model that won't stop calling tools. Defaults
   // to `DEFAULT_MAX_TOOL_ITERATIONS` if unset.
   max_tool_iterations : opt nat8;
-  // API key for whichever HTTPS `llm_provider` is configured - not used
-  // at all for `"platform"` (see that variant's own doc comment above).
-  // Required for every other provider: `receive_message` returns an
-  // error (which becomes an `request_admin_action`-style escalation -
-  // see `llm::run_agent_loop`) if this is unset.
+  // API key for a direct/BYOK provider. Never sent to CanisterHub's
+  // backend and ignored for managed providers.
   llm_api_key : opt text;
-  // The principal allowed to call `receive_message` - `connector`'s own
-  // identity. Every inbound customer message arrives this way; nothing
-  // else should be able to inject one.
-  connector_principal : opt principal;
+  whatsapp_phone_number_id : opt text;
+  mail_bridge_principal : opt principal;
+  telegram_bot_token : opt text;
   // Provider-specific model id (e.g. `"gpt-5.6-sol"`, `"claude-sonnet-5"`,
-  // `"gemini-3.1-pro-preview"`, `"deepseek-v4-pro"`, or - for `"platform"` -
+  // `"gemini-3.1-pro-preview"`, `"deepseek-v4-pro"`, or - for `"managed"` -
   // `"llama3.1:8b"`/`"qwen3:32b"`/`"llama4-scout"`/`"qwen2.5:0.5b"`
   // (free) / `"gemma3:27b"`/`"z-ai:glm-5.2"` (paid, drawn from this
   // canister's own cycles balance)) - defaults to that provider's
   // flagship model if unset (see `llm::default_model_for`).
   llm_model : opt text;
+  mail_from_address : opt text;
+};
+type ConfigFieldSchema = record {
+  key : text;
+  is_readonly : opt bool;
+  is_required : bool;
+  field_type : ConfigType;
+  group_description : opt text;
+  description : text;
+  label : text;
+  group : opt text;
+  group_label : opt text;
+  canister_type : opt CanisterType;
+  default_value : opt ConfigValue;
+};
+type ConfigType = variant {
+  Text;
+  TextArea;
+  CanisterPicker : record { module_type_filter : opt text };
+  Boolean;
+  Float;
+  SecretText;
+  Select : record { options : vec text };
+  Vector : record { element_type : ConfigVectorType };
+  Number;
 };
 // `update_config`'s argument - see `Config`'s doc comment. Semantics
 // (three states per field) are identical to `connector`'s `ConfigUpdate`;
 // see that type's doc comment for the full explanation.
 type ConfigUpdate = record {
-  ic_sql_canister_id : opt opt principal;
+  project_id : opt opt text;
+  protocol_id : opt opt principal;
+  telegram_secret_token : opt opt text;
+  mail_bridge_api_key : opt opt text;
   admin_webhook_url : opt opt text;
   system_prompt : opt opt text;
+  mail_bridge_url : opt opt text;
+  whatsapp_access_token : opt opt text;
+  whatsapp_verify_token : opt opt text;
   admin_webhook_secret : opt opt text;
   llm_provider : opt opt text;
+  whatsapp_app_secret : opt opt text;
   max_tool_iterations : opt opt nat8;
   llm_api_key : opt opt text;
-  connector_principal : opt opt principal;
+  whatsapp_phone_number_id : opt opt text;
+  mail_bridge_principal : opt opt principal;
+  telegram_bot_token : opt opt text;
   llm_model : opt opt text;
+  mail_from_address : opt opt text;
 };
+type ConfigValue = variant {
+  Text : text;
+  Boolean : bool;
+  Float : float64;
+  Vector : vec ConfigVectorValue;
+  PrincipalId : principal;
+  Number : int64;
+};
+type ConfigVectorType = variant {
+  Text;
+  CanisterPicker : record { module_type_filter : opt text };
+  Boolean;
+  Float;
+  SecretText;
+  Select : record { options : vec text };
+  Number;
+};
+type ConfigVectorValue = variant {
+  Text : text;
+  Boolean : bool;
+  Float : float64;
+  PrincipalId : principal;
+  Number : int64;
+};
+type ConversationState = record { history : vec StoredChatMessage };
 // One customer's conversation. Deliberately holds only *finished* turns
 // (one `User` message, one final `Assistant` reply) - the back-and-forth of
 // an in-progress tool-calling round (`ic_rig::Agent::chat` handles this
@@ -131,7 +215,18 @@ type ConfigUpdate = record {
 // `state::MAX_HISTORY_MESSAGES` (oldest turns dropped first) to bound
 // stable memory growth and keep the prompt sent to the model on each turn
 // from growing unbounded.
-type ConversationState = record { history : vec StoredChatMessage };
+// One row of the SME inbox (`list_conversations`): where the conversation is
+// from, and its latest turn.
+type ConversationSummary = record {
+  session_id : text;
+  // A friendlier label than `session_id` when one is known (none stored yet).
+  display_name : opt text;
+  message_count : nat64;
+  last_role : Role;
+  last_text : text;
+  channel : Channel;
+  last_at : nat64;
+};
 type HttpRequest = record {
   url : text;
   method : text;
@@ -156,22 +251,96 @@ type IncomingMessage = record {
   "text" : text;
   channel : Channel;
 };
-type Result = variant { Ok : opt AdminRequest; Err : text };
-type Result_1 = variant { Ok : Config; Err : text };
-type Result_2 = variant { Ok : ConversationState; Err : text };
-type Result_3 = variant { Ok : vec AdminRequest; Err : text };
-type Result_4 = variant { Ok; Err : text };
-type Role = variant { User; Assistant };
+type LinkKind = variant { Public; Admin };
+type MailMessage = record {
+  to : vec text;
+  spf : AuthResult;
+  tls : bool;
+  received_at : nat64;
+  subject : text;
+  dkim : AuthResult;
+  from : text;
+  envelope_from : text;
+  headers : vec record { text; text };
+  html_body : opt text;
+  dmarc : AuthResult;
+  envelope_to : vec text;
+  text_body : opt text;
+};
+type MessagePayload = variant {
+  Mail : MailMessage;
+  WhatsApp : WhatsAppMessage;
+  Telegram : TelegramMessage;
+};
+type OutboundMessage = record {
+  session_id : text;
+  subject : opt text;
+  "text" : text;
+  channel : Channel;
+};
+type Result = variant { Ok : AiCanister; Err : text };
+type Result_1 = variant { Ok : text; Err : text };
+type Result_10 = variant { Ok; Err : text };
+type Result_11 = variant { Ok : vec StoredChatMessage; Err : text };
+type Result_2 = variant { Ok : opt AdminRequest; Err : text };
+type Result_3 = variant { Ok : ConversationState; Err : text };
+type Result_4 = variant { Ok : opt StoredMessage; Err : text };
+type Result_5 = variant { Ok : Config; Err : text };
+type Result_6 = variant { Ok : vec AdminRequest; Err : text };
+type Result_7 = variant { Ok : vec AiCanister; Err : text };
+type Result_8 = variant { Ok : vec ConversationSummary; Err : text };
+type Result_9 = variant { Ok : vec StoredMessage; Err : text };
+type Role = variant {
+  // A reply typed by the business owner/staff (`operator_reply`) rather
+  // than the model.
+  Operator;
+  User;
+  Assistant;
+};
 type StoredChatMessage = record {
   // Nanoseconds since the Unix epoch (`ic_cdk::api::time()`'s convention).
   at : nat64;
   content : text;
   role : Role;
 };
-service : (Config) -> {
-  get_admin_request : (nat64) -> (Result) query;
-  get_config : () -> (Result_1) query;
-  get_conversation : (Channel, text) -> (Result_2) query;
+type StoredMessage = record {
+  id : nat64;
+  received_at : nat64;
+  payload : MessagePayload;
+};
+type TelegramMessage = record {
+  raw : text;
+  from_username : opt text;
+  date : opt int64;
+  "text" : opt text;
+  from_user_id : opt int64;
+  update_id : int64;
+  chat_id : int64;
+  message_id : opt int64;
+};
+type WhatsAppMessage = record {
+  to : opt text;
+  raw : text;
+  from : text;
+  "text" : opt text;
+  timestamp : opt text;
+  message_type : text;
+  message_id : text;
+};
+service : (opt Config) -> {
+  add_canister : (principal) -> (Result);
+  // The SME talks to the agent itself. Runs the normal agent loop under the
+  // reserved console session and returns the reply; nothing is sent to any
+  // customer. The SME's own turns are stored as `User`.
+  console_message : (text) -> (Result_1);
+  get_admin_request : (nat64) -> (Result_2) query;
+  get_config : () -> (vec record { text; ConfigValue }) query;
+  get_config_schema : () -> (vec ConfigFieldSchema) query;
+  get_connector_stats : () -> (nat64) query;
+  get_conversation : (Channel, text) -> (Result_3) query;
+  get_links : () -> (vec CanisterLink) query;
+  get_message : (nat64) -> (Result_4) query;
+  get_runtime_config : () -> (Result_5) query;
   get_stats : () -> (AgentStats) query;
   // First stop for every inbound HTTP request (a query call - see
   // `connector/src/http.rs`'s doc comment for the full explanation of the
@@ -182,24 +351,43 @@ service : (Config) -> {
   http_request : (HttpRequest) -> (HttpResponse) query;
   // Verifies and applies an administrative resolution (see
   // `admin::handle_callback`), then relays its `result_message` to the
-  // customer via `connector::send_message` - independent of, and without
-  // re-invoking, the LLM (see `admin.rs`'s doc comment on `handle_callback`
-  // for why).
+  // customer through this canister's outbound channel implementation,
+  // independently of and without re-invoking the LLM.
   http_request_update : (HttpRequest) -> (HttpResponse);
   // Newest-first, paginated via `offset`/`limit`.
-  list_admin_requests : (nat64, nat64) -> (Result_3) query;
+  list_admin_requests : (nat64, nat64) -> (Result_6) query;
+  list_canisters : () -> (Result_7) query;
+  // SME inbox: all customer conversations across channels, newest first
+  // (the private agent console is excluded).
+  list_conversations : (nat64, nat64) -> (Result_8) query;
+  list_messages : (nat64, nat64) -> (Result_9) query;
   // A prose description of this canister for an AI agent (or a human
   // implementer) to consume - what this template does, its security model,
   // and step by step how to adapt it for a specific business. Open to any
-  // caller, same reasoning as `connector::llm_context`: nothing sensitive in
-  // a description of the canister's own shape, and it needs to be readable
-  // before anyone has credentials to call anything else here.
+  // caller: it contains no secrets and is discoverable before authentication.
   llm_context : () -> (text) query;
-  // Accepts one inbound customer message forwarded by `connector`, runs it
-  // through the LLM/tool-calling loop, persists the resulting turn, and
-  // relays the reply back out via `connector::send_message`. See this
-  // module's doc comment for the full flow and `llm::run_agent_loop` for the
-  // loop itself.
-  receive_message : (IncomingMessage) -> (Result_4);
-  update_config : (ConfigUpdate) -> (Result_4);
+  // The business owner replies to a customer as themselves: delivered over the
+  // conversation's own channel (nothing to deliver for `Web`), then recorded as
+  // an `Operator` turn so it appears in the transcript and the agent knows a
+  // human spoke.
+  operator_reply : (Channel, text, text) -> (Result_10);
+  receive_mail : (MailMessage) -> (Result_10);
+  // Runs one controller-submitted message through the same path used by the
+  // channel webhooks. Real channel ingress calls `process_message` internally.
+  receive_message : (IncomingMessage) -> (Result_10);
+  remove_canister : (principal) -> (Result_10);
+  send_message : (OutboundMessage) -> (Result_10);
+  set_config : (vec record { text; ConfigValue }) -> (Result_10);
+  update_config : (ConfigUpdate) -> (Result_10);
+  // The caller's own web conversation from index `after` onward.
+  web_messages : (nat64) -> (Result_11) query;
+  // A customer's message on the web channel. The conversation is the caller's
+  // own principal - there is no session argument, so nobody can write into or
+  // read someone else's chat. Resolves after the agent's reply is stored.
+  //
+  // `display_name` is the optional label the customer chose in their browser
+  // (it lives there; this only keeps a copy so the inbox can show it). `None`
+  // leaves the stored label alone, an empty or whitespace-only value clears it.
+  // It is self-declared, so it is cleaned up but never trusted as identity.
+  web_send : (text, opt text) -> (Result_10);
 }

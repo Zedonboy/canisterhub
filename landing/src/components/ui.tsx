@@ -34,26 +34,52 @@ export function SectionHeading({
   );
 }
 
+/** Where every call-to-action on this site leads. */
+export const DASHBOARD_URL = "https://dashboard.canisterhub.io";
+
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: "primary" | "secondary" | "ghost";
   size?: "md" | "lg";
 }
 
+function buttonClasses(variant: NonNullable<ButtonProps["variant"]>, size: NonNullable<ButtonProps["size"]>, className?: string) {
+  return clsx(
+    "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all whitespace-nowrap",
+    size === "md" ? "px-4 py-2 text-sm" : "px-6 py-3 text-base",
+    variant === "primary" && "bg-[#00d4ff] text-[#0a0e1a] hover:bg-[#33ddff] shadow-[0_0_20px_#00d4ff33] hover:shadow-[0_0_28px_#00d4ff55]",
+    variant === "secondary" && "border border-[#1e2d47] text-[#e2e8f0] bg-[#ffffff08] hover:bg-[#ffffff12] hover:border-[#00d4ff44]",
+    variant === "ghost" && "text-[#8892a4] hover:text-[#e2e8f0]",
+    className
+  );
+}
+
 export function Button({ variant = "primary", size = "md", className, children, ...props }: ButtonProps) {
   return (
-    <button
-      className={clsx(
-        "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-all whitespace-nowrap",
-        size === "md" ? "px-4 py-2 text-sm" : "px-6 py-3 text-base",
-        variant === "primary" && "bg-[#00d4ff] text-[#0a0e1a] hover:bg-[#33ddff] shadow-[0_0_20px_#00d4ff33] hover:shadow-[0_0_28px_#00d4ff55]",
-        variant === "secondary" && "border border-[#1e2d47] text-[#e2e8f0] bg-[#ffffff08] hover:bg-[#ffffff12] hover:border-[#00d4ff44]",
-        variant === "ghost" && "text-[#8892a4] hover:text-[#e2e8f0]",
-        className
-      )}
-      {...props}
-    >
+    <button className={buttonClasses(variant, size, className)} {...props}>
       {children}
     </button>
+  );
+}
+
+/** A call-to-action that looks like `Button` but is a real link (so it can be
+ * opened in a new tab, copied, and followed without JavaScript). */
+export function ButtonLink({
+  variant = "primary",
+  size = "md",
+  className,
+  href = DASHBOARD_URL,
+  children,
+}: {
+  variant?: ButtonProps["variant"];
+  size?: ButtonProps["size"];
+  className?: string;
+  href?: string;
+  children: ReactNode;
+}) {
+  return (
+    <a href={href} className={buttonClasses(variant, size, className)}>
+      {children}
+    </a>
   );
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext, useParams, Link } from "react-router-dom";
-import { ArrowLeft, HardDrive, RefreshCw, Files, FolderOpen, Gauge, ExternalLink, ChevronDown, ChevronRight as ChevronRightIcon, Search, Upload, Trash2 } from "lucide-react";
+import { ArrowLeft, HardDrive, RefreshCw, Files, FolderOpen, Gauge, ExternalLink, ChevronDown, ChevronRight as ChevronRightIcon, Search, Upload, Trash2, Copy, Check } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
@@ -20,6 +20,33 @@ const TABS = [
   { id: "usage", label: "Usage Explorer", icon: Gauge },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
+
+function CopyAssetUrlButton({ url, compact = false }: { url: string; compact?: boolean }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success("URL copied", url);
+    } catch (error) {
+      toast.error("Couldn't copy URL", error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={copied ? "Absolute file URL copied" : "Copy absolute file URL"}
+      aria-label={copied ? "Absolute file URL copied" : "Copy absolute file URL"}
+      className="inline-flex items-center gap-1 text-xs text-[#8892a4] hover:text-[#00d4ff] transition-colors flex-shrink-0"
+    >
+      {copied ? <Check size={11} className="text-[#00e676]" /> : <Copy size={11} />}
+      {!compact && (copied ? "Copied" : "Copy URL")}
+    </button>
+  );
+}
 
 /** Real, irreversible delete needs an explicit two-click confirm rather than
  * `window.confirm` (a native dialog would freeze this whole tab) - same
@@ -115,34 +142,38 @@ function FilesTab({
         {filtered.length === 0 ? (
           <p className="text-sm text-[#4a5568] p-4">{files.length === 0 ? "No files in this bucket yet." : "No file matches your search."}</p>
         ) : (
-          filtered.map((f) => (
-            <div key={f.key} className="flex items-center gap-3 px-4 py-3 border-b border-[#1e2d47] last:border-0 hover:bg-[#131929] transition-colors">
-              <div className="min-w-0 flex-1">
-                <div className="text-sm text-[#e2e8f0] font-mono truncate">{f.key}</div>
-                <div className="text-[11px] text-[#4a5568] mt-0.5 flex items-center gap-2">
-                  <span>{f.contentType}</span>
-                  <span>·</span>
-                  <span>{formatBytes(f.size)}</span>
-                  <span>·</span>
-                  <span>{relativeTime(f.modifiedAt)}</span>
+          filtered.map((f) => {
+            const url = assetUrl(canisterId, network, f.key);
+            return (
+              <div key={f.key} className="flex items-center gap-3 px-4 py-3 border-b border-[#1e2d47] last:border-0 hover:bg-[#131929] transition-colors">
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-[#e2e8f0] font-mono truncate">{f.key}</div>
+                  <div className="text-[11px] text-[#4a5568] mt-0.5 flex items-center gap-2">
+                    <span>{f.contentType}</span>
+                    <span>·</span>
+                    <span>{formatBytes(f.size)}</span>
+                    <span>·</span>
+                    <span>{relativeTime(f.modifiedAt)}</span>
+                  </div>
                 </div>
+                <div className="flex gap-1 flex-shrink-0">
+                  {f.encodings.map((e) => (
+                    <Badge key={e} variant="gray">{e}</Badge>
+                  ))}
+                </div>
+                <CopyAssetUrlButton url={url} />
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-[#00d4ff] hover:underline flex-shrink-0"
+                >
+                  Open <ExternalLink size={11} />
+                </a>
+                <FileDeleteButton fileKey={f.key} onDelete={onDelete} busy={busyKey === f.key} />
               </div>
-              <div className="flex gap-1 flex-shrink-0">
-                {f.encodings.map((e) => (
-                  <Badge key={e} variant="gray">{e}</Badge>
-                ))}
-              </div>
-              <a
-                href={assetUrl(canisterId, network, f.key)}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-[#00d4ff] hover:underline flex-shrink-0"
-              >
-                Open <ExternalLink size={11} />
-              </a>
-              <FileDeleteButton fileKey={f.key} onDelete={onDelete} busy={busyKey === f.key} />
-            </div>
-          ))
+            );
+          })
         )}
       </Card>
     </div>
@@ -183,6 +214,7 @@ function BucketTab({ files, canisterId, network }: { files: AssetFile[]; caniste
                   <div key={f.key} className="flex items-center gap-3 pl-11 pr-4 py-2 border-t border-[#1e2d47]">
                     <span className="text-xs text-[#8892a4] font-mono truncate flex-1 min-w-0">{f.key.split("/").pop()}</span>
                     <span className="text-[10px] text-[#4a5568] flex-shrink-0">{formatBytes(f.size)}</span>
+                    <CopyAssetUrlButton url={assetUrl(canisterId, network, f.key)} compact />
                     <a href={assetUrl(canisterId, network, f.key)} target="_blank" rel="noreferrer" className="text-[#00d4ff] hover:underline flex-shrink-0">
                       <ExternalLink size={11} />
                     </a>
@@ -288,8 +320,8 @@ export default function StorageDetailPage() {
   const [uploading, setUploading] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [canisterStats, setCanisterStats] = useState<CanisterStats | null>(null);
+  const [canisterName, setCanisterName] = useState(canisterId ?? "");
 
-  const canisterName = job ? listStorageCanisters(job).find((c) => c.id === canisterId)?.name ?? canisterId : canisterId;
   const network = job?.network ?? "local";
   // Derived from the already-fetched `files` themselves rather than a
   // separate `get_state_info` call - see `lib/assetStorage.ts::latestModified`'s
@@ -310,7 +342,14 @@ export default function StorageDetailPage() {
 
   useEffect(() => {
     if (!canisterId || !job) return;
+    let cancelled = false;
+    void listStorageCanisters(job).then((storages) => {
+      if (!cancelled) {
+        setCanisterName(storages.find((storage) => storage.id === canisterId)?.name ?? canisterId);
+      }
+    });
     load();
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canisterId, job]);
 

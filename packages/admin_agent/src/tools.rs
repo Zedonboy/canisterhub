@@ -73,7 +73,9 @@ fn validate_status(status: &str) -> Result<(), String> {
     if ALLOWED_STATUSES.contains(&status) {
         Ok(())
     } else {
-        Err(format!("status must be one of {ALLOWED_STATUSES:?}, got '{status}'"))
+        Err(format!(
+            "status must be one of {ALLOWED_STATUSES:?}, got '{status}'"
+        ))
     }
 }
 
@@ -144,7 +146,11 @@ impl Tool for IssueRefundTool {
     }
 
     async fn call(&self, args: IssueRefundArgs) -> Result<String, ActionError> {
-        Ok(issue_refund(&args.order_id, args.amount_cents, &args.reason))
+        Ok(issue_refund(
+            &args.order_id,
+            args.amount_cents,
+            &args.reason,
+        ))
     }
 }
 
@@ -165,7 +171,8 @@ impl Tool for SetAccountStatusTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Set a customer account's status (active, suspended, or banned).".to_string(),
+            description: "Set a customer account's status (active, suspended, or banned)."
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -205,7 +212,12 @@ mod tests {
     #[tokio::test]
     async fn set_account_status_tool_rejects_unknown_status_before_touching_state() {
         let tool = SetAccountStatusTool;
-        let result = tool.call(SetAccountStatusArgs { customer_ref: "cust-1".to_string(), status: "on-fire".to_string() }).await;
+        let result = tool
+            .call(SetAccountStatusArgs {
+                customer_ref: "cust-1".to_string(),
+                status: "on-fire".to_string(),
+            })
+            .await;
         assert!(result.is_err());
     }
 

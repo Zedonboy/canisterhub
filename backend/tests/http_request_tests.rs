@@ -24,14 +24,25 @@ fn setup() -> (PocketIc, Principal) {
     let admin = Principal::from_slice(&[1; 10]);
     let backend_id = pic.create_canister_with_settings(Some(admin), None);
     pic.add_cycles(backend_id, 30_000_000_000_000);
-    pic.install_canister(backend_id, BACKEND_WASM.to_vec(), candid::encode_one(()).unwrap(), Some(admin));
+    pic.install_canister(
+        backend_id,
+        BACKEND_WASM.to_vec(),
+        candid::encode_one(()).unwrap(),
+        Some(admin),
+    );
     (pic, backend_id)
 }
 
 fn get(pic: &PocketIc, backend_id: Principal, path: &str) -> HttpResponse<'static> {
     let request = HttpRequest::get(path).build();
-    let (response,): (HttpResponse,) =
-        query_candid_as(pic, backend_id, Principal::anonymous(), "http_request", (request,)).unwrap();
+    let (response,): (HttpResponse,) = query_candid_as(
+        pic,
+        backend_id,
+        Principal::anonymous(),
+        "http_request",
+        (request,),
+    )
+    .unwrap();
     response
 }
 
@@ -51,12 +62,18 @@ fn serves_the_landing_page_index_at_root() {
     assert_eq!(response.status_code(), StatusCode::OK);
     assert_eq!(header(&response, "content-type"), Some("text/html"));
     let body = String::from_utf8(response.body().to_vec()).unwrap();
-    assert!(body.contains("CanisterHub"), "expected the landing page's own title in the body, got: {body}");
+    assert!(
+        body.contains("CanisterHub"),
+        "expected the landing page's own title in the body, got: {body}"
+    );
 
     // The whole point of asset *certification*, not just serving: the
     // response must carry a real `IC-Certificate` header the gateway/browser
     // can verify independently against this canister's certified data.
-    assert!(header(&response, "ic-certificate").is_some(), "response is missing its certification header");
+    assert!(
+        header(&response, "ic-certificate").is_some(),
+        "response is missing its certification header"
+    );
 }
 
 #[test]
@@ -91,5 +108,8 @@ fn serves_a_hashed_js_asset_with_an_immutable_cache_header() {
     let response = get(&pic, backend_id, &js_path);
     assert_eq!(response.status_code(), StatusCode::OK);
     assert_eq!(header(&response, "content-type"), Some("text/javascript"));
-    assert_eq!(header(&response, "cache-control"), Some("public, max-age=31536000, immutable"));
+    assert_eq!(
+        header(&response, "cache-control"),
+        Some("public, max-age=31536000, immutable")
+    );
 }

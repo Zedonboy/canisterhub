@@ -114,7 +114,11 @@ pub fn metadata_to_item_id(metadata: &[u8]) -> Option<u64> {
     Some(u64::from_be_bytes(bytes))
 }
 
-pub async fn collection_info(agent: &Agent, canister_id: Principal, id: CollectionId) -> Result<CollectionInfo, HnswError> {
+pub async fn collection_info(
+    agent: &Agent,
+    canister_id: Principal,
+    id: CollectionId,
+) -> Result<CollectionInfo, HnswError> {
     let arg = Encode!(&id).map_err(|e| HnswError::Internal(e.to_string()))?;
     let response = agent
         .query(&canister_id, "collection_info")
@@ -122,12 +126,21 @@ pub async fn collection_info(agent: &Agent, canister_id: Principal, id: Collecti
         .call()
         .await
         .map_err(|e| HnswError::Internal(e.to_string()))?;
-    Decode!(&response, Result<CollectionInfo, HnswError>).map_err(|e| HnswError::Internal(e.to_string()))?
+    Decode!(&response, Result<CollectionInfo, HnswError>)
+        .map_err(|e| HnswError::Internal(e.to_string()))?
 }
 
-async fn create_collection(agent: &Agent, canister_id: Principal, config: CollectionConfig) -> anyhow::Result<CollectionId> {
+async fn create_collection(
+    agent: &Agent,
+    canister_id: Principal,
+    config: CollectionConfig,
+) -> anyhow::Result<CollectionId> {
     let arg = Encode!(&config)?;
-    let response = agent.update(&canister_id, "create_collection").with_arg(arg).call_and_wait().await?;
+    let response = agent
+        .update(&canister_id, "create_collection")
+        .with_arg(arg)
+        .call_and_wait()
+        .await?;
     let result = Decode!(&response, Result<CollectionId, HnswError>)?;
     result.map_err(|e| anyhow::anyhow!("create_collection failed: {e}"))
 }
@@ -137,7 +150,10 @@ async fn create_collection(agent: &Agent, canister_id: Principal, config: Collec
 /// identity) becomes its owner, which is what then lets that same identity
 /// insert/search against it later with no separate `grant_access` step -
 /// see `hnsw_index/README.md`'s "Access control" section.
-pub async fn ensure_marketplace_items_collection(agent: &Agent, canister_id: Principal) -> anyhow::Result<()> {
+pub async fn ensure_marketplace_items_collection(
+    agent: &Agent,
+    canister_id: Principal,
+) -> anyhow::Result<()> {
     match collection_info(agent, canister_id, MARKETPLACE_ITEMS_COLLECTION_ID).await {
         Ok(_) => return Ok(()),
         Err(HnswError::CollectionNotFound(_)) => {}
@@ -164,16 +180,32 @@ pub async fn ensure_marketplace_items_collection(agent: &Agent, canister_id: Pri
     Ok(())
 }
 
-pub async fn insert(agent: &Agent, canister_id: Principal, req: InsertRequest) -> anyhow::Result<NodeId> {
+pub async fn insert(
+    agent: &Agent,
+    canister_id: Principal,
+    req: InsertRequest,
+) -> anyhow::Result<NodeId> {
     let arg = Encode!(&req)?;
-    let response = agent.update(&canister_id, "insert").with_arg(arg).call_and_wait().await?;
+    let response = agent
+        .update(&canister_id, "insert")
+        .with_arg(arg)
+        .call_and_wait()
+        .await?;
     let result = Decode!(&response, Result<NodeId, HnswError>)?;
     result.map_err(|e| anyhow::anyhow!("hnsw_index insert failed: {e}"))
 }
 
-pub async fn search(agent: &Agent, canister_id: Principal, req: SearchRequest) -> anyhow::Result<Vec<SearchResult>> {
+pub async fn search(
+    agent: &Agent,
+    canister_id: Principal,
+    req: SearchRequest,
+) -> anyhow::Result<Vec<SearchResult>> {
     let arg = Encode!(&req)?;
-    let response = agent.query(&canister_id, "search").with_arg(arg).call().await?;
+    let response = agent
+        .query(&canister_id, "search")
+        .with_arg(arg)
+        .call()
+        .await?;
     let result = Decode!(&response, Result<Vec<SearchResult>, HnswError>)?;
     result.map_err(|e| anyhow::anyhow!("hnsw_index search failed: {e}"))
 }

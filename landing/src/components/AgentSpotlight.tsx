@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Check, Bot } from "lucide-react";
-import { Container, SectionHeading, Button } from "./ui";
+import { Container, SectionHeading, ButtonLink } from "./ui";
 
 const POINTS = [
   "Tell it what your business needs, in plain English — no ticket, no spec document.",
@@ -28,7 +28,7 @@ export function AgentSpotlight() {
               </li>
             ))}
           </ul>
-          <Button variant="primary" size="lg">See it in action</Button>
+          <ButtonLink variant="primary" size="lg">See it in action</ButtonLink>
         </div>
 
         <div className="rounded-xl border border-[#1e2d47] bg-[#0a0e1a] p-5 space-y-3">

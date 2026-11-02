@@ -200,18 +200,6 @@ pub struct Config {
     /// unauthenticated, which GitHub still serves for public repositories,
     /// just at a much lower rate limit.
     pub github_api_token: Option<Redacted>,
-
-    /// This server's VAPID keypair for Web Push (see `src/push.rs`),
-    /// base64url (no padding) encoded - the standard VAPID key format, what
-    /// `examples/generate_vapid_keys.rs` prints. `None` iff either is unset:
-    /// the `/push/*` routes then return a clear "not configured" error
-    /// rather than failing startup, since most deployments won't need this.
-    /// Regenerating these invalidates every subscription collected under
-    /// the old public key (the browser subscribed against that specific
-    /// key), so once set, treat this like any other long-lived credential -
-    /// not something to rotate casually.
-    pub vapid_public_key: Option<String>,
-    pub vapid_private_key: Option<Redacted>,
 }
 
 fn env_or(key: &str, default: &str) -> String {
@@ -220,13 +208,19 @@ fn env_or(key: &str, default: &str) -> String {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
-        let marketplace_canister_id = std::env::var("MARKETPLACE_CANISTER_ID")
-            .map_err(|_| anyhow::anyhow!("MARKETPLACE_CANISTER_ID must be set (the canister_hub backend's canister id)"))?;
+        let marketplace_canister_id = std::env::var("MARKETPLACE_CANISTER_ID").map_err(|_| {
+            anyhow::anyhow!(
+                "MARKETPLACE_CANISTER_ID must be set (the canister_hub backend's canister id)"
+            )
+        })?;
         let marketplace_canister_id = Principal::from_text(marketplace_canister_id.trim())
-            .map_err(|e| anyhow::anyhow!("MARKETPLACE_CANISTER_ID is not a valid principal: {e}"))?;
+            .map_err(|e| {
+                anyhow::anyhow!("MARKETPLACE_CANISTER_ID is not a valid principal: {e}")
+            })?;
 
-        let hnsw_canister_id = std::env::var("HNSW_CANISTER_ID")
-            .map_err(|_| anyhow::anyhow!("HNSW_CANISTER_ID must be set (the hnsw_index canister's id)"))?;
+        let hnsw_canister_id = std::env::var("HNSW_CANISTER_ID").map_err(|_| {
+            anyhow::anyhow!("HNSW_CANISTER_ID must be set (the hnsw_index canister's id)")
+        })?;
         let hnsw_canister_id = Principal::from_text(hnsw_canister_id.trim())
             .map_err(|e| anyhow::anyhow!("HNSW_CANISTER_ID is not a valid principal: {e}"))?;
 
@@ -234,15 +228,15 @@ impl Config {
             .parse()
             .map_err(|_| anyhow::anyhow!("SEARCH_TOP_K must be a u32"))?;
 
-        let search_relevance_threshold: f32 = env_or("SEARCH_RELEVANCE_THRESHOLD", "0.4")
-            .parse()
-            .map_err(|_| anyhow::anyhow!("SEARCH_RELEVANCE_THRESHOLD must be an f32"))?;
+        let search_relevance_threshold: f32 =
+            env_or("SEARCH_RELEVANCE_THRESHOLD", "0.4")
+                .parse()
+                .map_err(|_| anyhow::anyhow!("SEARCH_RELEVANCE_THRESHOLD must be an f32"))?;
 
         let cycles_wallet_canister_id = match std::env::var("CYCLES_WALLET_CANISTER_ID") {
-            Ok(v) if !v.trim().is_empty() => Some(
-                Principal::from_text(v.trim())
-                    .map_err(|e| anyhow::anyhow!("CYCLES_WALLET_CANISTER_ID is not a valid principal: {e}"))?,
-            ),
+            Ok(v) if !v.trim().is_empty() => Some(Principal::from_text(v.trim()).map_err(|e| {
+                anyhow::anyhow!("CYCLES_WALLET_CANISTER_ID is not a valid principal: {e}")
+            })?),
             _ => None,
         };
 
@@ -272,7 +266,9 @@ impl Config {
 
         let ollama_tool_result_shim: bool = env_or("OLLAMA_TOOL_RESULT_SHIM", "true")
             .parse()
-            .map_err(|_| anyhow::anyhow!("OLLAMA_TOOL_RESULT_SHIM must be \"true\" or \"false\""))?;
+            .map_err(|_| {
+                anyhow::anyhow!("OLLAMA_TOOL_RESULT_SHIM must be \"true\" or \"false\"")
+            })?;
 
         let require_auth: bool = env_or("REQUIRE_AUTH", "true")
             .parse()
@@ -327,7 +323,10 @@ impl Config {
             llm_subagent_max_turns,
             ask_user_timeout_secs,
             ollama_tool_result_shim,
-            icp_template_git: env_or("ICP_TEMPLATE_GIT", "https://github.com/dfinity/icp-cli-templates"),
+            icp_template_git: env_or(
+                "ICP_TEMPLATE_GIT",
+                "https://github.com/dfinity/icp-cli-templates",
+            ),
             icp_template_subfolder: env_or("ICP_TEMPLATE_SUBFOLDER", "rust"),
             require_auth,
             auth_network: env_or("AUTH_NETWORK", "local"),
@@ -343,13 +342,6 @@ impl Config {
                 .map(|v| v.trim().trim_end_matches('/').to_string())
                 .filter(|v| !v.is_empty()),
             github_api_token: std::env::var("GITHUB_API_TOKEN")
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-                .map(Redacted),
-            vapid_public_key: std::env::var("VAPID_PUBLIC_KEY")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
-            vapid_private_key: std::env::var("VAPID_PRIVATE_KEY")
                 .ok()
                 .filter(|v| !v.trim().is_empty())
                 .map(Redacted),

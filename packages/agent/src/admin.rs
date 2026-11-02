@@ -38,7 +38,11 @@ const ADMIN_WEBHOOK_MAX_RESPONSE_BYTES: u64 = 4_096;
 /// fallback (see that function's doc comment) - a plain function taking
 /// typed arguments rather than anything tool-call-shaped, since both
 /// callers already have `action_type`/`details` as plain strings.
-pub async fn file_and_notify(customer: &SessionKey, action_type: &str, details: &str) -> Result<String, String> {
+pub async fn file_and_notify(
+    customer: &SessionKey,
+    action_type: &str,
+    details: &str,
+) -> Result<String, String> {
     let config = crate::state::get_config();
     let Some(webhook_url) = config.admin_webhook_url.clone() else {
         return Err("administrative escalation is not configured for this deployment - a controller must set admin_webhook_url".to_string());
@@ -67,7 +71,9 @@ pub async fn file_and_notify(customer: &SessionKey, action_type: &str, details: 
     // than a delayed notification.
     if let Some(secret) = config.admin_webhook_secret.clone() {
         if let Err(e) = notify_admin_webhook(&webhook_url, &secret, &request).await {
-            ic_cdk::api::debug_print(format!("agent: failed to notify admin webhook for request #{id}: {e}"));
+            ic_cdk::api::debug_print(format!(
+                "agent: failed to notify admin webhook for request #{id}: {e}"
+            ));
         }
     } else {
         ic_cdk::api::debug_print(format!("agent: admin_webhook_secret is not configured - sent request #{id} unsigned is not possible, skipping notification"));
@@ -87,7 +93,11 @@ fn admin_request_payload(request: &AdminRequest) -> serde_json::Value {
     })
 }
 
-async fn notify_admin_webhook(url: &str, secret: &str, request: &AdminRequest) -> Result<(), String> {
+async fn notify_admin_webhook(
+    url: &str,
+    secret: &str,
+    request: &AdminRequest,
+) -> Result<(), String> {
     use ic_cdk_management_canister::{http_request, HttpHeader, HttpMethod, HttpRequestArgs};
 
     let body = admin_request_payload(request).to_string().into_bytes();
@@ -98,8 +108,14 @@ async fn notify_admin_webhook(url: &str, secret: &str, request: &AdminRequest) -
         method: HttpMethod::POST,
         max_response_bytes: Some(ADMIN_WEBHOOK_MAX_RESPONSE_BYTES),
         headers: vec![
-            HttpHeader { name: "Content-Type".to_string(), value: "application/json".to_string() },
-            HttpHeader { name: "X-Signature".to_string(), value: format!("sha256={signature}") },
+            HttpHeader {
+                name: "Content-Type".to_string(),
+                value: "application/json".to_string(),
+            },
+            HttpHeader {
+                name: "X-Signature".to_string(),
+                value: format!("sha256={signature}"),
+            },
         ],
         body: Some(body),
         // See `connector/src/outbound.rs`'s doc comment for why every
@@ -111,7 +127,9 @@ async fn notify_admin_webhook(url: &str, secret: &str, request: &AdminRequest) -
         is_replicated: Some(false),
     };
 
-    let response = http_request(&arg).await.map_err(|e| format!("outcall failed: {e:?}"))?;
+    let response = http_request(&arg)
+        .await
+        .map_err(|e| format!("outcall failed: {e:?}"))?;
     if response.status != 200u32 {
         return Err(format!("admin webhook returned status {}", response.status));
     }
@@ -144,19 +162,30 @@ pub struct AdminCallback {
 /// response to content this canister did not receive from the customer -
 /// a confusion of trust boundaries this template avoids by simply never
 /// letting admin-callback content reach the model at all.
-pub fn handle_callback(body: &[u8], signature_header: Option<&str>) -> Result<AdminRequest, String> {
+pub fn handle_callback(
+    body: &[u8],
+    signature_header: Option<&str>,
+) -> Result<AdminRequest, String> {
     let config = crate::state::get_config();
-    let secret = config.admin_webhook_secret.as_deref().ok_or("admin_webhook_secret is not configured")?;
+    let secret = config
+        .admin_webhook_secret
+        .as_deref()
+        .ok_or("admin_webhook_secret is not configured")?;
     if !verify_signature(body, signature_header, secret) {
         return Err("invalid signature".to_string());
     }
 
-    let callback: AdminCallback = serde_json::from_slice(body).map_err(|e| format!("invalid callback body: {e}"))?;
+    let callback: AdminCallback =
+        serde_json::from_slice(body).map_err(|e| format!("invalid callback body: {e}"))?;
     let status = match callback.status.to_ascii_lowercase().as_str() {
         "approved" => AdminRequestStatus::Approved,
         "rejected" => AdminRequestStatus::Rejected,
         "completed" => AdminRequestStatus::Completed,
-        other => return Err(format!("unknown status '{other}' - expected approved/rejected/completed")),
+        other => {
+            return Err(format!(
+                "unknown status '{other}' - expected approved/rejected/completed"
+            ))
+        }
     };
 
     let now = ic_cdk::api::time();
@@ -166,11 +195,17 @@ pub fn handle_callback(body: &[u8], signature_header: Option<&str>) -> Result<Ad
         req.updated_at = now;
     })?;
 
-    crate::state::get_admin_request(callback.request_id).ok_or_else(|| format!("admin request #{} vanished after update", callback.request_id))
+    crate::state::get_admin_request(callback.request_id).ok_or_else(|| {
+        format!(
+            "admin request #{} vanished after update",
+            callback.request_id
+        )
+    })
 }
 
 fn sign_hex(secret: &str, body: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts a key of any length");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .expect("HMAC accepts a key of any length");
     mac.update(body);
     hex::encode(mac.finalize().into_bytes())
 }

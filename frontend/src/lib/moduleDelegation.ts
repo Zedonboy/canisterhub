@@ -1,20 +1,28 @@
 // Forwards this dashboard's own signed-in identity into an embedded
 // module's iframe (e.g. `packages/table-browser`, reached via a
 // canister's own "View data" action - see `CanisterViewData.tsx`), scoped
-// to exactly the one canister that iframe is showing, so the module can
-// act as the real signed-in user without its own separate Internet
-// Identity login. Protocol (module side:
+// to the canister that iframe is showing plus every other canister of the
+// same project, so the module can act as the real signed-in user - on any
+// of the project's canisters it needs (its own, storage, notification, the
+// database...) - without its own separate Internet Identity login. Protocol (module side:
 // `packages/table-browser/src/lib/parentDelegation.ts`):
 //
 //   1. The module generates a local ephemeral Ed25519 keypair and posts
 //      `{ type: "REQUEST_MODULE_DELEGATION", moduleCanisterId,
-//      ephemeralPublicKeyHex }` to this window (its `window.parent`).
+//      additionalCanisterIds?, ephemeralPublicKeyHex }` to this window (its
+//      `window.parent`). `additionalCanisterIds` lets a module that talks
+//      to a second canister of this project (e.g. `inventory-browser`
+//      uploading product images straight to the project's storage
+//      canister) have the delegation cover that one too.
 //   2. If this dashboard has a real signed-in identity (see
 //      `lib/auth.ts::resolveDelegationIdentity`) AND `moduleCanisterId`
 //      matches the one canister this page actually embedded (never taken
 //      on the module's own say-so alone), this signs a new delegation
-//      from the session's own key to that ephemeral key, scoped to just
-//      that canister, and replies with
+//      from the session's own key to that ephemeral key, scoped to that
+//      canister plus every canister of the project this page knows about
+//      (`projectCanisterIds`) - the module doesn't have to ask for them
+//      one by one, and nothing outside the project is ever included,
+//      whatever `additionalCanisterIds` it sends - and replies with
 //      `{ type: "SCOPED_DELEGATION_RESPONSE", delegationChainJson }`.
 //      Otherwise it replies with
 //      `{ type: "MODULE_DELEGATION_UNAVAILABLE", reason }`, so the module
@@ -22,7 +30,7 @@
 //
 // Every reply only ever goes to the exact iframe window this page
 // rendered (an `event.source`/`iframe.contentWindow` identity check), at
-// the exact origin `admin_panel_url` resolved to (`expectedOrigin`) - a
+// the exact resolved Admin-link origin (`expectedOrigin`) - a
 // delegation is real signing authority, not something to hand to just
 // any window that happens to post a matching-shaped message.
 
@@ -31,8 +39,8 @@ import type { DerEncodedPublicKey } from "@icp-sdk/core/agent";
 import { Principal } from "@icp-sdk/core/principal";
 import { resolveDelegationIdentity } from "./auth";
 
-/** 1 hour - short-lived on purpose: this scopes real signing authority to
- * a single canister for an embedded module, not a whole dashboard
+/** 1 hour - short-lived on purpose: this is real signing authority for the
+ * project's canisters, handed to an embedded module, not a whole dashboard
  * session. */
 const DELEGATION_TTL_MS = 60 * 60 * 1000;
 
@@ -48,6 +56,7 @@ function hexToBytes(hex: string): Uint8Array {
 interface RequestModuleDelegation {
   type: "REQUEST_MODULE_DELEGATION";
   moduleCanisterId: string;
+  additionalCanisterIds?: unknown;
   ephemeralPublicKeyHex: string;
 }
 
@@ -65,10 +74,17 @@ function isRequestModuleDelegation(data: unknown): data is RequestModuleDelegati
  * iframe element exists (e.g. in a `useEffect`), and call the returned
  * cleanup function on unmount or whenever the canister/iframe being shown
  * changes. `expectedOrigin` and `allowedCanisterId` together are the
- * whole security boundary: a request from any other origin, or naming any
- * other canister, is rejected outright rather than silently trusting the
- * module's own claim. */
-export function setupModuleDelegationBridge(iframe: HTMLIFrameElement, expectedOrigin: string, allowedCanisterId: string): () => void {
+ * whole security boundary for *who may ask*: a request from any other
+ * origin, or naming any other canister, is rejected outright rather than
+ * silently trusting the module's own claim. *What is granted* is
+ * `allowedCanisterId` plus all of `projectCanisterIds` (this project's own
+ * canisters only, possibly resolved asynchronously). */
+export function setupModuleDelegationBridge(
+  iframe: HTMLIFrameElement,
+  expectedOrigin: string,
+  allowedCanisterId: string,
+  projectCanisterIds: string[] | Promise<string[]> = [],
+): () => void {
   async function onMessage(event: MessageEvent) {
     if (event.origin !== expectedOrigin) return;
     if (event.source !== iframe.contentWindow) return;
@@ -97,9 +113,13 @@ export function setupModuleDelegationBridge(iframe: HTMLIFrameElement, expectedO
       return;
     }
 
+    // Every canister of this project, whatever the module asked for - and
+    // nothing that isn't one of them.
+    const extra = [...new Set((await projectCanisterIds).filter((id) => id !== allowedCanisterId))];
+
     const chain = await DelegationChain.create(parentIdentity, modulePublicKey, new Date(Date.now() + DELEGATION_TTL_MS), {
       previous: parentIdentity.getDelegation(),
-      targets: [Principal.fromText(allowedCanisterId)],
+      targets: [allowedCanisterId, ...extra].map((id) => Principal.fromText(id)),
     });
 
     reply({ type: "SCOPED_DELEGATION_RESPONSE", delegationChainJson: chain.toJSON() });

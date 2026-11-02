@@ -8,7 +8,10 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env().add_directive("orchestrator=info".parse()?))
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("orchestrator=info".parse()?),
+        )
         .init();
 
     let config = Arc::new(Config::from_env()?);
@@ -33,7 +36,9 @@ async fn main() -> anyhow::Result<()> {
 
     let jwt_secret = if config.require_auth {
         tracing::info!("fetching JWT signing key from the backend canister (REQUIRE_AUTH=true)...");
-        Some(Arc::new(bootstrap_jwt_secret(&config, &startup_agent).await?))
+        Some(Arc::new(
+            bootstrap_jwt_secret(&config, &startup_agent).await?,
+        ))
     } else {
         tracing::warn!(
             "REQUIRE_AUTH=false: /orchestrate and /jobs/:id are open to any caller, no Internet \

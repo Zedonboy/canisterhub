@@ -1,54 +1,102 @@
-//! Relaying a reply back to the customer, via `connector::send_message` -
-//! see that canister's README.md. This is the only outbound path in this
-//! whole canister that reaches a customer directly (as opposed to
-//! `admin.rs`'s webhook, which reaches an administrative system, never a
-//! customer).
+use crate::config::Config;
+use crate::messages::{Channel, OutboundMessage, SessionKey};
+use ic_cdk_management_canister::{http_request, HttpHeader, HttpMethod, HttpRequestArgs};
 
-use crate::messages::{Channel as EngineChannel, SessionKey};
-use candid::Principal;
-
-/// Field-for-field identical to `connector`'s `Channel` candid type -
-/// candid matches by shape, not by the two crates sharing a Rust type (see
-/// `connector::messages::Channel`).
-#[derive(candid::CandidType, serde::Serialize)]
-enum ConnectorChannel {
-    WhatsApp,
-    Telegram,
-    Email,
+pub async fn reply_to_customer(
+    config: &Config,
+    customer: &SessionKey,
+    text: &str,
+) -> Result<(), String> {
+    send(
+        config,
+        &OutboundMessage {
+            channel: customer.channel,
+            session_id: customer.session_id.clone(),
+            text: text.to_string(),
+            subject: None,
+        },
+    )
+    .await
 }
 
-impl From<EngineChannel> for ConnectorChannel {
-    fn from(c: EngineChannel) -> Self {
-        match c {
-            EngineChannel::WhatsApp => ConnectorChannel::WhatsApp,
-            EngineChannel::Telegram => ConnectorChannel::Telegram,
-            EngineChannel::Email => ConnectorChannel::Email,
+pub async fn send(config: &Config, msg: &OutboundMessage) -> Result<(), String> {
+    match msg.channel {
+        // Web customers read their reply from stored history (`web_messages`);
+        // there is no endpoint to push to.
+        Channel::Web => Ok(()),
+        Channel::WhatsApp => {
+            let token = config
+                .whatsapp_access_token
+                .as_deref()
+                .ok_or("whatsapp_access_token is not configured")?;
+            let phone = config
+                .whatsapp_phone_number_id
+                .as_deref()
+                .ok_or("whatsapp_phone_number_id is not configured")?;
+            post_json(&format!("https://graph.facebook.com/v21.0/{phone}/messages"), &[("Authorization".into(), format!("Bearer {token}"))], serde_json::json!({"messaging_product":"whatsapp","to":msg.session_id,"type":"text","text":{"body":msg.text}})).await
+        }
+        Channel::Telegram => {
+            let token = config
+                .telegram_bot_token
+                .as_deref()
+                .ok_or("telegram_bot_token is not configured")?;
+            let chat_id: i64 = msg
+                .session_id
+                .parse()
+                .map_err(|_| "invalid Telegram chat id".to_string())?;
+            post_json(
+                &format!("https://api.telegram.org/bot{token}/sendMessage"),
+                &[],
+                serde_json::json!({"chat_id":chat_id,"text":msg.text}),
+            )
+            .await
+        }
+        Channel::Email => {
+            let base = config
+                .mail_bridge_url
+                .as_deref()
+                .ok_or("mail_bridge_url is not configured")?;
+            let key = config
+                .mail_bridge_api_key
+                .as_deref()
+                .ok_or("mail_bridge_api_key is not configured")?;
+            let from = config
+                .mail_from_address
+                .as_deref()
+                .ok_or("mail_from_address is not configured")?;
+            post_json(&format!("{}/send_mail", base.trim_end_matches('/')), &[("Authorization".into(), format!("Bearer {key}"))], serde_json::json!({"from":from,"to":[msg.session_id],"subject":msg.subject.clone().unwrap_or_else(|| "Message".into()),"text_body":msg.text})).await
         }
     }
 }
 
-/// Field-for-field identical to `connector`'s `OutboundMessage` candid type.
-#[derive(candid::CandidType, serde::Serialize)]
-struct ConnectorOutboundMessage {
-    channel: ConnectorChannel,
-    session_id: String,
-    text: String,
-    subject: Option<String>,
-}
-
-/// Sends `text` back to `customer` via `connector`'s `send_message`.
-/// `connector_id` is `Config::connector_principal` - the same value already
-/// used to authenticate `receive_message`'s caller, reused here as the
-/// destination for the reply: `connector_principal` isn't a separately
-/// derived identity the way `mail_bridge`'s is (see that canister's
-/// README.md) - a canister's caller identity *is* its own canister id, so
-/// "the principal allowed to call `receive_message`" and "the canister id
-/// to call `send_message` on" are one and the same value.
-pub async fn reply_to_customer(connector_id: Principal, customer: &SessionKey, text: &str) -> Result<(), String> {
-    let msg = ConnectorOutboundMessage { channel: customer.channel.into(), session_id: customer.session_id.clone(), text: text.to_string(), subject: None };
-    let response = ic_cdk::call::Call::bounded_wait(connector_id, "send_message")
-        .with_arg(msg)
-        .await
-        .map_err(|e| format!("call to connector.send_message failed: {e:?}"))?;
-    response.candid::<Result<(), String>>().map_err(|e| format!("failed to decode connector.send_message's response: {e}"))?
+async fn post_json(
+    url: &str,
+    extra: &[(String, String)],
+    body: serde_json::Value,
+) -> Result<(), String> {
+    let mut headers = vec![HttpHeader {
+        name: "Content-Type".into(),
+        value: "application/json".into(),
+    }];
+    headers.extend(
+        extra
+            .iter()
+            .cloned()
+            .map(|(name, value)| HttpHeader { name, value }),
+    );
+    let response = http_request(&HttpRequestArgs {
+        url: url.into(),
+        method: HttpMethod::POST,
+        headers,
+        body: Some(body.to_string().into_bytes()),
+        max_response_bytes: Some(4_096),
+        transform: None,
+        is_replicated: Some(false),
+    })
+    .await
+    .map_err(|e| format!("outcall to {url} failed: {e:?}"))?;
+    if response.status != 200u32 {
+        return Err(format!("{url} returned status {}", response.status));
+    }
+    Ok(())
 }

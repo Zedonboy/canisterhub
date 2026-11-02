@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOutletContext, useNavigate } from "react-router-dom";
-import { Bot, Settings, ScrollText, Database, Play, Cpu, Plug, TriangleAlert, ArrowRight, Sparkles, Store, Send, Loader2, Workflow } from "lucide-react";
+import { Bot, Settings, ScrollText, Database, Play, Cpu, Plug, TriangleAlert, ArrowRight, Sparkles, Store, Send, Loader2, Workflow, ChevronDown } from "lucide-react";
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -41,8 +41,8 @@ function AgentsEmptyState({ onAskAI, onBrowseMarket }: { onAskAI: () => void; on
       </div>
       <h3 className="text-base font-semibold text-[#e2e8f0] mb-1.5">No agent canister yet</h3>
       <p className="text-sm text-[#4a5568] max-w-md mb-5">
-        An agent exposes user-facing actions as real LLM tool-calling - deploy one, then Test it right from its
-        card and configure its model, credentials, and instructions.
+        An agent now includes the WhatsApp, Telegram, and email connector paths plus LLM tool-calling. Deploy one,
+        then test and configure the whole module from its card.
       </p>
       <div className="flex items-center gap-2.5">
         <span className="inline-flex items-center px-3 py-1.5 rounded-full border border-[#1e2d47] bg-[#131929] text-xs text-[#8892a4]">Coming soon</span>
@@ -73,13 +73,11 @@ function TestDialog({ agent, network, onClose }: { agent: AgentCanister | null; 
   const [loadError, setLoadError] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [blocked, setBlocked] = useState<string | null>(null);
 
   useEffect(() => {
     if (!agent) return;
     setTurns(null);
     setLoadError(null);
-    setBlocked(null);
     setInput("");
     getTestConversation(agent.id, network)
       .then(setTurns)
@@ -92,18 +90,13 @@ function TestDialog({ agent, network, onClose }: { agent: AgentCanister | null; 
     const text = input.trim();
     if (!text) return;
     setSending(true);
-    setBlocked(null);
     try {
       const updated = await sendTestMessage(agent.id, network, text);
       setTurns(updated);
       setInput("");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (/connector_principal is not configured/.test(msg)) {
-        setBlocked(msg);
-      } else {
-        toast.error("Test message failed", msg);
-      }
+      toast.error("Test message failed", msg);
     } finally {
       setSending(false);
     }
@@ -137,12 +130,6 @@ function TestDialog({ agent, network, onClose }: { agent: AgentCanister | null; 
             </div>
           )}
         </div>
-        {blocked && (
-          <p className="text-xs text-[#ffab40]">
-            This agent has no connector configured yet, so it can't process any message yet, even a test one
-            (<code className="font-mono">{blocked}</code>) - set one from Config first.
-          </p>
-        )}
       </DialogContent>
       <DialogFooter>
         <div className="flex items-center gap-2 w-full">
@@ -168,15 +155,55 @@ function TestDialog({ agent, network, onClose }: { agent: AgentCanister | null; 
   );
 }
 
-/** The five real values `llm.rs::dispatch` actually implements - four HTTPS
- * providers via `ic-rig` (each needing `llmApiKey`), plus `"platform"`: a
- * real on-chain LLM canister call via `ic_llm` added specifically so this
- * dropdown could offer a genuine no-API-key option, not a decorative one -
- * see `packages/agent/src/llm.rs`'s own header comment for the tradeoff
- * (only DFINITY's own hosted models, and that canister's own schema/size
- * limits). There's still no custom-base-URL option on the real canister -
- * each HTTPS provider's endpoint is fixed by `ic-rig` itself. */
-const LLM_PROVIDERS = ["openai", "anthropic", "gemini", "deepseek", "platform"] as const;
+const LLM_PROVIDERS = [
+  { value: "managed_ic_llm", label: "Managed platform — IC LLM" },
+  { value: "managed_deepseek", label: "Managed platform — DeepSeek" },
+  { value: "anthropic", label: "Own API key — Claude" },
+  { value: "deepseek", label: "Own API key — DeepSeek" },
+  { value: "openai", label: "Own API key — OpenAI" },
+] as const;
+
+function ConfigGroup({ title, description, children, open = false }: { title: string; description: string; children: React.ReactNode; open?: boolean }) {
+  const [isOpen, setIsOpen] = useState(open);
+
+  return (
+    <details
+      open={isOpen}
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+      className="group rounded-md border border-[#1e2d47] bg-[#0a0e1a55]"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 marker:hidden [&::-webkit-details-marker]:hidden">
+        <div>
+          <h4 className="text-xs font-medium text-[#e2e8f0]">{title}</h4>
+          <p className="mt-0.5 text-[10px] leading-relaxed text-[#4a5568]">{description}</p>
+        </div>
+        <ChevronDown size={14} className="flex-shrink-0 text-[#4a5568] transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="space-y-4 border-t border-[#1e2d47] p-3">{children}</div>
+    </details>
+  );
+}
+
+function WriteOnlySecret({ id, label, value, clear, onValue, onClear }: { id: string; label: string; value: string; clear: boolean; onValue: (value: string) => void; onClear: (clear: boolean) => void }) {
+  return (
+    <div>
+      <Label htmlFor={id}>{label} (write-only)</Label>
+      <Input
+        id={id}
+        type="password"
+        placeholder={clear ? "will be cleared" : "leave blank to keep the current value"}
+        value={value}
+        disabled={clear}
+        onChange={(event) => onValue(event.target.value)}
+        className="font-mono text-xs"
+      />
+      <label className="mt-1 flex items-center gap-1.5 text-[11px] text-[#4a5568]">
+        <input type="checkbox" checked={clear} onChange={(event) => { onClear(event.target.checked); if (event.target.checked) onValue(""); }} />
+        Clear the configured value
+      </label>
+    </div>
+  );
+}
 
 /** "the config is a dialog for user to edit config especially Model...
  * edit Agent Instruction" (the user's own framing) - every field here is a
@@ -187,16 +214,21 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
   const [saving, setSaving] = useState(false);
 
   const [systemPrompt, setSystemPrompt] = useState("");
-  const [llmProvider, setLlmProvider] = useState<string>("openai");
+  const [llmProvider, setLlmProvider] = useState<string>("managed_ic_llm");
   const [llmModel, setLlmModel] = useState("");
   const [llmApiKey, setLlmApiKey] = useState("");
   const [clearApiKey, setClearApiKey] = useState(false);
   const [maxToolIterations, setMaxToolIterations] = useState("");
-  const [connectorPrincipal, setConnectorPrincipal] = useState("");
-  const [icSqlCanisterId, setIcSqlCanisterId] = useState("");
   const [adminWebhookUrl, setAdminWebhookUrl] = useState("");
   const [adminWebhookSecret, setAdminWebhookSecret] = useState("");
   const [clearWebhookSecret, setClearWebhookSecret] = useState(false);
+  const [whatsappPhoneNumberId, setWhatsappPhoneNumberId] = useState("");
+  const [whatsappVerifyToken, setWhatsappVerifyToken] = useState("");
+  const [clearWhatsappVerifyToken, setClearWhatsappVerifyToken] = useState(false);
+  const [whatsappAppSecret, setWhatsappAppSecret] = useState("");
+  const [clearWhatsappAppSecret, setClearWhatsappAppSecret] = useState(false);
+  const [whatsappAccessToken, setWhatsappAccessToken] = useState("");
+  const [clearWhatsappAccessToken, setClearWhatsappAccessToken] = useState(false);
 
   useEffect(() => {
     if (!agent) return;
@@ -206,15 +238,20 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
     setClearApiKey(false);
     setAdminWebhookSecret("");
     setClearWebhookSecret(false);
+    setWhatsappVerifyToken("");
+    setClearWhatsappVerifyToken(false);
+    setWhatsappAppSecret("");
+    setClearWhatsappAppSecret(false);
+    setWhatsappAccessToken("");
+    setClearWhatsappAccessToken(false);
     getAgentConfig(agent.id, network)
       .then((c) => {
         setSystemPrompt(c.systemPrompt ?? "");
-        setLlmProvider(c.llmProvider ?? "openai");
+        setLlmProvider(c.llmProvider === "platform" ? "managed_ic_llm" : (c.llmProvider ?? "managed_ic_llm"));
         setLlmModel(c.llmModel ?? "");
         setMaxToolIterations(c.maxToolIterations !== null ? String(c.maxToolIterations) : "");
-        setConnectorPrincipal(c.connectorPrincipal ?? "");
-        setIcSqlCanisterId(c.icSqlCanisterId ?? "");
         setAdminWebhookUrl(c.adminWebhookUrl ?? "");
+        setWhatsappPhoneNumberId(c.whatsappPhoneNumberId ?? "");
       })
       .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
@@ -226,15 +263,17 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
     setSaving(true);
     try {
       await updateAgentConfig(agent.id, network, {
-        icSqlCanisterId,
         adminWebhookUrl,
         systemPrompt,
         llmProvider,
         llmModel,
         maxToolIterations,
-        connectorPrincipal,
         llmApiKey: clearApiKey ? "" : llmApiKey.trim() === "" ? undefined : llmApiKey,
         adminWebhookSecret: clearWebhookSecret ? "" : adminWebhookSecret.trim() === "" ? undefined : adminWebhookSecret,
+        whatsappPhoneNumberId,
+        whatsappVerifyToken: clearWhatsappVerifyToken ? "" : whatsappVerifyToken.trim() === "" ? undefined : whatsappVerifyToken,
+        whatsappAppSecret: clearWhatsappAppSecret ? "" : whatsappAppSecret.trim() === "" ? undefined : whatsappAppSecret,
+        whatsappAccessToken: clearWhatsappAccessToken ? "" : whatsappAccessToken.trim() === "" ? undefined : whatsappAccessToken,
       });
       toast.success("Config saved", `${agent.name}'s configuration was updated.`);
       onSaved();
@@ -257,95 +296,69 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
         {loadError && <p className="text-sm text-[#ff5252]">Couldn't load current config: {loadError}</p>}
         {!loading && !loadError && (
           <>
-            <div>
-              <Label htmlFor="agent-instruction">Agent Instruction (system prompt)</Label>
-              <textarea
-                id="agent-instruction"
-                rows={4}
-                value={systemPrompt}
-                onChange={(e) => setSystemPrompt(e.target.value)}
-                placeholder="e.g. You are a support assistant for Acme. Be concise, and never promise a refund yourself - escalate with request_admin_action instead."
-                className={clsx(selectClass, "resize-y placeholder-[#4a5568]")}
-              />
-              <p className="text-[11px] text-[#4a5568] mt-1">Blank uses this template's generic fallback prompt.</p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <ConfigGroup title="Agent Behavior" description="Define how the agent speaks, what it may do, and when it should escalate." open>
               <div>
-                <Label htmlFor="agent-provider">LLM provider</Label>
-                <select id="agent-provider" value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)} className={selectClass}>
-                  {LLM_PROVIDERS.map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <Label htmlFor="agent-model">Model id (optional)</Label>
-                <Input id="agent-model" placeholder="provider's flagship model" value={llmModel} onChange={(e) => setLlmModel(e.target.value)} className="text-xs" />
-              </div>
-            </div>
-
-            {llmProvider === "platform" ? (
-              <p className="text-[11px] text-[#4a5568] bg-[#00d4ff0a] border border-[#00d4ff22] rounded px-3 py-2">
-                "platform" calls the real on-chain LLM canister directly - no API key needed. Any key already saved
-                here is simply ignored while this provider is selected.
-              </p>
-            ) : (
-              <div>
-                <Label htmlFor="agent-api-key">API key (write-only - never shown back)</Label>
-                <Input
-                  id="agent-api-key"
-                  type="password"
-                  placeholder={clearApiKey ? "will be cleared" : "leave blank to keep the current key"}
-                  value={llmApiKey}
-                  disabled={clearApiKey}
-                  onChange={(e) => setLlmApiKey(e.target.value)}
-                  className="font-mono text-xs"
+                <Label htmlFor="agent-instruction">Agent Instruction (system prompt)</Label>
+                <textarea
+                  id="agent-instruction"
+                  rows={4}
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  placeholder="e.g. You are a support assistant for Acme. Be concise, and never promise a refund yourself - escalate with request_admin_action instead."
+                  className={clsx(selectClass, "resize-y placeholder-[#4a5568]")}
                 />
-                <label className="flex items-center gap-1.5 mt-1 text-[11px] text-[#4a5568]">
-                  <input type="checkbox" checked={clearApiKey} onChange={(e) => { setClearApiKey(e.target.checked); if (e.target.checked) setLlmApiKey(""); }} />
-                  Clear the configured API key
-                </label>
+                <p className="text-[11px] text-[#4a5568] mt-1">Blank uses this template's generic fallback prompt.</p>
               </div>
-            )}
+            </ConfigGroup>
 
-            <div>
-              <Label htmlFor="agent-max-iter">Max tool iterations (optional, 0-255)</Label>
-              <Input id="agent-max-iter" placeholder="default" value={maxToolIterations} onChange={(e) => setMaxToolIterations(e.target.value)} className="text-xs" />
-            </div>
+            <ConfigGroup title="AI Model" description="Choose the model provider, credentials, and maximum tool-calling budget.">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="agent-provider">LLM provider</Label>
+                  <select id="agent-provider" value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)} className={selectClass}>
+                    {LLM_PROVIDERS.map((provider) => (
+                      <option key={provider.value} value={provider.value}>{provider.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <Label htmlFor="agent-model">Model id (optional)</Label>
+                  <Input id="agent-model" placeholder="provider's flagship model" value={llmModel} onChange={(e) => setLlmModel(e.target.value)} className="text-xs" />
+                </div>
+              </div>
 
-            <div>
-              <Label htmlFor="agent-connector">Connector principal</Label>
-              <Input id="agent-connector" placeholder="this project's connector canister id" value={connectorPrincipal} onChange={(e) => setConnectorPrincipal(e.target.value)} className="font-mono text-xs" />
-              <p className="text-[11px] text-[#4a5568] mt-1">Required before this agent (even Test) can process any message - see `receive_message`'s own gate.</p>
-            </div>
+              {llmProvider.startsWith("managed_") ? (
+                <p className="text-[11px] text-[#4a5568] bg-[#00d4ff0a] border border-[#00d4ff22] rounded px-3 py-2">
+                  This model is called through CanisterHub's backend and charged against the SME owner's token credits.
+                  No provider API key is stored in this agent.
+                </p>
+              ) : (
+                <WriteOnlySecret id="agent-api-key" label="API key" value={llmApiKey} clear={clearApiKey} onValue={setLlmApiKey} onClear={setClearApiKey} />
+              )}
 
-            <div>
-              <Label htmlFor="agent-ic-sql">ic-sql canister id (optional)</Label>
-              <Input id="agent-ic-sql" placeholder="for this agent's query_database tool" value={icSqlCanisterId} onChange={(e) => setIcSqlCanisterId(e.target.value)} className="font-mono text-xs" />
-            </div>
+              <div>
+                <Label htmlFor="agent-max-iter">Max tool iterations (optional, 0-255)</Label>
+                <Input id="agent-max-iter" placeholder="default" value={maxToolIterations} onChange={(e) => setMaxToolIterations(e.target.value)} className="text-xs" />
+              </div>
+            </ConfigGroup>
 
-            <div>
-              <Label htmlFor="agent-webhook-url">Admin webhook URL (optional)</Label>
-              <Input id="agent-webhook-url" placeholder="https://…" value={adminWebhookUrl} onChange={(e) => setAdminWebhookUrl(e.target.value)} className="text-xs" />
-            </div>
+            <ConfigGroup title="WhatsApp" description="Credentials from Meta's WhatsApp Business setup. Secret values are write-only and are never shown back in the dashboard.">
+              <div>
+                <Label htmlFor="agent-whatsapp-phone">Phone number ID (optional)</Label>
+                <Input id="agent-whatsapp-phone" placeholder="Meta phone number ID" value={whatsappPhoneNumberId} onChange={(e) => setWhatsappPhoneNumberId(e.target.value)} className="font-mono text-xs" />
+              </div>
+              <WriteOnlySecret id="agent-whatsapp-verify" label="Webhook verify token" value={whatsappVerifyToken} clear={clearWhatsappVerifyToken} onValue={setWhatsappVerifyToken} onClear={setClearWhatsappVerifyToken} />
+              <WriteOnlySecret id="agent-whatsapp-secret" label="App secret" value={whatsappAppSecret} clear={clearWhatsappAppSecret} onValue={setWhatsappAppSecret} onClear={setClearWhatsappAppSecret} />
+              <WriteOnlySecret id="agent-whatsapp-access" label="Access token" value={whatsappAccessToken} clear={clearWhatsappAccessToken} onValue={setWhatsappAccessToken} onClear={setClearWhatsappAccessToken} />
+            </ConfigGroup>
 
-            <div>
-              <Label htmlFor="agent-webhook-secret">Admin webhook secret (write-only)</Label>
-              <Input
-                id="agent-webhook-secret"
-                type="password"
-                placeholder={clearWebhookSecret ? "will be cleared" : "leave blank to keep the current secret"}
-                value={adminWebhookSecret}
-                disabled={clearWebhookSecret}
-                onChange={(e) => setAdminWebhookSecret(e.target.value)}
-                className="font-mono text-xs"
-              />
-              <label className="flex items-center gap-1.5 mt-1 text-[11px] text-[#4a5568]">
-                <input type="checkbox" checked={clearWebhookSecret} onChange={(e) => { setClearWebhookSecret(e.target.checked); if (e.target.checked) setAdminWebhookSecret(""); }} />
-                Clear the configured webhook secret
-              </label>
-            </div>
+            <ConfigGroup title="Administrative Escalation" description="Send actions requiring human approval to the SME's administrative system.">
+              <div>
+                <Label htmlFor="agent-webhook-url">Admin webhook URL (optional)</Label>
+                <Input id="agent-webhook-url" placeholder="https://…" value={adminWebhookUrl} onChange={(e) => setAdminWebhookUrl(e.target.value)} className="text-xs" />
+              </div>
+              <WriteOnlySecret id="agent-webhook-secret" label="Admin webhook secret" value={adminWebhookSecret} clear={clearWebhookSecret} onValue={setAdminWebhookSecret} onClear={setClearWebhookSecret} />
+            </ConfigGroup>
           </>
         )}
       </DialogContent>
@@ -785,8 +798,7 @@ export default function Agents() {
   const [activeTab, setActiveTab] = useState("agents");
 
   const tabs = [
-    { id: "agents", label: "Agents", icon: <Bot size={13} /> },
-    { id: "connectors", label: "Connectors", icon: <Plug size={13} /> },
+    { id: "agents", label: "Agents & Channels", icon: <Bot size={13} /> },
     { id: "models", label: "Models", icon: <Cpu size={13} /> },
     { id: "memory", label: "Memory", icon: <Database size={13} /> },
     { id: "logs", label: "Logs", icon: <ScrollText size={13} /> },
@@ -823,7 +835,6 @@ export default function Agents() {
       </div>
       <div className="flex-1 overflow-auto">
         {activeTab === "agents" && <AgentsTab />}
-        {activeTab === "connectors" && <ConnectorsTab />}
         {activeTab === "models" && <ModelsTab />}
         {activeTab === "memory" && <MemoryTab />}
         {activeTab === "logs" && <AgentLogsTab />}

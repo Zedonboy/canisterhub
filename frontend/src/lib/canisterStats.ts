@@ -15,7 +15,7 @@ import type { CanisterKind } from "./backend";
 import { localIcHost, mainnetIcHost } from "./canisterEnv";
 import { getCanisterMetadata } from "./canisterMetadata";
 import type { CanisterType } from "./candid/canisterMetadata";
-import { resolveModuleUrl } from "./moduleConfig";
+import { resolveModuleUrl, type CanisterLink } from "./moduleConfig";
 
 export interface BusinessStats {
   messages_processed?: number;
@@ -64,13 +64,9 @@ export interface CanisterStats {
   url: string | null;
   business?: BusinessStats;
   /** Whether this canister implements `canister-hub-sdk`'s `ic::config`
-   * surface at all (a `#[dynamic_config]` Marketplace Module) - decides
-   * whether the card shows an "Edit Settings" action. Independent of
-   * `admin_panel_url`/`home_page_url`, which a module may implement the
-   * config surface without declaring either of. */
+   * surface at all (a `#[dynamic_config]` Marketplace Module). */
   has_config: boolean;
-  admin_panel_url: string | null;
-  home_page_url: string | null;
+  links: CanisterLink[];
   error?: string;
 }
 
@@ -185,24 +181,20 @@ async function businessStatsFor(canisterId: Principal, kind: CanisterKind, netwo
   }
 }
 
-/** Best-effort: `get_admin_panel_url`/`get_home_page_url`, and whether the
- * canister implements `canister-hub-sdk`'s `ic::config` surface at all
- * (both calls only ever succeed together - the SDK's macro always
- * generates all five config endpoints as one unit, never a subset). A
- * canister that wasn't built with that SDK (or is simply unreachable)
- * rejects both, which reads as "no config here", not an error - additive,
- * same spirit as `businessStatsFor`. */
-async function moduleLinksFor(canisterId: Principal, network: string): Promise<{ has_config: boolean; admin_panel_url: string | null; home_page_url: string | null }> {
+/** Best-effort dynamic-config discovery plus every module webpage. */
+async function moduleLinksFor(canisterId: Principal, network: string): Promise<{ has_config: boolean; links: CanisterLink[] }> {
   try {
     const actor = await getModuleConfigActor(canisterId, network);
-    const [adminPanelUrl, homePageUrl] = await Promise.all([actor.get_admin_panel_url(), actor.get_home_page_url()]);
+    const [, links] = await Promise.all([actor.get_config_schema(), actor.get_links()]);
     return {
       has_config: true,
-      admin_panel_url: resolveModuleUrl(canisterId.toText(), network, adminPanelUrl.length === 0 ? null : adminPanelUrl[0]),
-      home_page_url: resolveModuleUrl(canisterId.toText(), network, homePageUrl.length === 0 ? null : homePageUrl[0]),
+      links: links.map((link) => ({
+        ...link,
+        url: resolveModuleUrl(canisterId.toText(), network, link.url) ?? link.url,
+      })),
     };
   } catch {
-    return { has_config: false, admin_panel_url: null, home_page_url: null };
+    return { has_config: false, links: [] };
   }
 }
 
@@ -241,7 +233,7 @@ export async function getCanisterStatsDirect(name: string, id: string, kind: Can
     return {
       id, kind, status: null, memory_size: null, cycles: null, idle_cycles_burned_per_day: null, freezing_threshold: null,
       canister_type: null, version: null, module_hash: null, controllers: [], url: null,
-      has_config: false, admin_panel_url: null, home_page_url: null,
+      has_config: false, links: [],
       error: e instanceof Error ? e.message : String(e),
     };
   }

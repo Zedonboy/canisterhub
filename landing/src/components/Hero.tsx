@@ -1,5 +1,5 @@
 import { ArrowRight } from "lucide-react";
-import { Container, Button, Eyebrow } from "./ui";
+import { Container, ButtonLink, Eyebrow } from "./ui";
 import { DashboardPreview } from "./DashboardPreview";
 
 const STATS = [
@@ -26,9 +26,9 @@ export function Hero() {
           surprise cloud bill at the end of the month.
         </p>
 
-        <Button variant="primary" size="lg" className="gap-2">
+        <ButtonLink variant="primary" size="lg" className="gap-2">
           Launch Dashboard <ArrowRight size={16} />
-        </Button>
+        </ButtonLink>
 
         <DashboardPreview />
 

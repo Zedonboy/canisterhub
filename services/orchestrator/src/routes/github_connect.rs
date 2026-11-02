@@ -39,10 +39,14 @@ pub async fn start(
     let publisher = Principal::from_text(query.publisher.trim())
         .map_err(|e| bad_request(format!("publisher is not a valid principal: {e}")))?;
     if publisher == Principal::anonymous() {
-        return Err(bad_request("publisher must not be the anonymous principal".to_string()));
+        return Err(bad_request(
+            "publisher must not be the anonymous principal".to_string(),
+        ));
     }
 
-    let state_token = state.github_connect.start(caller, publisher, query.repo_url.clone());
+    let state_token = state
+        .github_connect
+        .start(caller, publisher, query.repo_url.clone());
     let authorize_url = github::authorize_url(&state.config, &query.repo_url, &state_token)
         .map_err(|e| bad_request(e.to_string()))?;
 
@@ -63,7 +67,10 @@ pub struct CallbackQuery {
 /// dashboard's own window) that posts the outcome back to
 /// `window.opener` and closes itself - `PublisherSetup.tsx` listens for that
 /// `message` event.
-pub async fn callback(State(state): State<AppState>, Query(query): Query<CallbackQuery>) -> Response {
+pub async fn callback(
+    State(state): State<AppState>,
+    Query(query): Query<CallbackQuery>,
+) -> Response {
     match handle_callback(&state, query).await {
         Ok(git_repo_url) => result_page(true, &git_repo_url, None),
         Err(e) => {
@@ -78,21 +85,33 @@ async fn handle_callback(state: &AppState, query: CallbackQuery) -> anyhow::Resu
         anyhow::bail!("{}", query.error_description.unwrap_or(error));
     }
     let code = query.code.ok_or_else(|| anyhow::anyhow!("missing code"))?;
-    let state_token = query.state.ok_or_else(|| anyhow::anyhow!("missing state"))?;
+    let state_token = query
+        .state
+        .ok_or_else(|| anyhow::anyhow!("missing state"))?;
 
-    let (publisher, git_repo_url) = state
-        .github_connect
-        .take(&state_token)
-        .ok_or_else(|| anyhow::anyhow!("this connection attempt has expired or was already used - click Connect Git again"))?;
+    let (publisher, git_repo_url) = state.github_connect.take(&state_token).ok_or_else(|| {
+        anyhow::anyhow!(
+            "this connection attempt has expired or was already used - click Connect Git again"
+        )
+    })?;
 
     let access_token = github::exchange_code_for_token(&state.config, &code).await?;
     let has_admin_access = github::verify_repo_admin_access(&access_token, &git_repo_url).await?;
     if !has_admin_access {
-        anyhow::bail!("the GitHub account you authorized does not have admin access to {git_repo_url}");
+        anyhow::bail!(
+            "the GitHub account you authorized does not have admin access to {git_repo_url}"
+        );
     }
 
-    let (agent, _principal) = ic::agent::build_agent_for_network(&state.config, &state.config.auth_network, true).await?;
-    ic::marketplace::register_repo_publisher(&agent, state.config.marketplace_canister_id, &git_repo_url, publisher).await?;
+    let (agent, _principal) =
+        ic::agent::build_agent_for_network(&state.config, &state.config.auth_network, true).await?;
+    ic::marketplace::register_repo_publisher(
+        &agent,
+        state.config.marketplace_canister_id,
+        &git_repo_url,
+        publisher,
+    )
+    .await?;
 
     Ok(git_repo_url)
 }
@@ -107,7 +126,10 @@ fn result_page(success: bool, git_repo_url: &str, error: Option<String>) -> Resp
     let message = if success {
         format!("Connected {git_repo_url}. You can close this window.")
     } else {
-        format!("Couldn't connect: {}", error.as_deref().unwrap_or("unknown error"))
+        format!(
+            "Couldn't connect: {}",
+            error.as_deref().unwrap_or("unknown error")
+        )
     };
     Html(format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>Canister Hub</title></head>
@@ -133,7 +155,10 @@ fn result_page(success: bool, git_repo_url: &str, error: Option<String>) -> Resp
 /// already, but this is cheap insurance against ever rendering raw
 /// GitHub-controlled text as HTML.
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn bad_request(message: String) -> ApiError {

@@ -49,6 +49,14 @@ ic-http-certification = "4.0.0"
 # backend/src/lib.rs. Requires `landing/dist` to exist before this crate
 # compiles (gitignored, same as `frontend/dist` - see `landing/README.md`).
 include_dir = "0.7.4"
+# Managed AI access. `ic-rig` supplies provider-neutral completion clients;
+# the HTTP adapter in `managed_ai.rs` sends their requests through IC HTTPS
+# outcalls. Keep management-canister 0.1 aligned with this canister's ic-cdk
+# 0.19 dependency (the newer builder API requires ic-cdk 0.20).
+ic-rig = { version = "0.2", features = ["openai", "anthropic", "gemini", "deepseek"] }
+ic-cdk-management-canister = "0.1"
+serde_json = "1"
+thiserror = "2"
 
 [dev-dependencies]
 # Keep aligned with the local PocketIC server used by tests (POCKET_IC_BIN).

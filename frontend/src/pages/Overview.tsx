@@ -1,6 +1,7 @@
+import { CopyLinkButton } from "@/components/CopyLinkButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext, useNavigate, Link } from "react-router-dom";
-import { ExternalLink, Database as DatabaseIcon, Sparkles, MoreVertical, Play, Square, Trash2, Rocket, Store, Bot, ListChecks, Settings as SettingsIcon, ChevronUp, ChevronDown, Search, Package } from "lucide-react";
+import { ExternalLink, Database as DatabaseIcon, Sparkles, MoreVertical, Play, Square, Trash2, Rocket, Store, Bot, ListChecks, Settings as SettingsIcon, ChevronUp, ChevronDown, Search, Package, AppWindow, Globe } from "lucide-react";
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -14,6 +15,7 @@ import type { ServiceStatus } from "@/lib/mock-data";
 import type { ProjectContext } from "@/components/layout/AppShell";
 import { removeProjectCanister, type Project, type ProjectState, type CanisterKind, type CanisterInfo } from "@/lib/backend";
 import { getAllCanisterStats, getCanisterStatsDirect, type BusinessStats, type CanisterStats } from "@/lib/canisterStats";
+import type { CanisterLink } from "@/lib/moduleConfig";
 import { stopCanister, startCanister, deleteCanister } from "@/lib/canisterOps";
 import type { CanisterType } from "@/lib/candid/canisterMetadata";
 import { formatMarketplacePrice, listMarketplaceItems, purchasedMarketplaceItemIds, type MarketplaceItem } from "@/lib/marketplace";
@@ -87,12 +89,20 @@ function BusinessStatsLine({ business }: { business: BusinessStats | undefined }
  * disabled once a matching status is genuinely confirmed. Delete needs an
  * explicit in-menu confirm step rather than `window.confirm` (a native
  * dialog would freeze this whole tab) - it's real and irreversible: the IC
- * itself won't undo it, and neither can this dashboard. */
+ * itself won't undo it, and neither can this dashboard.
+ *
+ * The menu's top section lists every page the module itself declares via
+ * `get_links` (`CanisterStats.links`). All of them open inside this
+ * dashboard (`CanisterViewData`) at `?link=<index>`, so each page has its
+ * own route; only an `Admin` (owner-only) page is also handed the user's
+ * identity - a `Public` page is embedded as the public sees it. The card's
+ * icon row can only fit the first of each kind, hence the full list here. */
 function CanisterOpsMenu({
   job,
   name,
   info,
   status,
+  links,
   onStatsChanged,
   onDeleted,
 }: {
@@ -100,6 +110,7 @@ function CanisterOpsMenu({
   name: string;
   info: CanisterInfo;
   status: CanisterStats["status"] | undefined;
+  links: CanisterLink[];
   onStatsChanged: () => void;
   onDeleted: () => void;
 }) {
@@ -174,9 +185,33 @@ function CanisterOpsMenu({
         <MoreVertical size={13} />
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-44 bg-[#0f1629] border border-[#1e2d47] rounded-lg shadow-xl z-20 text-xs overflow-hidden">
+        <div className="absolute right-0 top-full mt-1 w-52 bg-[#0f1629] border border-[#1e2d47] rounded-lg shadow-xl z-20 text-xs overflow-hidden">
           {!confirmDelete ? (
             <div className="py-1">
+              {links.length > 0 && (
+                <>
+                  <div className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-[#4a5568]">Pages</div>
+                  {links.map((link, index) => {
+                    const internal = "Admin" in link.kind;
+                    const Icon = internal ? AppWindow : Globe;
+                    return (
+                      <div key={`${index}:${link.label}`} className="flex items-center hover:bg-[#131929] transition-colors pr-1.5">
+                        <Link
+                          to={`/project/${job.id}/canister/${encodeURIComponent(info.id)}/view-data?link=${index}`}
+                          onClick={() => setOpen(false)}
+                          title={`${link.label} (${internal ? "owner page" : "public page"})`}
+                          className="flex-1 min-w-0 flex items-center gap-2 px-3 py-1.5 text-left text-[#e2e8f0]"
+                        >
+                          <Icon size={11} className={internal ? "flex-shrink-0 text-[#8892a4]" : "flex-shrink-0 text-[#00d4ff]"} />
+                          <span className="truncate flex-1">{link.label}</span>
+                        </Link>
+                        <CopyLinkButton url={link.url} label={link.label} />
+                      </div>
+                    );
+                  })}
+                  <div className="border-t border-[#1e2d47] my-1" />
+                </>
+              )}
               <button
                 onClick={runStart}
                 disabled={busy !== null || status === "running"}
@@ -284,6 +319,8 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
         {canisters.map(([name, info]) => {
           const s = stats?.[name];
           const metadataType = metadataTypeLabel(s?.canister_type);
+          const adminLink = s?.links.find((link) => "Admin" in link.kind);
+          const publicLinks = s?.links.filter((link) => "Public" in link.kind) ?? [];
           return (
             <div key={name} className="flex flex-col gap-2 p-3 rounded-lg bg-[#0f1629] border border-[#1e2d47]">
               <div className="flex items-center justify-between">
@@ -295,6 +332,7 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
                     name={name}
                     info={info}
                     status={s?.status}
+                    links={s?.links ?? []}
                     onStatsChanged={() => reloadOne(name, info)}
                     onDeleted={refetch}
                   />
@@ -323,12 +361,12 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
                   multi-line labels. `View data` comes from
                   `canister-hub-sdk`'s `ic::config` surface
                   (`moduleLinksFor` in `lib/canisterStats.ts`) reporting an
-                  `admin_panel_url` - it's an iframe'd internal subpage, not
+                  Admin link - it's an iframe'd internal subpage, not
                   an external link, so a canister's own admin UI (e.g.
                   `ic-sql`'s embedded table-browser) stays inside this
                   dashboard. */}
               <div className="flex items-center gap-1 mt-auto pt-0.5">
-                {s?.admin_panel_url && (
+                {adminLink && (
                   <Link
                     to={`/project/${job.id}/canister/${encodeURIComponent(info.id)}/view-data`}
                     title="View data"
@@ -346,14 +384,18 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
                     <SettingsIcon size={12} />
                   </Link>
                 )}
-                {(s?.home_page_url || (info.kind === "static" && s?.url)) && (
-                  <a
-                    href={s?.home_page_url ?? s?.url ?? undefined}
-                    target="_blank"
-                    rel="noreferrer"
-                    title="Open"
+                {publicLinks.map((link) => (
+                  <Link
+                    key={`${link.label}:${link.url}`}
+                    to={`/project/${job.id}/canister/${encodeURIComponent(info.id)}/view-data?link=${s!.links.indexOf(link)}`}
+                    title={link.label}
                     className="p-1 rounded text-[#00d4ff] hover:bg-[#1a2236] transition-colors"
                   >
+                    <Globe size={12} />
+                  </Link>
+                ))}
+                {publicLinks.length === 0 && info.kind === "static" && s?.url && (
+                  <a href={s.url} target="_blank" rel="noreferrer" title="Open" className="p-1 rounded text-[#00d4ff] hover:bg-[#1a2236] transition-colors">
                     <ExternalLink size={12} />
                   </a>
                 )}

@@ -32,20 +32,29 @@ pub async fn index_marketplace_item(
     // startup, but this needs a fresh agent per call since it isn't held
     // anywhere between requests. Requires a real identity: inserting into
     // hnsw_index is a write.
-    let (agent, _principal) = ic::agent::build_agent_for_network(&state.config, &state.config.auth_network, true)
-        .await
-        .map_err(|e| bad_gateway(format!("failed to set up IC agent: {e}")))?;
+    let (agent, _principal) =
+        ic::agent::build_agent_for_network(&state.config, &state.config.auth_network, true)
+            .await
+            .map_err(|e| bad_gateway(format!("failed to set up IC agent: {e}")))?;
 
-    let item = ic::marketplace::get_marketplace_item(&agent, state.config.marketplace_canister_id, body.item_id)
-        .await
-        .map_err(|e| bad_gateway(format!("failed to query the marketplace canister: {e}")))?;
+    let item = ic::marketplace::get_marketplace_item(
+        &agent,
+        state.config.marketplace_canister_id,
+        body.item_id,
+    )
+    .await
+    .map_err(|e| bad_gateway(format!("failed to query the marketplace canister: {e}")))?;
     let Some(item) = item else {
-        return Err((StatusCode::NOT_FOUND, Json(json!({ "error": format!("no marketplace item with id {}", body.item_id) }))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("no marketplace item with id {}", body.item_id) })),
+        ));
     };
 
-    let (summary, keywords) = embeddings::summarize_and_extract_keywords(&state.config, &item.description)
-        .await
-        .map_err(|e| bad_gateway(format!("summarization failed: {e}")))?;
+    let (summary, keywords) =
+        embeddings::summarize_and_extract_keywords(&state.config, &item.description)
+            .await
+            .map_err(|e| bad_gateway(format!("summarization failed: {e}")))?;
 
     let embedding_text = embeddings::embedding_input(&item, &summary, &keywords);
     let vector = embeddings::embed_text(&embedding_text)

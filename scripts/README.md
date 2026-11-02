@@ -15,6 +15,48 @@ npm run generate
 `publish_to_marketplace.js`. The generated `bindings/` directory is ignored;
 `backend.did` remains the interface source of truth.
 
+## Catalog uploader (controller)
+
+Use `upload_marketplace_catalog.js` to seed or update several official
+templates and free packages in one run. It signs through the installed `icp`
+CLI, so the selected identity must be a controller of `backend`; the script
+never reads or stores the controller's private key.
+
+Copy [`catalog.example.json`](./catalog.example.json), update its GitHub
+release URLs and local file paths, then validate it without changing state:
+
+```bash
+cd scripts
+deno task upload-catalog --file ./catalog.json --dry-run
+```
+
+Upload to the local backend with the current default identity:
+
+```bash
+deno task upload-catalog --file ./catalog.json
+```
+
+Upload to mainnet with a named controller identity:
+
+```bash
+deno task upload-catalog \
+  --file ./catalog.json \
+  --environment ic \
+  --identity deploy
+```
+
+The script resolves `manifest_file` and `wasm_file` relative to the catalog,
+checks that every referenced file exists, and hashes all files before its
+first canister update. Templates use `add_marketplace_template`; packages are
+registered to the same controller principal and then use
+`publish_marketplace_item`. Repository/slug pairs are upserts, so rerunning a
+catalog updates listings rather than duplicating them.
+
+This bulk path intentionally supports only free packages. Continue using
+`publish_to_marketplace.js` (or the versioned GitHub Action below) for paid
+packages because that path generates an AES key, encrypts the Wasm, and wraps
+the key with vetKD before publishing.
+
 ## Versioned GitHub Action
 
 Third-party repositories do not need to copy these scripts. Use the action

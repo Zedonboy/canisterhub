@@ -23,11 +23,9 @@ marketplace. A user describes something they want built. Your job is to break \
 that request down into first-principles building blocks, not to always write \
 one bespoke canister from scratch.
 
-There are seven known building blocks - reusable, already-correct canisters, \
+There are eight known building blocks - reusable, already-correct canisters, \
 each with one clear role:
-- connector: receives messages from the outside world (WhatsApp/Telegram/ \
-  email) and forwards them to an agent canister.
-- agent: exposes user-facing actions as LLM tool-calling, for \
+- agent: receives WhatsApp/Telegram/email directly and exposes user-facing actions as LLM tool-calling, for \
   customer support/self-service. The one building block usually worth \
   actually customizing (see below) - its business-specific tools (beyond a \
   couple of generic examples) are what make it fit a specific business.
@@ -38,6 +36,12 @@ each with one clear role:
   own HTTP callback endpoint) side by side, resolving to one profile either \
   way. Needed whenever the request implies real user accounts/sign-in, not \
   just anonymous or purely admin-driven use.
+- order_inventory: a ready-made SME catalog and ordering module. It stores \
+  products/services, optional stock, customer orders, required delivery \
+  addresses, and optional GPS; its `ai_*` methods serve customers and authorized staff.
+- notification: project-owned Web Push subscriptions and delivery. Use it \
+  when the SME needs browser notifications; configure the agent or business \
+  canisters that may send as trusted senders after deployment.
 - database: stores business/customer data - three variants (ic-sql for \
   structured/relational data, ic-kv for simple key-value, vector_db for \
   similarity search) - pick whichever fits the request's actual data shape.
@@ -46,7 +50,7 @@ each with one clear role:
   business-specific.
 - assets: stores media (images, etc.) the app references - starts empty.
 
-Most requests need a handful of these, not all seven. Decide which apply, then:
+Most requests need a handful of these, not all eight. Decide which apply, then:
 
 1. First, try search_marketplace - if a free (non-gated) item already covers \
    the whole request, call deploy_marketplace_item and you're done.
@@ -59,9 +63,9 @@ Most requests need a handful of these, not all seven. Decide which apply, then:
    write_and_compile_project call below.
 3. Call write_and_compile_project once per building block the request \
    needs, giving it the (real) project name, a canister_name for that block's own \
-   subfolder (e.g. \"connector\", \"agent\"), and a clear spec - for \
+   subfolder (e.g. \"agent\"), and a clear spec - for \
    agent or a genuinely custom canister, describe the actual \
-   business logic; for the fixed blocks (connector/admin_agent/database) a \
+   business logic; for the fixed blocks (admin_agent/order_inventory/notification/database) a \
    short note of what it's for is enough, since the subagent adds it by \
    copying known-good source rather than writing new code. The subagent \
    handles adding that canister to the project (including registering it in \
@@ -71,9 +75,12 @@ Most requests need a handful of these, not all seven. Decide which apply, then:
 4. Once every needed building block's call has reported success, call \
    write_and_compile_project one final time for the same project WITHOUT a \
    canister_name (meaning \"the whole project\", not one subfolder) and a \
-   wiring spec: which canisters need to know about each other (e.g. \
-   connector needs agent's id, agent needs connector's \
-   id back). This call deploys the whole project for real and wires the \
+   wiring spec: deploy the fused agent and register every business/tool \
+   canister on it with `add_canister`, which discovers that canister's \
+   `llm_context` and declared `ai_*` methods. When order_inventory is present, \
+   also call its `set_trusted_agent(agent_principal, true)` as the deploying \
+   controller so those discovered methods authorize calls from that agent. \
+   This call deploys the whole project for real and wires the \
    pieces together - its summary will include the resulting canister ids, \
    independently confirmed rather than only self-reported.
 5. If any step reports failure, either retry it with a clarified spec, or \
@@ -120,7 +127,11 @@ Never fabricate a canister id or claim success a tool call didn't actually repor
 /// coding subagent to run `icp deploy -e ic --identity deploy` regardless
 /// of the job's own requested network - a real bug (caught before any real
 /// job ever reached this step and paid for it), not a hypothetical one.
-pub fn coding_subagent_preamble(cfg: &Config, business_requirements: &str, network: &str) -> String {
+pub fn coding_subagent_preamble(
+    cfg: &Config,
+    business_requirements: &str,
+    network: &str,
+) -> String {
     let building_blocks_dir = cfg.building_blocks_dir.display();
     let is_mainnet = network == "ic";
     // Every command below that differs between the two only differs in
@@ -132,10 +143,15 @@ pub fn coding_subagent_preamble(cfg: &Config, business_requirements: &str, netwo
     // imported identity needed). `deploy_flags`/`status_flags` are
     // reused verbatim across steps 3-5 so there's exactly one place this
     // ever needs to change.
-    let deploy_flags = if is_mainnet { " -e ic --identity deploy" } else { "" };
+    let deploy_flags = if is_mainnet {
+        " -e ic --identity deploy"
+    } else {
+        ""
+    };
     let status_flags = if is_mainnet { " -i -e ic" } else { " -i" };
     let deploy_section = if is_mainnet {
-        format!("\
+        format!(
+            "\
 1. Import the deploy identity (via shell, once): if \
 `.orchestrator-identity.pem` exists at the project root, run `icp identity \
 import --from-pem .orchestrator-identity.pem --storage plaintext deploy -o`; \
@@ -158,13 +174,15 @@ certain.
 5. Confirm the deploy actually succeeded: run `icp canister status <name>{deploy_flags}` \
 for every canister and include each one's real id in your summary - your \
 summary is trusted for exactly what it reports, so don't state a canister \
-id you didn't just see in real command output.")
+id you didn't just see in real command output."
+        )
     } else {
         // No identity to import for a local deploy - `icp deploy`/`icp
         // canister call` against the local replica succeed anonymously,
         // exactly like every other local command this project's own
         // tooling (this orchestrator included) already runs.
-        format!("\
+        format!(
+            "\
 1. Run `icp build` across the whole project first, for fast feedback before \
 attempting a live deploy.
 2. Deploy for real: `icp deploy{deploy_flags} -y` (non-interactive, deploys \
@@ -181,7 +199,8 @@ certain.
 4. Confirm the deploy actually succeeded: run `icp canister status <name>{deploy_flags}` \
 for every canister and include each one's real id in your summary - your \
 summary is trusted for exactly what it reports, so don't state a canister \
-id you didn't just see in real command output.")
+id you didn't just see in real command output."
+        )
     };
     format!("\
 You are a Rust developer building canisters for the Internet Computer (ICP).
@@ -197,9 +216,7 @@ otherwise.
 
 You're working inside one icp-cli project, assembled from known building \
 blocks plus whatever genuinely custom canisters the request needs:
-- connector: receives messages from the outside world (WhatsApp/Telegram/ \
-  email) and forwards them to an agent canister.
-- agent: exposes user-facing actions as LLM tool-calling - usually \
+- agent: receives WhatsApp/Telegram/email directly and exposes user-facing actions as LLM tool-calling - usually \
   the one worth actually customizing, since its business-specific tools are \
   what make it fit a particular business.
 - admin_agent: admin-only actions, callable only by a controller/dashboard, \
@@ -207,6 +224,10 @@ blocks plus whatever genuinely custom canisters the request needs:
 - auth: user/profile management and authentication - principal-native (the \
   free IC pattern) and OAuth2 (\"Sign in with Google\"/GitHub/etc.) side by \
   side, resolving to one profile either way.
+- order_inventory: SME products/services, stock, customer orders, required \
+  delivery addresses, optional GPS, and agent-callable customer/staff workflows.
+- notification: project-owned browser Web Push subscriptions, VAPID encryption, \
+  and delivery by controllers or configured trusted sender canisters.
 - a database kind (ic-sql for structured/relational data, ic-kv for simple \
   key-value, vector_db for similarity search).
 - static: the web app's own frontend (HTML/CSS/JS) - genuinely bespoke per \
@@ -225,7 +246,7 @@ should actually look like, wording in a system_prompt) - your spec is what \
 this one call needs done, this is why.
 
 Your tools are scoped to the project's own root - every path you \
-read/write/edit is relative to it (e.g. `connector/src/lib.rs`, not \
+read/write/edit is relative to it (e.g. `agent/src/lib.rs`, not \
 `src/lib.rs`), even when your spec is about one specific canister.
 
 Start by reading this project's own icp.yaml at the root - it's the real, \
@@ -243,8 +264,8 @@ what it happened to start with.
 
 ## Working on one canister (your spec names a canister_name)
 
-If the spec names a known building block (connector, agent, \
-admin_agent, auth, or a database kind):
+If the spec names a known building block (agent, \
+admin_agent, auth, order_inventory, notification, or a database kind):
 - Run (via shell) `icp new <canister_name> --path {building_blocks_dir}/<kind> \
   -s -o --vcs none` - this creates the `<canister_name>` subfolder fresh, \
   copying that block's real, already-correct source (including its own \
@@ -288,9 +309,17 @@ Then - only for agent or a genuinely custom canister the spec \
 describes business logic for - actually implement that logic (see \
 `<canister_name>`/llm_context.md or README.md for its own adaptation \
 pattern: replace/add tool structs in tools.rs, write a good system_prompt, \
-etc.). Never rewrite connector's/admin_agent's/a database's fixed source - \
+etc.). Never rewrite admin_agent's/order_inventory's/notification's/a database's fixed source - \
 they're meant to be used as-is; if the spec needs something they don't do, \
 use ask_user rather than guessing that rewriting one is the right move.
+
+Every custom canister the fused agent should call must expose a public \
+`llm_context() -> text` query returning JSON with a `methods` array. Method \
+names must start with `ai_`; each method accepts `(AiContext, text)` and \
+returns `Result<text, text>`, with the text arguments/results containing \
+JSON. The method must scope identity from the agent-supplied AiContext, never \
+from model-supplied JSON. During final wiring call the agent's \
+`add_canister(principal)` for every such canister.
 
 Whether reused as-is or customized, before you're done: run `icp build \
 <canister_name>` (compiles just this canister - the authoritative check your \
@@ -361,7 +390,11 @@ deployed) the real canister ids you confirmed.")
 struct UsageTracker(Arc<Mutex<Usage>>);
 
 impl AgentHook for UsageTracker {
-    async fn on_completion_response(&self, _ctx: &HookContext, event: CompletionResponseEvent<'_>) -> ObservationAction {
+    async fn on_completion_response(
+        &self,
+        _ctx: &HookContext,
+        event: CompletionResponseEvent<'_>,
+    ) -> ObservationAction {
         *self.0.lock().unwrap() += event.usage;
         ObservationAction::continue_run()
     }
@@ -383,7 +416,13 @@ pub struct AgentRunOutcome {
 /// delegates to, since both just differ in what they're told and what tools
 /// they're given. All of rig's internal tool-calling turns happen inside this
 /// one call.
-pub async fn run_agent(cfg: &Config, preamble: &str, tools: Vec<DynamicTool>, request: String, max_turns: usize) -> AgentRunOutcome {
+pub async fn run_agent(
+    cfg: &Config,
+    preamble: &str,
+    tools: Vec<DynamicTool>,
+    request: String,
+    max_turns: usize,
+) -> AgentRunOutcome {
     let usage_tracker = Arc::new(Mutex::new(Usage::default()));
 
     let result: anyhow::Result<String> = async {
@@ -562,8 +601,6 @@ mod preamble_tests {
             github_oauth_client_secret: None,
             public_base_url: None,
             github_api_token: None,
-            vapid_public_key: None,
-            vapid_private_key: None,
         }
     }
 
@@ -575,10 +612,19 @@ mod preamble_tests {
     #[test]
     fn local_network_never_mentions_mainnet_deploy_flags_or_an_identity_file() {
         let preamble = coding_subagent_preamble(&config(), "a todo app", "local");
-        assert!(!preamble.contains("-e ic"), "a local job's preamble must never mention the mainnet environment flag:\n{preamble}");
-        assert!(!preamble.contains("--identity deploy"), "a local job's preamble must never mention importing a deploy identity:\n{preamble}");
+        assert!(
+            !preamble.contains("-e ic"),
+            "a local job's preamble must never mention the mainnet environment flag:\n{preamble}"
+        );
+        assert!(
+            !preamble.contains("--identity deploy"),
+            "a local job's preamble must never mention importing a deploy identity:\n{preamble}"
+        );
         assert!(!preamble.contains(".orchestrator-identity"), "a local job's preamble must never reference the mainnet-only identity file:\n{preamble}");
-        assert!(preamble.contains("icp deploy -y"), "a local job should still deploy, just without mainnet flags:\n{preamble}");
+        assert!(
+            preamble.contains("icp deploy -y"),
+            "a local job should still deploy, just without mainnet flags:\n{preamble}"
+        );
     }
 
     /// The mainnet path keeps its real, necessary instructions - this
@@ -587,14 +633,21 @@ mod preamble_tests {
     #[test]
     fn ic_network_keeps_the_real_mainnet_deploy_instructions() {
         let preamble = coding_subagent_preamble(&config(), "a todo app", "ic");
-        assert!(preamble.contains("-e ic --identity deploy"), "a mainnet job must still import and use a real deploy identity:\n{preamble}");
-        assert!(preamble.contains(".orchestrator-identity.pem"), "a mainnet job must still be told about the identity file:\n{preamble}");
+        assert!(
+            preamble.contains("-e ic --identity deploy"),
+            "a mainnet job must still import and use a real deploy identity:\n{preamble}"
+        );
+        assert!(
+            preamble.contains(".orchestrator-identity.pem"),
+            "a mainnet job must still be told about the identity file:\n{preamble}"
+        );
         assert!(preamble.contains("icp deploy -e ic --identity deploy -y"));
     }
 
     #[test]
     fn both_networks_still_include_the_actual_business_requirement() {
-        let preamble = coding_subagent_preamble(&config(), "a very specific flight booking app", "local");
+        let preamble =
+            coding_subagent_preamble(&config(), "a very specific flight booking app", "local");
         assert!(preamble.contains("a very specific flight booking app"));
     }
 }

@@ -101,6 +101,13 @@ fn database_id() -> CanisterInfo {
     }
 }
 
+fn notification_id(byte: u8) -> CanisterInfo {
+    CanisterInfo {
+        id: test_principal(byte),
+        kind: CanisterKind::Notification,
+    }
+}
+
 #[test]
 fn create_project_makes_the_caller_its_owner() {
     let (pic, backend_id) = setup();
@@ -293,6 +300,107 @@ fn add_project_canisters_merges_across_calls_and_is_owner_gated() {
         as_bob.is_err(),
         "a non-owner must not be able to add canisters"
     );
+}
+
+#[test]
+fn project_accepts_only_one_shared_notification_canister() {
+    let (pic, backend_id) = setup();
+    let _: Result<(), String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "create_project",
+        ("p1".to_string(), "req".to_string(), "local".to_string()),
+    );
+
+    let first: Result<(), String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "add_project_canisters",
+        (
+            "p1".to_string(),
+            vec![("notification".to_string(), notification_id(7))],
+        ),
+    );
+    first.unwrap();
+
+    let retry: Result<(), String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "add_project_canisters",
+        (
+            "p1".to_string(),
+            vec![("notification".to_string(), notification_id(7))],
+        ),
+    );
+    retry.expect("an exact retry should be idempotent");
+
+    let second: Result<(), String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "add_project_canisters",
+        (
+            "p1".to_string(),
+            vec![("another-notification".to_string(), notification_id(8))],
+        ),
+    );
+    assert!(second
+        .unwrap_err()
+        .contains("already has notification canister"));
+
+    let project: Project = query::<Option<Project>>(
+        &pic,
+        backend_id,
+        alice(),
+        "get_project",
+        ("p1".to_string(),),
+    )
+    .unwrap();
+    assert_eq!(project.canisters.len(), 1);
+    assert_eq!(
+        project.canisters.get("notification"),
+        Some(&notification_id(7))
+    );
+
+    let _: Result<(), String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "create_project",
+        ("legacy".to_string(), "req".to_string(), "local".to_string()),
+    );
+    let _: Result<(), String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "add_project_canisters",
+        (
+            "legacy".to_string(),
+            vec![(
+                "notification".to_string(),
+                CanisterInfo {
+                    id: test_principal(9),
+                    kind: CanisterKind::Other,
+                },
+            )],
+        ),
+    );
+    let duplicate: Result<(), String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "add_project_canisters",
+        (
+            "legacy".to_string(),
+            vec![("another-notification".to_string(), notification_id(10))],
+        ),
+    );
+    assert!(duplicate
+        .unwrap_err()
+        .contains("already has notification canister"));
 }
 
 #[test]

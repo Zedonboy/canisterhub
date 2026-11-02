@@ -51,11 +51,10 @@ fn dummy_config(github_configured: bool) -> Config {
         require_auth: false,
         auth_network: "local".to_string(),
         github_oauth_client_id: github_configured.then(|| "test-client-id".to_string()),
-        github_oauth_client_secret: github_configured.then(|| Redacted::for_test("test-client-secret")),
+        github_oauth_client_secret: github_configured
+            .then(|| Redacted::for_test("test-client-secret")),
         public_base_url: github_configured.then(|| "http://127.0.0.1:0".to_string()),
         github_api_token: None,
-        vapid_public_key: None,
-        vapid_private_key: None,
     }
 }
 
@@ -82,7 +81,10 @@ async fn start_rejects_an_invalid_publisher_principal() {
     let client = reqwest::Client::new();
     let response = client
         .get(format!("{base_url}/github/connect/start"))
-        .query(&[("repo_url", TEST_REPO_URL), ("publisher", "not-a-principal")])
+        .query(&[
+            ("repo_url", TEST_REPO_URL),
+            ("publisher", "not-a-principal"),
+        ])
         .send()
         .await
         .unwrap();
@@ -97,7 +99,10 @@ async fn start_rejects_the_anonymous_publisher_principal() {
     let client = reqwest::Client::new();
     let response = client
         .get(format!("{base_url}/github/connect/start"))
-        .query(&[("repo_url", TEST_REPO_URL), ("publisher", &Principal::anonymous().to_text())])
+        .query(&[
+            ("repo_url", TEST_REPO_URL),
+            ("publisher", &Principal::anonymous().to_text()),
+        ])
         .send()
         .await
         .unwrap();
@@ -117,13 +122,22 @@ async fn start_errors_clearly_when_github_oauth_is_not_configured() {
     let publisher = Principal::from_slice(&[7; 10]);
     let response = client
         .get(format!("{base_url}/github/connect/start"))
-        .query(&[("repo_url", TEST_REPO_URL), ("publisher", &publisher.to_text())])
+        .query(&[
+            ("repo_url", TEST_REPO_URL),
+            ("publisher", &publisher.to_text()),
+        ])
         .send()
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
     let body: serde_json::Value = response.json().await.unwrap();
-    assert!(body["error"].as_str().unwrap().contains("GITHUB_OAUTH_CLIENT_ID"), "got: {body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("GITHUB_OAUTH_CLIENT_ID"),
+        "got: {body}"
+    );
 }
 
 #[tokio::test]
@@ -133,7 +147,10 @@ async fn start_rejects_a_non_github_repo_url() {
     let publisher = Principal::from_slice(&[7; 10]);
     let response = client
         .get(format!("{base_url}/github/connect/start"))
-        .query(&[("repo_url", "https://gitlab.com/alice/cool-project"), ("publisher", &publisher.to_text())])
+        .query(&[
+            ("repo_url", "https://gitlab.com/alice/cool-project"),
+            ("publisher", &publisher.to_text()),
+        ])
         .send()
         .await
         .unwrap();
@@ -155,11 +172,23 @@ async fn callback_reports_failure_html_for_an_unknown_state() {
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::OK);
-    let content_type = response.headers().get("content-type").unwrap().to_str().unwrap().to_string();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
     assert!(content_type.starts_with("text/html"), "got: {content_type}");
     let body = response.text().await.unwrap();
-    assert!(body.contains("canister-hub-github-connect"), "missing postMessage payload: {body}");
-    assert!(body.contains("\"success\":false"), "expected a failure result: {body}");
+    assert!(
+        body.contains("canister-hub-github-connect"),
+        "missing postMessage payload: {body}"
+    );
+    assert!(
+        body.contains("\"success\":false"),
+        "expected a failure result: {body}"
+    );
 }
 
 #[tokio::test]
@@ -168,7 +197,10 @@ async fn callback_reports_a_github_denial_error() {
     let client = reqwest::Client::new();
     let response = client
         .get(format!("{base_url}/github/connect/callback"))
-        .query(&[("error", "access_denied"), ("error_description", "The user denied the request")])
+        .query(&[
+            ("error", "access_denied"),
+            ("error_description", "The user denied the request"),
+        ])
         .send()
         .await
         .unwrap();

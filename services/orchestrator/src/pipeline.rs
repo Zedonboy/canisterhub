@@ -29,8 +29,16 @@ async fn run(config: Arc<Config>, jobs: JobStore, job: JobHandle) -> anyhow::Res
     // it (see `ic::hnsw::ensure_marketplace_items_collection`, run at
     // startup) and grants no Reader/Writer access to anyone else, so an
     // anonymous caller can't even query it.
-    let (agent, caller_principal) = ic::agent::build_agent_for_network(&config, &network, true).await?;
-    let ctx = Arc::new(JobContext::new(job.clone(), jobs, config.clone(), Arc::new(agent), caller_principal, network));
+    let (agent, caller_principal) =
+        ic::agent::build_agent_for_network(&config, &network, true).await?;
+    let ctx = Arc::new(JobContext::new(
+        job.clone(),
+        jobs,
+        config.clone(),
+        Arc::new(agent),
+        caller_principal,
+        network,
+    ));
     let tools = crate::llm::tools::build_tools(ctx);
 
     let max_turns = config.llm_max_turns as usize;

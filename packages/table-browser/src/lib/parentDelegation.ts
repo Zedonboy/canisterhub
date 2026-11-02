@@ -13,7 +13,8 @@
 //   3. The parent (if it has a real, non-anonymous identity, and agrees
 //      `moduleCanisterId` is the canister it actually embedded) signs a
 //      delegation from that identity's own session key to this ephemeral
-//      key, scoped to exactly `moduleCanisterId`, and replies with
+//      key, scoped to `moduleCanisterId` plus every other canister of the
+//      project (so this page can call any of them), and replies with
 //      `{ type: "SCOPED_DELEGATION_RESPONSE", delegationChainJson }`.
 //      Otherwise (or if it never replies at all - an older dashboard
 //      build, one that doesn't implement this protocol, or simply not

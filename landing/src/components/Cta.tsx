@@ -1,5 +1,5 @@
 import { ArrowRight } from "lucide-react";
-import { Container, Button } from "./ui";
+import { Container, ButtonLink } from "./ui";
 
 export function Cta() {
   return (
@@ -13,9 +13,9 @@ export function Cta() {
           Sign in with Internet Identity, describe what your business needs, and have a real canister running in
           minutes.
         </p>
-        <Button variant="primary" size="lg" className="gap-2">
+        <ButtonLink variant="primary" size="lg" className="gap-2">
           Launch Dashboard <ArrowRight size={16} />
-        </Button>
+        </ButtonLink>
       </Container>
     </section>
   );

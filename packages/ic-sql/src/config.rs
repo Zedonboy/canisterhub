@@ -13,7 +13,7 @@ use canister_hub_sdk::ic::config::DynamicConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug, Default, PartialEq, DynamicConfig)]
-#[config_urls(admin_panel_url = "/admin/")]
+#[config_links(("Table Browser", "/admin/", Admin))]
 pub struct Config {
     /// The `auth` canister (see that crate) to consult for a caller with no
     /// explicit `set_permission` entry of their own - `None` (the default)

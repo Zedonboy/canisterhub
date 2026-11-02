@@ -1,0 +1,26 @@
+[package]
+name = "notification"
+version.workspace = true
+edition.workspace = true
+description = "Self-contained Web Push notification canister module for CanisterHub projects"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+canister-hub-sdk.workspace = true
+candid.workspace = true
+getrandom.workspace = true
+hkdf = "0.12"
+ic-cdk.workspace = true
+ic-stable-structures.workspace = true
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdh", "ecdsa"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+url = "2"
+
+[dev-dependencies]
+pocket-ic.workspace = true

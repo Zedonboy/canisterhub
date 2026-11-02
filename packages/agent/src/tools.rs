@@ -49,18 +49,7 @@
 //! Extend [`RequestAdminActionTool`]'s handling on the receiving end of the
 //! webhook instead (see `admin.rs`'s doc comment).
 //!
-//! [`QueryDatabaseTool`] bends the "only ever touches `self.customer`'s own
-//! data" rule above in one specific, deliberate way: an arbitrary SQL
-//! database has no fixed "customer" column this file could filter by, so
-//! instead of scoping *what* it can touch, it's restricted to *how* -
-//! read-only, never a mutation. See that tool's own doc comment. If you add
-//! a tool that needs to *write* to the database, call
-//! [`crate::db::execute`] directly from that tool's own `call()` (see
-//! `db.rs`'s doc comment for why it's a plain function, not a `Tool`
-//! itself) - don't loosen `QueryDatabaseTool` to do it.
-
 use crate::messages::SessionKey;
-use candid::Principal;
 use ic_rig::{Tool, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -123,7 +112,10 @@ impl Tool for GetProfileTool {
 
     async fn call(&self, _args: GetProfileArgs) -> Result<GetProfileOutput, ActionError> {
         let profile = crate::state::get_customer_profile(&self.customer);
-        Ok(GetProfileOutput { username: profile.username, display_name: profile.display_name })
+        Ok(GetProfileOutput {
+            username: profile.username,
+            display_name: profile.display_name,
+        })
     }
 }
 
@@ -162,79 +154,15 @@ impl Tool for UpdateUsernameTool {
             return Err(ActionError("new_username must not be empty".to_string()));
         }
         if new_username.chars().count() > 32 {
-            return Err(ActionError("new_username must be 32 characters or fewer".to_string()));
+            return Err(ActionError(
+                "new_username must be 32 characters or fewer".to_string(),
+            ));
         }
 
         let mut profile = crate::state::get_customer_profile(&self.customer);
         profile.username = Some(new_username.to_string());
         crate::state::set_customer_profile(&self.customer, profile);
         Ok(format!("username updated to '{new_username}'"))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The database query tool - deliberately read-only, unlike `db.rs`'s
-// underlying client, which also exposes `execute` (mutations). Letting a
-// customer-facing model run arbitrary SQL against a shared database - not
-// just its own row, the way `update_username` is scoped - is a materially
-// different risk from this file's other tools, so it gets a materially
-// different guard: not "can only touch this customer's own data" (there's
-// no `customer` column this tool could filter by in an arbitrary schema),
-// but "can only ever read, never write". A tool that needs to *write* to
-// the database as part of its own logic should call `db::execute` directly
-// from its own `call()` - not by loosening this tool - the same way
-// `request_admin_action` routes anything requiring judgment through a human
-// rather than letting the model act directly.
-// ---------------------------------------------------------------------------
-
-pub struct QueryDatabaseTool {
-    /// Unlike every other tool in this file, `call()` below doesn't actually
-    /// read this - there's no fixed "customer" column in an arbitrary SQL
-    /// schema to scope by (see this struct's doc comment above). Kept
-    /// anyway, rather than dropped, so this tool still matches every other
-    /// one's shape (a reviewer checking "does every tool hold a `customer`
-    /// field" doesn't need a special case) and so it's a small, obvious
-    /// change to start using it - e.g. per-customer rate limiting, or
-    /// logging who ran what - without restructuring the tool later.
-    #[allow(dead_code)]
-    pub customer: SessionKey,
-    /// Not used to scope the query either, only to know *which* database to
-    /// ask. Kept as a field (like every other tool's `customer`) rather
-    /// than a global, so a test can construct this tool against a fake/
-    /// missing canister id without touching real config state.
-    pub ic_sql_canister_id: Option<Principal>,
-}
-
-#[derive(Deserialize)]
-pub struct QueryDatabaseArgs {
-    sql: String,
-}
-
-impl Tool for QueryDatabaseTool {
-    const NAME: &'static str = "query_database";
-    type Error = ActionError;
-    type Args = QueryDatabaseArgs;
-    type Output = crate::db::QueryResult;
-
-    fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Run a read-only SELECT against this business's database to answer a customer's question - e.g. product information, order status, or FAQs, depending on what this deployment's database holds. Read-only: cannot create, change, or delete anything (use update_username for this customer's own profile, or request_admin_action for anything needing a change or human judgment). Not automatically scoped to this customer - only query tables/columns appropriate to share with a customer, and never write a query that could expose another customer's data.".to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "sql": { "type": "string", "description": "A single read-only SELECT statement." }
-                },
-                "required": ["sql"]
-            }),
-        }
-    }
-
-    async fn call(&self, args: QueryDatabaseArgs) -> Result<crate::db::QueryResult, ActionError> {
-        let canister_id = self
-            .ic_sql_canister_id
-            .ok_or_else(|| ActionError("no database is configured for this deployment (Config::ic_sql_canister_id is unset)".to_string()))?;
-        crate::db::query(canister_id, &args.sql).await.map_err(ActionError)
     }
 }
 
@@ -276,7 +204,9 @@ impl Tool for RequestAdminActionTool {
     }
 
     async fn call(&self, args: RequestAdminActionArgs) -> Result<String, ActionError> {
-        crate::admin::file_and_notify(&self.customer, &args.action_type, &args.details).await.map_err(ActionError)
+        crate::admin::file_and_notify(&self.customer, &args.action_type, &args.details)
+            .await
+            .map_err(ActionError)
     }
 }
 
@@ -285,7 +215,10 @@ mod tests {
     use super::*;
 
     fn key(id: &str) -> SessionKey {
-        SessionKey { channel: crate::messages::Channel::WhatsApp, session_id: id.to_string() }
+        SessionKey {
+            channel: crate::messages::Channel::WhatsApp,
+            session_id: id.to_string(),
+        }
     }
 
     /// The core invariant this module exists to enforce: every tool's JSON
@@ -295,16 +228,33 @@ mod tests {
     /// if handlers happen not to honor it today.
     #[test]
     fn no_tool_parameter_looks_like_a_customer_identifier() {
-        let suspicious = ["customer_id", "customer", "user_id", "account_id", "session_id", "channel", "phone", "email"];
+        let suspicious = [
+            "customer_id",
+            "customer",
+            "user_id",
+            "account_id",
+            "session_id",
+            "channel",
+            "phone",
+            "email",
+        ];
         let customer = key("probe");
         let defs = [
-            GetProfileTool { customer: customer.clone() }.definition(),
-            UpdateUsernameTool { customer: customer.clone() }.definition(),
-            QueryDatabaseTool { customer: customer.clone(), ic_sql_canister_id: None }.definition(),
+            GetProfileTool {
+                customer: customer.clone(),
+            }
+            .definition(),
+            UpdateUsernameTool {
+                customer: customer.clone(),
+            }
+            .definition(),
             RequestAdminActionTool { customer }.definition(),
         ];
         for def in defs {
-            let Some(properties) = def.parameters.get("properties").and_then(|p| p.as_object()) else { continue };
+            let Some(properties) = def.parameters.get("properties").and_then(|p| p.as_object())
+            else {
+                continue;
+            };
             for name in properties.keys() {
                 let lower = name.to_ascii_lowercase();
                 assert!(!suspicious.contains(&lower.as_str()), "tool '{}' has a parameter '{}' that looks like a customer identifier - see tools.rs's doc comment", def.name, name);
@@ -318,25 +268,43 @@ mod tests {
         // customer in the first place (`UpdateUsernameArgs` has none) - this
         // is really a test that stays true by construction, kept as a
         // regression guard against a future edit adding one.
-        let tool = UpdateUsernameTool { customer: key("alice") };
-        tool.call(UpdateUsernameArgs { new_username: "alice2".to_string() }).await.unwrap();
-        assert_eq!(crate::state::get_customer_profile(&key("alice")).username.as_deref(), Some("alice2"));
-        assert_eq!(crate::state::get_customer_profile(&key("someone-else")).username, None, "a different customer's record must be untouched");
+        let tool = UpdateUsernameTool {
+            customer: key("alice"),
+        };
+        tool.call(UpdateUsernameArgs {
+            new_username: "alice2".to_string(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            crate::state::get_customer_profile(&key("alice"))
+                .username
+                .as_deref(),
+            Some("alice2")
+        );
+        assert_eq!(
+            crate::state::get_customer_profile(&key("someone-else")).username,
+            None,
+            "a different customer's record must be untouched"
+        );
     }
 
     #[tokio::test]
     async fn update_username_rejects_empty_and_overlong_values() {
-        let tool = UpdateUsernameTool { customer: key("bob") };
-        assert!(tool.call(UpdateUsernameArgs { new_username: "".to_string() }).await.is_err());
-        assert!(tool.call(UpdateUsernameArgs { new_username: "x".repeat(33) }).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn query_database_errors_clearly_when_no_database_is_configured() {
-        // Must fail before ever attempting an inter-canister call - this
-        // doesn't need PocketIC/a real ic-sql instance to verify.
-        let tool = QueryDatabaseTool { customer: key("carol"), ic_sql_canister_id: None };
-        let err = tool.call(QueryDatabaseArgs { sql: "SELECT 1".to_string() }).await.unwrap_err();
-        assert!(err.0.contains("no database is configured"), "unexpected error: {}", err.0);
+        let tool = UpdateUsernameTool {
+            customer: key("bob"),
+        };
+        assert!(tool
+            .call(UpdateUsernameArgs {
+                new_username: "".to_string()
+            })
+            .await
+            .is_err());
+        assert!(tool
+            .call(UpdateUsernameArgs {
+                new_username: "x".repeat(33)
+            })
+            .await
+            .is_err());
     }
 }

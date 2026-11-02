@@ -9,11 +9,24 @@ use ic_stable_structures::DefaultMemoryImpl;
 use std::cell::RefCell;
 
 #[dynamic_config]
-#[config_urls(admin_panel_url = "https://{canister_id}.icp0.io/admin", home_page_url = "https://{canister_id}.icp0.io/")]
+#[config_links(
+    (
+        "Admin Panel",
+        "https://{canister_id}.icp0.io/admin",
+        Admin
+    ),
+    ("Home Page", "https://{canister_id}.icp0.io/", Public)
+)]
 pub struct ModuleConfig {
-    #[config(label = "Greeting", default = "Hello!")]
+    #[config(
+        label = "Greeting",
+        default = "Hello!",
+        group = "general",
+        group_label = "General",
+        group_description = "Basic module behavior"
+    )]
     pub greeting: String,
-    #[config(label = "Retry Count")]
+    #[config(label = "Retry Count", group = "general")]
     pub retry_count: i64,
     #[config(label = "Threshold", default = 0.5)]
     pub threshold: f64,
@@ -27,6 +40,12 @@ pub struct ModuleConfig {
     pub upstream: Option<Principal>,
     #[config(label = "Auth Canister", canister_type = "auth")]
     pub auth_canister: Option<Principal>,
+    #[config(label = "Allowed Origins")]
+    pub allowed_origins: Vec<String>,
+    #[config(label = "Operator Notes", multiline)]
+    pub operator_notes: Option<String>,
+    #[config(label = "Backup Canisters", canister_type = "storage")]
+    pub backup_canisters: Vec<Principal>,
     #[config(
         label = "Build Hash",
         description = "Build identifier reported by the canister",

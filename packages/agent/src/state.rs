@@ -4,8 +4,12 @@
 //! anything that isn't already `Storable`).
 
 use crate::config::Config;
-use crate::messages::{AdminRequest, ConversationState, AgentStats, SessionKey};
+use crate::messages::{
+    AdminRequest, AgentStats, AiCanister, Channel, ConversationState, ConversationSummary,
+    SessionKey, StoredChatMessage, StoredMessage, CONSOLE_SESSION,
+};
 use crate::tools::CustomerProfile;
+use candid::Principal;
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
     storable::Bound,
@@ -31,6 +35,9 @@ const ADMIN_REQUESTS_MEM_ID: MemoryId = MemoryId::new(2);
 const ADMIN_REQUEST_ID_COUNTER_MEM_ID: MemoryId = MemoryId::new(3);
 const CUSTOMER_PROFILES_MEM_ID: MemoryId = MemoryId::new(4);
 const AGENT_STATS_MEM_ID: MemoryId = MemoryId::new(5);
+const MESSAGES_MEM_ID: MemoryId = MemoryId::new(6);
+const MESSAGE_ID_COUNTER_MEM_ID: MemoryId = MemoryId::new(7);
+const AI_CANISTERS_MEM_ID: MemoryId = MemoryId::new(8);
 
 impl Storable for Config {
     const BOUND: Bound = Bound::Unbounded;
@@ -59,6 +66,7 @@ impl SessionKey {
             crate::messages::Channel::WhatsApp => 0,
             crate::messages::Channel::Telegram => 1,
             crate::messages::Channel::Email => 2,
+            crate::messages::Channel::Web => 3,
         };
         let mut buf = vec![tag];
         buf.extend_from_slice(self.session_id.as_bytes());
@@ -66,14 +74,21 @@ impl SessionKey {
     }
 
     fn decode(bytes: &[u8]) -> Self {
-        let (tag, rest) = bytes.split_first().expect("SessionKey bytes must be non-empty");
+        let (tag, rest) = bytes
+            .split_first()
+            .expect("SessionKey bytes must be non-empty");
         let channel = match tag {
             0 => crate::messages::Channel::WhatsApp,
             1 => crate::messages::Channel::Telegram,
             2 => crate::messages::Channel::Email,
+            3 => crate::messages::Channel::Web,
             other => panic!("unknown Channel tag {other} while decoding SessionKey"),
         };
-        SessionKey { channel, session_id: String::from_utf8(rest.to_vec()).expect("SessionKey session_id must be valid UTF-8") }
+        SessionKey {
+            channel,
+            session_id: String::from_utf8(rest.to_vec())
+                .expect("SessionKey session_id must be valid UTF-8"),
+        }
     }
 }
 
@@ -137,6 +152,28 @@ impl Storable for AdminRequest {
     }
 }
 
+macro_rules! impl_cbor_storable {
+    ($ty:ty, $label:literal) => {
+        impl Storable for $ty {
+            const BOUND: Bound = Bound::Unbounded;
+            fn to_bytes(&self) -> Cow<'_, [u8]> {
+                let mut buf = vec![];
+                ciborium::into_writer(self, &mut buf).expect(concat!("failed to encode ", $label));
+                Cow::Owned(buf)
+            }
+            fn into_bytes(self) -> Vec<u8> {
+                self.to_bytes().into_owned()
+            }
+            fn from_bytes(bytes: Cow<'_, [u8]>) -> Self {
+                ciborium::from_reader(bytes.as_ref()).expect(concat!("failed to decode ", $label))
+            }
+        }
+    };
+}
+
+impl_cbor_storable!(StoredMessage, "StoredMessage");
+impl_cbor_storable!(AiCanister, "AiCanister");
+
 /// Wraps `SessionKey` so `StableBTreeMap` can use its hand-rolled
 /// `encode`/`decode` (above) instead of requiring `serde` derives on a
 /// non-candid type.
@@ -182,17 +219,86 @@ thread_local! {
     static AGENT_STATS: RefCell<StableCell<AgentStats, Memory>> = RefCell::new(
         StableCell::init(MEMORY_MANAGER.with(|m| m.borrow().get(AGENT_STATS_MEM_ID)), AgentStats::default())
     );
+
+    static MESSAGES: RefCell<StableBTreeMap<u64, StoredMessage, Memory>> = RefCell::new(
+        StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(MESSAGES_MEM_ID)))
+    );
+    static MESSAGE_ID_COUNTER: RefCell<StableCell<u64, Memory>> = RefCell::new(
+        StableCell::init(MEMORY_MANAGER.with(|m| m.borrow().get(MESSAGE_ID_COUNTER_MEM_ID)), 0)
+    );
+    static AI_CANISTERS: RefCell<StableBTreeMap<Vec<u8>, AiCanister, Memory>> = RefCell::new(
+        StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(AI_CANISTERS_MEM_ID)))
+    );
+}
+
+pub fn insert_message(payload: crate::messages::MessagePayload) -> StoredMessage {
+    let id = MESSAGE_ID_COUNTER.with(|c| {
+        let mut c = c.borrow_mut();
+        let id = *c.get();
+        c.set(id + 1);
+        id
+    });
+    let message = StoredMessage {
+        id,
+        received_at: ic_cdk::api::time(),
+        payload,
+    };
+    MESSAGES.with(|m| m.borrow_mut().insert(id, message.clone()));
+    message
+}
+
+pub fn get_message(id: u64) -> Option<StoredMessage> {
+    MESSAGES.with(|m| m.borrow().get(&id))
+}
+
+pub fn list_messages(offset: u64, limit: u64) -> Vec<StoredMessage> {
+    MESSAGES.with(|m| {
+        let m = m.borrow();
+        let mut ids: Vec<u64> = m.iter().map(|e| *e.key()).collect();
+        ids.reverse();
+        ids.into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .filter_map(|id| m.get(&id))
+            .collect()
+    })
+}
+
+pub fn message_count() -> u64 {
+    MESSAGE_ID_COUNTER.with(|c| *c.borrow().get())
+}
+
+pub fn set_ai_canister(canister: AiCanister) {
+    AI_CANISTERS.with(|m| {
+        m.borrow_mut()
+            .insert(canister.canister_id.as_slice().to_vec(), canister)
+    });
+}
+
+pub fn remove_ai_canister(id: Principal) -> Option<AiCanister> {
+    AI_CANISTERS.with(|m| m.borrow_mut().remove(&id.as_slice().to_vec()))
+}
+
+pub fn list_ai_canisters() -> Vec<AiCanister> {
+    AI_CANISTERS.with(|m| m.borrow().iter().map(|entry| entry.value()).collect())
 }
 
 /// Every example tool in `tools.rs` keys a customer's own record by
 /// `SessionKey` alone - see that module's doc comment for why, and for what
 /// a real deployment with a separate account concept should do instead.
 pub fn get_customer_profile(key: &SessionKey) -> CustomerProfile {
-    CUSTOMER_PROFILES.with(|m| m.borrow().get(&SessionKeyStorable(key.clone())).unwrap_or_default())
+    CUSTOMER_PROFILES.with(|m| {
+        m.borrow()
+            .get(&SessionKeyStorable(key.clone()))
+            .unwrap_or_default()
+    })
 }
 
 pub fn set_customer_profile(key: &SessionKey, profile: CustomerProfile) {
-    CUSTOMER_PROFILES.with(|m| m.borrow_mut().insert(SessionKeyStorable(key.clone()), profile));
+    CUSTOMER_PROFILES.with(|m| {
+        m.borrow_mut()
+            .insert(SessionKeyStorable(key.clone()), profile)
+    });
 }
 
 pub fn get_config() -> Config {
@@ -204,7 +310,11 @@ pub fn set_config(config: Config) {
 }
 
 pub fn get_conversation(key: &SessionKey) -> ConversationState {
-    CONVERSATIONS.with(|c| c.borrow().get(&SessionKeyStorable(key.clone())).unwrap_or_default())
+    CONVERSATIONS.with(|c| {
+        c.borrow()
+            .get(&SessionKeyStorable(key.clone()))
+            .unwrap_or_default()
+    })
 }
 
 /// Appends one finished turn (a `User` message and its final `Assistant`
@@ -214,7 +324,57 @@ pub fn append_turn(key: &SessionKey, mut conversation: ConversationState) {
         let drop = conversation.history.len() - MAX_HISTORY_MESSAGES;
         conversation.history.drain(0..drop);
     }
-    CONVERSATIONS.with(|c| c.borrow_mut().insert(SessionKeyStorable(key.clone()), conversation));
+    CONVERSATIONS.with(|c| {
+        c.borrow_mut()
+            .insert(SessionKeyStorable(key.clone()), conversation)
+    });
+}
+
+/// Appends turns to one conversation under a single read-modify-write (no
+/// `await` in between), so a human reply landing while the model is still
+/// thinking is never overwritten.
+pub fn append_messages(key: &SessionKey, messages: Vec<StoredChatMessage>) {
+    let mut conversation = get_conversation(key);
+    conversation.history.extend(messages);
+    append_turn(key, conversation);
+}
+
+/// The SME inbox: every non-empty conversation except the private console,
+/// newest activity first. Scans all conversations (a small SME's worth), so
+/// `limit` only bounds the response.
+pub fn list_conversation_summaries(offset: u64, limit: u64) -> Vec<ConversationSummary> {
+    let mut all: Vec<ConversationSummary> = CONVERSATIONS.with(|c| {
+        c.borrow()
+            .iter()
+            .filter_map(|entry| {
+                let key = entry.key().0.clone();
+                if key.channel == Channel::Web && key.session_id == CONSOLE_SESSION {
+                    return None;
+                }
+                let history = entry.value().history;
+                let last = history.last()?;
+                let display_name = CUSTOMER_PROFILES.with(|m| {
+                    m.borrow()
+                        .get(&SessionKeyStorable(key.clone()))
+                        .and_then(|p| p.display_name.or(p.username))
+                });
+                Some(ConversationSummary {
+                    channel: key.channel,
+                    session_id: key.session_id,
+                    display_name,
+                    last_text: last.content.chars().take(160).collect(),
+                    last_role: last.role,
+                    last_at: last.at,
+                    message_count: history.len() as u64,
+                })
+            })
+            .collect()
+    });
+    all.sort_by(|a, b| b.last_at.cmp(&a.last_at));
+    all.into_iter()
+        .skip(offset as usize)
+        .take(limit as usize)
+        .collect()
 }
 
 pub fn next_admin_request_id() -> u64 {
@@ -251,7 +411,12 @@ pub fn list_admin_requests(offset: u64, limit: u64) -> Vec<AdminRequest> {
         let m = m.borrow();
         let mut ids_desc: Vec<u64> = m.iter().map(|entry| *entry.key()).collect();
         ids_desc.reverse();
-        ids_desc.into_iter().skip(offset as usize).take(limit as usize).filter_map(|id| m.get(&id)).collect()
+        ids_desc
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .filter_map(|id| m.get(&id))
+            .collect()
     })
 }
 

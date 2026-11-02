@@ -40,6 +40,7 @@ import { readPublicInfo } from "./canisterStats";
  * that declares no type at all, or doesn't implement `canister_metadata!`
  * at all) falls back to `"other"`. */
 function canisterKindFromMetadata(metadata: CanisterMetadata | null): CanisterKind {
+  if (metadata?.name.toLowerCase().trim().replaceAll("-", "_") === "notification") return "notification";
   const type = metadata?.canister_type[0];
   if (type && "Auth" in type) return "auth";
   if (type && "Database" in type) return "database";

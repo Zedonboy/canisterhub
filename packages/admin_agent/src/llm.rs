@@ -41,16 +41,25 @@ impl HttpClient for IcpClient {
         let args = HttpRequestArgs {
             url: req.url,
             method: HttpMethod::POST,
-            headers: req.headers.into_iter().map(|(name, value)| HttpHeader { name, value }).collect(),
+            headers: req
+                .headers
+                .into_iter()
+                .map(|(name, value)| HttpHeader { name, value })
+                .collect(),
             body: Some(req.body),
             max_response_bytes: Some(65_536),
             transform: None,
             is_replicated: Some(false),
         };
 
-        let resp = http_request(&args).await.map_err(|e| HttpError(format!("{e:?}")))?;
+        let resp = http_request(&args)
+            .await
+            .map_err(|e| HttpError(format!("{e:?}")))?;
         let status = resp.status.0.try_into().unwrap_or(u16::MAX);
-        Ok(HttpResponse { status, body: resp.body })
+        Ok(HttpResponse {
+            status,
+            body: resp.body,
+        })
     }
 }
 
@@ -65,12 +74,19 @@ fn default_model_for(provider: &str) -> &'static str {
 
 /// Builds an [`Agent`] for whichever provider/model `config` names, with
 /// both example tools attached, and calls `chat(prompt, history)`.
-pub async fn run_agent_loop(config: &Config, history: Vec<Message>, prompt: &str) -> Result<String, String> {
+pub async fn run_agent_loop(
+    config: &Config,
+    history: Vec<Message>,
+    prompt: &str,
+) -> Result<String, String> {
     let Some(api_key) = config.llm_api_key.clone() else {
         return Err("llm_api_key is not configured".to_string());
     };
     let provider = config.llm_provider.as_deref().unwrap_or("openai");
-    let model_id = config.llm_model.clone().unwrap_or_else(|| default_model_for(provider).to_string());
+    let model_id = config
+        .llm_model
+        .clone()
+        .unwrap_or_else(|| default_model_for(provider).to_string());
 
     match provider {
         "openai" => {
@@ -89,13 +105,27 @@ pub async fn run_agent_loop(config: &Config, history: Vec<Message>, prompt: &str
             let client = ic_rig::providers::deepseek::Client::new(IcpClient, api_key);
             run_with_model(client.model(model_id), config, history, prompt).await
         }
-        other => Err(format!("unknown llm_provider '{other}' - expected one of openai/anthropic/gemini/deepseek")),
+        other => Err(format!(
+            "unknown llm_provider '{other}' - expected one of openai/anthropic/gemini/deepseek"
+        )),
     }
 }
 
-async fn run_with_model<M: CompletionModel>(model: M, config: &Config, history: Vec<Message>, prompt: &str) -> Result<String, String> {
-    let preamble = config.system_prompt.clone().unwrap_or_else(default_system_prompt);
-    let max_iterations = config.max_tool_iterations.map(u32::from).unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS).max(1);
+async fn run_with_model<M: CompletionModel>(
+    model: M,
+    config: &Config,
+    history: Vec<Message>,
+    prompt: &str,
+) -> Result<String, String> {
+    let preamble = config
+        .system_prompt
+        .clone()
+        .unwrap_or_else(default_system_prompt);
+    let max_iterations = config
+        .max_tool_iterations
+        .map(u32::from)
+        .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS)
+        .max(1);
 
     let agent = Agent::builder(model)
         .preamble(preamble)

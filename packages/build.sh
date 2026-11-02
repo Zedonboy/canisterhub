@@ -16,10 +16,12 @@ packages=(
   admin_agent
   agent
   app_api
+  assetstorage
   auth
-  connector
   ic-kv
   ic-sql
+  notification
+  order_inventory
 )
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -27,18 +29,23 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-# `ic-sql` embeds this app's `dist/` into its own wasm at *compile* time
-# (see `ic-sql/src/assets.rs`), so it must exist on disk before the Cargo
-# build below runs - there's no deploy-time upload step to lean on instead.
-table_browser_dir="$workspace_dir/table-browser"
-if [[ -d "$table_browser_dir" ]]; then
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "error: required command 'npm' is not installed (needed to build table-browser)" >&2
-    exit 1
+# The canisters below embed their browser UIs' `dist/` directories into their
+# own wasm at *compile* time, so every UI must exist before the Cargo build.
+# There is no deploy-time asset upload step for these modules.
+for ui in table-browser inventory-browser storefront chat-ui; do
+  ui_dir="$workspace_dir/$ui"
+  if [[ -d "$ui_dir" ]]; then
+    echo "Building $ui..."
+    if command -v npm >/dev/null 2>&1; then
+      (cd "$ui_dir" && npm install && npm run build)
+    elif command -v deno >/dev/null 2>&1; then
+      (cd "$ui_dir" && deno install --no-lock --allow-scripts && deno task --no-lock build)
+    else
+      echo "error: either 'npm' or 'deno' is required to build $ui" >&2
+      exit 1
+    fi
   fi
-  echo "Building table-browser (embedded into ic-sql)..."
-  (cd "$table_browser_dir" && npm install && npm run build)
-fi
+done
 
 echo "Building packages workspace for wasm32-unknown-unknown..."
 echo "Using $(rustc --version)"

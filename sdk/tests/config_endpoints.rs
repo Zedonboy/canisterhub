@@ -18,7 +18,10 @@
 //!   export POCKET_IC_BIN=/path/to/pocket-ic
 
 use candid::{encode_one, Principal};
-use canister_hub_sdk::ic::config::{CanisterType, ConfigFieldSchema, ConfigType, ConfigValue};
+use canister_hub_sdk::ic::config::{
+    CanisterLink, CanisterType, ConfigFieldSchema, ConfigType, ConfigValue, ConfigVectorType,
+    ConfigVectorValue, LinkKind,
+};
 use pocket_ic::{query_candid_as, update_candid_as, PocketIc, PocketIcBuilder};
 use std::collections::HashMap;
 
@@ -81,15 +84,9 @@ fn feature_enabled(pic: &PocketIc, id: Principal) -> bool {
     value
 }
 
-fn get_admin_panel_url(pic: &PocketIc, id: Principal) -> Option<String> {
-    let (value,): (Option<String>,) =
-        query_candid_as(pic, id, controller(), "get_admin_panel_url", ()).unwrap();
-    value
-}
-
-fn get_home_page_url(pic: &PocketIc, id: Principal) -> Option<String> {
-    let (value,): (Option<String>,) =
-        query_candid_as(pic, id, controller(), "get_home_page_url", ()).unwrap();
+fn get_links(pic: &PocketIc, id: Principal) -> Vec<CanisterLink> {
+    let (value,): (Vec<CanisterLink>,) =
+        query_candid_as(pic, id, controller(), "get_links", ()).unwrap();
     value
 }
 
@@ -106,10 +103,16 @@ fn schema_reports_every_field_with_its_declared_type_and_requiredness() {
         .map(|field| (field.key.clone(), field))
         .collect();
 
-    assert_eq!(by_key.len(), 9);
+    assert_eq!(by_key.len(), 12);
 
     let greeting = &by_key["greeting"];
     assert_eq!(greeting.label, "Greeting");
+    assert_eq!(greeting.group.as_deref(), Some("general"));
+    assert_eq!(greeting.group_label.as_deref(), Some("General"));
+    assert_eq!(
+        greeting.group_description.as_deref(),
+        Some("Basic module behavior")
+    );
     assert_eq!(greeting.field_type, ConfigType::Text);
     assert!(!greeting.is_required, "has a default, so not required");
     assert_eq!(
@@ -118,6 +121,7 @@ fn schema_reports_every_field_with_its_declared_type_and_requiredness() {
     );
 
     let retry_count = &by_key["retry_count"];
+    assert_eq!(retry_count.group.as_deref(), Some("general"));
     assert_eq!(retry_count.field_type, ConfigType::Number);
     assert!(retry_count.is_required, "no default and not Option<...>");
     assert_eq!(retry_count.default_value, None);
@@ -174,6 +178,38 @@ fn schema_reports_every_field_with_its_declared_type_and_requiredness() {
     assert_eq!(auth_canister.canister_type, Some(CanisterType::Auth));
     assert!(!auth_canister.is_required, "Option<Principal>");
 
+    let allowed_origins = &by_key["allowed_origins"];
+    assert_eq!(
+        allowed_origins.field_type,
+        ConfigType::Vector {
+            element_type: ConfigVectorType::Text
+        }
+    );
+    assert!(!allowed_origins.is_required, "Vec fields start empty");
+    assert_eq!(
+        allowed_origins.default_value,
+        Some(ConfigValue::Vector(vec![]))
+    );
+
+    let operator_notes = &by_key["operator_notes"];
+    assert_eq!(operator_notes.field_type, ConfigType::TextArea);
+    assert!(!operator_notes.is_required, "Option<String>");
+
+    let backup_canisters = &by_key["backup_canisters"];
+    assert_eq!(
+        backup_canisters.field_type,
+        ConfigType::Vector {
+            element_type: ConfigVectorType::CanisterPicker {
+                module_type_filter: Some("storage".to_string())
+            }
+        }
+    );
+    assert_eq!(backup_canisters.canister_type, Some(CanisterType::Storage));
+    assert_eq!(
+        backup_canisters.resolved_canister_type(),
+        Some(CanisterType::Storage)
+    );
+
     let build_hash = &by_key["build_hash"];
     assert_eq!(build_hash.field_type, ConfigType::Text);
     assert_eq!(build_hash.is_readonly, Some(true));
@@ -202,6 +238,10 @@ fn get_config_reflects_schema_defaults_right_after_init() {
     assert_eq!(
         config.get("feature_enabled"),
         Some(&ConfigValue::Boolean(true))
+    );
+    assert_eq!(
+        config.get("allowed_origins"),
+        Some(&ConfigValue::Vector(vec![]))
     );
     // No default and never set.
     assert_eq!(config.get("retry_count"), None);
@@ -325,6 +365,37 @@ fn set_config_persists_and_mirrors_a_valid_update_leaving_other_keys_untouched()
     assert_eq!(greet(&pic, id), "Howdy");
 }
 
+#[test]
+fn set_config_accepts_a_typed_vector_and_rejects_wrong_element_types() {
+    let (pic, id) = setup();
+    let mut update = HashMap::new();
+    update.insert("retry_count".to_string(), ConfigValue::Number(1));
+    update.insert(
+        "allowed_origins".to_string(),
+        ConfigValue::Vector(vec![
+            ConfigVectorValue::Text("https://one.example".to_string()),
+            ConfigVectorValue::Text("https://two.example".to_string()),
+        ]),
+    );
+    set_config(&pic, id, controller(), update).unwrap();
+
+    assert_eq!(
+        get_config(&pic, id, controller()).get("allowed_origins"),
+        Some(&ConfigValue::Vector(vec![
+            ConfigVectorValue::Text("https://one.example".to_string()),
+            ConfigVectorValue::Text("https://two.example".to_string()),
+        ]))
+    );
+
+    let mut invalid = HashMap::new();
+    invalid.insert(
+        "allowed_origins".to_string(),
+        ConfigValue::Vector(vec![ConfigVectorValue::Number(42)]),
+    );
+    let err = set_config(&pic, id, controller(), invalid).unwrap_err();
+    assert!(err.contains("expects a Vector"), "{err}");
+}
+
 // ---------------------------------------------------------------------------
 // SecretText masking
 // ---------------------------------------------------------------------------
@@ -358,20 +429,27 @@ fn secret_text_is_masked_for_non_controllers_but_plain_for_controllers() {
 }
 
 // ---------------------------------------------------------------------------
-// get_admin_panel_url / get_home_page_url (#[config_urls(...)])
+// get_links (#[config_links(...)])
 // ---------------------------------------------------------------------------
 
 #[test]
-fn admin_panel_and_home_page_urls_substitute_this_canisters_own_id() {
+fn links_preserve_metadata_and_substitute_this_canisters_own_id() {
     let (pic, id) = setup();
     let id_text = id.to_text();
     assert_eq!(
-        get_admin_panel_url(&pic, id),
-        Some(format!("https://{id_text}.icp0.io/admin"))
-    );
-    assert_eq!(
-        get_home_page_url(&pic, id),
-        Some(format!("https://{id_text}.icp0.io/"))
+        get_links(&pic, id),
+        vec![
+            CanisterLink {
+                label: "Admin Panel".to_string(),
+                url: format!("https://{id_text}.icp0.io/admin"),
+                kind: LinkKind::Admin,
+            },
+            CanisterLink {
+                label: "Home Page".to_string(),
+                url: format!("https://{id_text}.icp0.io/"),
+                kind: LinkKind::Public,
+            },
+        ]
     );
 }
 

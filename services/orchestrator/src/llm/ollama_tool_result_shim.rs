@@ -42,7 +42,9 @@
 //! the assumption it's harmless (not verified either way for those models).
 
 use bytes::Bytes;
-use rig::http_client::{self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse};
+use rig::http_client::{
+    self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
+};
 use serde_json::Value;
 use std::future::Future;
 
@@ -65,7 +67,10 @@ impl<H> OllamaToolResultShim<H> {
 }
 
 impl<H: HttpClientExt> HttpClientExt for OllamaToolResultShim<H> {
-    fn send<T, U>(&self, req: Request<T>) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + Send + 'static
+    fn send<T, U>(
+        &self,
+        req: Request<T>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + Send + 'static
     where
         T: Into<Bytes> + Send,
         U: From<Bytes> + Send + 'static,
@@ -76,7 +81,10 @@ impl<H: HttpClientExt> HttpClientExt for OllamaToolResultShim<H> {
         self.inner.send(req)
     }
 
-    fn send_multipart<U>(&self, req: Request<MultipartForm>) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + Send + 'static
+    fn send_multipart<U>(
+        &self,
+        req: Request<MultipartForm>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + Send + 'static
     where
         U: From<Bytes> + Send + 'static,
     {
@@ -84,7 +92,10 @@ impl<H: HttpClientExt> HttpClientExt for OllamaToolResultShim<H> {
         self.inner.send_multipart(req)
     }
 
-    fn send_streaming<T>(&self, req: Request<T>) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send
+    fn send_streaming<T>(
+        &self,
+        req: Request<T>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + Send
     where
         T: Into<Bytes> + Send,
     {
@@ -119,13 +130,22 @@ fn rewrite_tool_roles_to_user(body: &Bytes) -> Option<Bytes> {
 
     let mut changed = false;
     for message in messages {
-        let Some(object) = message.as_object_mut() else { continue };
+        let Some(object) = message.as_object_mut() else {
+            continue;
+        };
         if object.get("role").and_then(Value::as_str) != Some("tool") {
             continue;
         }
         object.insert("role".to_string(), Value::String("user".to_string()));
-        if let Some(content) = object.get("content").and_then(Value::as_str).map(str::to_string) {
-            object.insert("content".to_string(), Value::String(format!("{PREFIX}{content}")));
+        if let Some(content) = object
+            .get("content")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            object.insert(
+                "content".to_string(),
+                Value::String(format!("{PREFIX}{content}")),
+            );
         }
         changed = true;
     }
@@ -142,7 +162,9 @@ mod tests {
 
     #[test]
     fn rewrites_a_tool_message_to_user_with_a_prefix() {
-        let body = Bytes::from(r#"{"messages":[{"role":"system","content":"s"},{"role":"user","content":"u"},{"role":"tool","content":"{\"ok\":true}"}]}"#);
+        let body = Bytes::from(
+            r#"{"messages":[{"role":"system","content":"s"},{"role":"user","content":"u"},{"role":"tool","content":"{\"ok\":true}"}]}"#,
+        );
         let rewritten = rewrite_tool_roles_to_user(&body).expect("should rewrite");
         let value: Value = serde_json::from_slice(&rewritten).unwrap();
         let messages = value["messages"].as_array().unwrap();
@@ -171,7 +193,11 @@ mod tests {
     #[test]
     fn maybe_rewrite_disabled_leaves_a_tool_message_byte_for_byte_untouched() {
         let body = Bytes::from(r#"{"messages":[{"role":"tool","content":"a"}]}"#);
-        assert_eq!(maybe_rewrite(body.clone(), false), body, "disabled must not even reserialize the JSON, let alone rewrite it");
+        assert_eq!(
+            maybe_rewrite(body.clone(), false),
+            body,
+            "disabled must not even reserialize the JSON, let alone rewrite it"
+        );
     }
 
     #[test]
@@ -185,7 +211,9 @@ mod tests {
 
     #[test]
     fn rewrites_every_tool_message_when_there_are_several() {
-        let body = Bytes::from(r#"{"messages":[{"role":"tool","content":"a"},{"role":"tool","content":"b"}]}"#);
+        let body = Bytes::from(
+            r#"{"messages":[{"role":"tool","content":"a"},{"role":"tool","content":"b"}]}"#,
+        );
         let rewritten = rewrite_tool_roles_to_user(&body).unwrap();
         let value: Value = serde_json::from_slice(&rewritten).unwrap();
         let messages = value["messages"].as_array().unwrap();

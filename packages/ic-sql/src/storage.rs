@@ -516,7 +516,11 @@ pub fn describe_table(table_name: &str) -> Result<TableDescription, String> {
 /// span in the stable `ROWS` map, skipping straight to `offset` and
 /// stopping at `limit` rather than collecting the whole table into an
 /// `im::OrdMap` first and discarding everything outside the page after.
-pub fn table_rows(table_name: &str, limit: u64, offset: u64) -> Result<(Vec<ColumnDef>, Vec<Row>), String> {
+pub fn table_rows(
+    table_name: &str,
+    limit: u64,
+    offset: u64,
+) -> Result<(Vec<ColumnDef>, Vec<Row>), String> {
     let name = table_name.to_lowercase();
     let table_id = TABLE_NAMES
         .with(|names| names.borrow().get(&name))
@@ -524,7 +528,15 @@ pub fn table_rows(table_name: &str, limit: u64, offset: u64) -> Result<(Vec<Colu
     let columns = columns_for(table_id);
     let rows = ROWS.with(|rows| {
         rows.borrow()
-            .range(RowKey { table_id, row_id: 0 }..=RowKey { table_id, row_id: u64::MAX })
+            .range(
+                RowKey {
+                    table_id,
+                    row_id: 0,
+                }..=RowKey {
+                    table_id,
+                    row_id: u64::MAX,
+                },
+            )
             .map(|entry| entry.value())
             .skip(offset as usize)
             .take(limit as usize)
@@ -985,11 +997,18 @@ mod tests {
             "INSERT INTO rows_page_a VALUES (1), (2), (3), (4), (5)",
         )
         .unwrap();
-        let (database, _) = engine::apply(&database, "INSERT INTO rows_page_b VALUES (100)").unwrap();
+        let (database, _) =
+            engine::apply(&database, "INSERT INTO rows_page_b VALUES (100)").unwrap();
         commit_database(&empty, &database);
 
         let (columns, rows) = table_rows("rows_page_a", 2, 1).unwrap();
-        assert_eq!(columns, vec![ColumnDef { name: "id".to_string(), data_type: "INT".to_string() }]);
+        assert_eq!(
+            columns,
+            vec![ColumnDef {
+                name: "id".to_string(),
+                data_type: "INT".to_string()
+            }]
+        );
         assert_eq!(
             rows.into_iter().map(|row| row.values).collect::<Vec<_>>(),
             vec![vec![SqlValue::Integer(2)], vec![SqlValue::Integer(3)]]
@@ -999,7 +1018,10 @@ mod tests {
         // `rows_page_b`, even though it immediately follows in the stable
         // `ROWS` map's key order.
         let (_, rows) = table_rows("rows_page_a", 10, 4).unwrap();
-        assert_eq!(rows.into_iter().map(|row| row.values).collect::<Vec<_>>(), vec![vec![SqlValue::Integer(5)]]);
+        assert_eq!(
+            rows.into_iter().map(|row| row.values).collect::<Vec<_>>(),
+            vec![vec![SqlValue::Integer(5)]]
+        );
 
         commit_database(&database, &empty);
     }

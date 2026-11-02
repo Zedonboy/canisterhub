@@ -20,7 +20,5 @@ pub mod llm;
 pub mod pipeline;
 pub mod process;
 pub mod provenance;
-pub mod push;
 pub mod routes;
 pub mod state;
-pub mod templates;

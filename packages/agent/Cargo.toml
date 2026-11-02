@@ -19,7 +19,10 @@ ic-cdk-020.workspace = true
 # `ic-cdk` 0.20 moved `management_canister` (http_request and friends) out
 # into its own crate - see `llm.rs::IcpClient`.
 ic-cdk-management-canister.workspace = true
-# The real on-chain LLM canister client (`llm_provider = "platform"` below) -
+ic-asset-certification.workspace = true
+ic-http-certification.workspace = true
+# Retained for the hidden `direct_ic_llm` migration path. Normal managed IC LLM
+# requests now go through the backend so usage and token credits are enforced.
 # re-added alongside `ic-rig`, not instead of it (see `src/llm.rs`'s own doc
 # comment on the real tradeoff between the two: no API key/outcall needed
 # here, but only DFINITY's own hosted models and that canister's own
@@ -46,6 +49,8 @@ hex.workspace = true
 # `std::error::Error` - `thiserror` is the easiest way to satisfy that for
 # our own small error types (see `llm.rs::ActionError`).
 thiserror.workspace = true
+# Embeds `../chat-ui/dist` into this wasm at compile time (src/assets.rs).
+include_dir.workspace = true
 
 
 [dev-dependencies]

@@ -20,7 +20,7 @@ pub enum JobState {
 /// Which building block a deployed canister actually is, inferred from its
 /// name - the same convention `coding_subagent_preamble` instructs the
 /// subagent to follow (name each canister after the building block it came
-/// from: `connector`, `agent`, `admin_agent`, `auth`,
+/// from: `connector`, `agent`, `admin_agent`, `notification`, `auth`,
 /// `ic-sql`/`ic-kv`/`vector_db`, `static`/`assets`), so a canister's own
 /// name is a reliable signal of its kind without needing to track that
 /// separately anywhere. Drives which canisters `routes::jobs::get_canister_stats`
@@ -35,6 +35,7 @@ pub enum CanisterKind {
     Connector,
     Agent,
     AdminAgent,
+    Notification,
     /// User/profile management and authentication (see `packages/auth`) -
     /// principal-native and OAuth2 side by side.
     Auth,
@@ -57,10 +58,12 @@ pub fn infer_canister_kind(name: &str) -> CanisterKind {
         "connector" => CanisterKind::Connector,
         "agent" => CanisterKind::Agent,
         "admin_agent" => CanisterKind::AdminAgent,
+        "notification" => CanisterKind::Notification,
         "auth" => CanisterKind::Auth,
         // Keep the former PostgreSQL-branded spelling as a compatibility
         // alias for already-published marketplace items.
-        "ic-sql" | "ic_sql" | "ic-pgsql" | "ic_pgsql" | "ic-kv" | "ic_kv" | "vector_db" | "vector-db" => CanisterKind::Database,
+        "ic-sql" | "ic_sql" | "ic-pgsql" | "ic_pgsql" | "ic-kv" | "ic_kv" | "vector_db"
+        | "vector-db" => CanisterKind::Database,
         "analytics" => CanisterKind::Analytics,
         "static" | "assets" => CanisterKind::Static,
         _ => CanisterKind::Other,
@@ -153,7 +156,13 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn new(id: String, request: String, network: String, requested_by: String, workspace_dir: PathBuf) -> Self {
+    pub fn new(
+        id: String,
+        request: String,
+        network: String,
+        requested_by: String,
+        workspace_dir: PathBuf,
+    ) -> Self {
         let now = chrono::Utc::now();
         Self {
             id,
@@ -281,7 +290,10 @@ pub struct JobStore {
 impl JobStore {
     pub fn insert(&self, job: Job) -> JobHandle {
         let handle: JobHandle = Arc::new(Mutex::new(job));
-        self.jobs.lock().unwrap().insert(handle.lock().unwrap().id.clone(), handle.clone());
+        self.jobs
+            .lock()
+            .unwrap()
+            .insert(handle.lock().unwrap().id.clone(), handle.clone());
         handle
     }
 
@@ -318,7 +330,10 @@ impl JobStore {
     /// its sender dropped and error out, the same as `submit_answer` failing.
     pub fn register_pending_answer(&self, job_id: &str) -> oneshot::Receiver<String> {
         let (tx, rx) = oneshot::channel();
-        self.pending_answers.lock().unwrap().insert(job_id.to_string(), tx);
+        self.pending_answers
+            .lock()
+            .unwrap()
+            .insert(job_id.to_string(), tx);
         rx
     }
 
@@ -334,7 +349,9 @@ impl JobStore {
         let Some(sender) = sender else {
             return Err("this job has no pending question to answer".to_string());
         };
-        sender.send(answer).map_err(|_| "the question timed out before this answer arrived".to_string())
+        sender
+            .send(answer)
+            .map_err(|_| "the question timed out before this answer arrived".to_string())
     }
 
     /// Removes `job_id`'s pending sender without sending anything, if one
@@ -352,20 +369,48 @@ mod tests {
     use super::*;
 
     fn job(id: &str) -> Job {
-        Job::new(id.to_string(), "request".to_string(), "local".to_string(), "requester".to_string(), PathBuf::new())
+        Job::new(
+            id.to_string(),
+            "request".to_string(),
+            "local".to_string(),
+            "requester".to_string(),
+            PathBuf::new(),
+        )
     }
 
     #[test]
     fn list_for_returns_only_the_caller_s_own_jobs_newest_first() {
         let store = JobStore::default();
-        let mut older = Job::new("a".to_string(), "req a".to_string(), "local".to_string(), "alice".to_string(), PathBuf::new());
+        let mut older = Job::new(
+            "a".to_string(),
+            "req a".to_string(),
+            "local".to_string(),
+            "alice".to_string(),
+            PathBuf::new(),
+        );
         older.created_at = chrono::Utc::now() - chrono::Duration::seconds(10);
         store.insert(older);
-        store.insert(Job::new("b".to_string(), "req b".to_string(), "local".to_string(), "alice".to_string(), PathBuf::new()));
-        store.insert(Job::new("c".to_string(), "req c".to_string(), "local".to_string(), "bob".to_string(), PathBuf::new()));
+        store.insert(Job::new(
+            "b".to_string(),
+            "req b".to_string(),
+            "local".to_string(),
+            "alice".to_string(),
+            PathBuf::new(),
+        ));
+        store.insert(Job::new(
+            "c".to_string(),
+            "req c".to_string(),
+            "local".to_string(),
+            "bob".to_string(),
+            PathBuf::new(),
+        ));
 
         let alices = store.list_for("alice");
-        assert_eq!(alices.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(), vec!["b", "a"], "newest first, bob's job excluded");
+        assert_eq!(
+            alices.iter().map(|j| j.id.as_str()).collect::<Vec<_>>(),
+            vec!["b", "a"],
+            "newest first, bob's job excluded"
+        );
 
         let bobs = store.list_for("bob");
         assert_eq!(bobs.len(), 1);
@@ -383,10 +428,22 @@ mod tests {
 
         j.add_canisters([("connector".to_string(), "aaaaa-aa".to_string())]);
         j.add_canisters([("agent".to_string(), "bbbbb-bb".to_string())]);
-        assert_eq!(j.canisters.get("connector").map(|c| c.id.as_str()), Some("aaaaa-aa"));
-        assert_eq!(j.canisters.get("connector").map(|c| c.kind), Some(CanisterKind::Connector));
-        assert_eq!(j.canisters.get("agent").map(|c| c.id.as_str()), Some("bbbbb-bb"));
-        assert_eq!(j.canisters.get("agent").map(|c| c.kind), Some(CanisterKind::Agent));
+        assert_eq!(
+            j.canisters.get("connector").map(|c| c.id.as_str()),
+            Some("aaaaa-aa")
+        );
+        assert_eq!(
+            j.canisters.get("connector").map(|c| c.kind),
+            Some(CanisterKind::Connector)
+        );
+        assert_eq!(
+            j.canisters.get("agent").map(|c| c.id.as_str()),
+            Some("bbbbb-bb")
+        );
+        assert_eq!(
+            j.canisters.get("agent").map(|c| c.kind),
+            Some(CanisterKind::Agent)
+        );
         assert_eq!(j.canisters.len(), 2);
     }
 
@@ -395,7 +452,11 @@ mod tests {
         let mut j = job("a");
         assert_eq!(j.llm_context, None);
         j.set_llm_context("# flight-booking-a1b2c3d4\n\n...".to_string());
-        assert!(j.llm_context.as_deref().unwrap().starts_with("# flight-booking"));
+        assert!(j
+            .llm_context
+            .as_deref()
+            .unwrap()
+            .starts_with("# flight-booking"));
     }
 
     #[test]
@@ -403,9 +464,17 @@ mod tests {
         assert_eq!(infer_canister_kind("connector"), CanisterKind::Connector);
         assert_eq!(infer_canister_kind("agent"), CanisterKind::Agent);
         assert_eq!(infer_canister_kind("admin_agent"), CanisterKind::AdminAgent);
+        assert_eq!(
+            infer_canister_kind("notification"),
+            CanisterKind::Notification
+        );
         assert_eq!(infer_canister_kind("auth"), CanisterKind::Auth);
         assert_eq!(infer_canister_kind("ic-sql"), CanisterKind::Database);
-        assert_eq!(infer_canister_kind("ic-pgsql"), CanisterKind::Database, "pre-rename alias must keep working");
+        assert_eq!(
+            infer_canister_kind("ic-pgsql"),
+            CanisterKind::Database,
+            "pre-rename alias must keep working"
+        );
         assert_eq!(infer_canister_kind("ic-kv"), CanisterKind::Database);
         assert_eq!(infer_canister_kind("vector_db"), CanisterKind::Database);
         assert_eq!(infer_canister_kind("analytics"), CanisterKind::Analytics);
@@ -420,7 +489,10 @@ mod tests {
         let mut j = job("a");
         j.ask("what should the retry limit be?".to_string());
         assert_eq!(j.state, JobState::AwaitingAnswer);
-        assert_eq!(j.pending_question.as_deref(), Some("what should the retry limit be?"));
+        assert_eq!(
+            j.pending_question.as_deref(),
+            Some("what should the retry limit be?")
+        );
     }
 
     #[test]
@@ -435,8 +507,18 @@ mod tests {
     #[test]
     fn add_usage_accumulates_across_several_calls() {
         let mut j = job("a");
-        let first = rig::completion::Usage { input_tokens: 100, output_tokens: 20, total_tokens: 120, ..Default::default() };
-        let second = rig::completion::Usage { input_tokens: 50, output_tokens: 5, total_tokens: 55, ..Default::default() };
+        let first = rig::completion::Usage {
+            input_tokens: 100,
+            output_tokens: 20,
+            total_tokens: 120,
+            ..Default::default()
+        };
+        let second = rig::completion::Usage {
+            input_tokens: 50,
+            output_tokens: 5,
+            total_tokens: 55,
+            ..Default::default()
+        };
 
         j.add_usage(first);
         j.add_usage(second);
@@ -463,15 +545,22 @@ mod tests {
     async fn submit_answer_delivers_to_the_matching_registered_receiver() {
         let store = JobStore::default();
         let receiver = store.register_pending_answer("job-1");
-        store.submit_answer("job-1", "42".to_string()).expect("should deliver");
+        store
+            .submit_answer("job-1", "42".to_string())
+            .expect("should deliver");
         assert_eq!(receiver.await.unwrap(), "42");
     }
 
     #[test]
     fn submit_answer_without_a_registered_question_fails_clearly() {
         let store = JobStore::default();
-        let err = store.submit_answer("no-such-job", "answer".to_string()).unwrap_err();
-        assert!(err.contains("no pending question"), "unexpected error: {err}");
+        let err = store
+            .submit_answer("no-such-job", "answer".to_string())
+            .unwrap_err();
+        assert!(
+            err.contains("no pending question"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
@@ -479,7 +568,9 @@ mod tests {
         let store = JobStore::default();
         let receiver = store.register_pending_answer("job-1");
         drop(receiver); // simulates ask_user_tool's own timeout firing first
-        let err = store.submit_answer("job-1", "too late".to_string()).unwrap_err();
+        let err = store
+            .submit_answer("job-1", "too late".to_string())
+            .unwrap_err();
         assert!(err.contains("timed out"), "unexpected error: {err}");
     }
 
@@ -496,7 +587,9 @@ mod tests {
         let store = JobStore::default();
         let first = store.register_pending_answer("job-1");
         let second = store.register_pending_answer("job-1");
-        store.submit_answer("job-1", "for the second one".to_string()).unwrap();
+        store
+            .submit_answer("job-1", "for the second one".to_string())
+            .unwrap();
         assert_eq!(second.await.unwrap(), "for the second one");
         // The first receiver's sender was silently dropped when overwritten -
         // it should observe that as a closed channel, not hang forever.

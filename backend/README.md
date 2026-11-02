@@ -88,6 +88,51 @@ delegations or private keys directly:
    request to the orchestrator's HTTP API, which verifies it locally (no
    further canister calls) and scopes jobs to the token's principal.
 
+## Web Push
+
+Web Push is not a backend responsibility. Install the project-owned
+`packages/notification` Marketplace module; its README documents VAPID setup,
+browser subscriptions, trusted senders, and delivery. Legacy `push_*` Candid
+methods remain only as upgrade-compatible stubs and return a migration error.
+
+## Managed AI access
+
+The backend can fund a shared external-model account for SME projects. It uses
+`ic-rig` for OpenAI, Anthropic, Gemini, and DeepSeek request/response handling,
+with a non-replicated IC HTTPS outcall so one logical completion produces one
+provider request rather than one request per subnet replica.
+
+- A controller configures the write-only provider credential with
+  `configure_managed_ai`. Passing `api_key = null` keeps the current key;
+  `clear_api_key = true` removes it.
+- `managed_ai_complete` is the compatibility text-only endpoint and retains
+  its project-scoped request shape for existing callers.
+- `managed_ai_completion` is the tool-capable agent gateway. An agent chooses
+  managed IC LLM or managed DeepSeek; messages, tool definitions, tool-call
+  IDs, and tool results survive the inter-canister hop so its normal tool loop
+  continues to work. It accepts only canister callers, reads the caller's
+  certified controller set through `canister_info`, and charges the single
+  controller that has a SystemAccount. No project ID is accepted. Provider
+  credentials remain backend-only.
+- `grant_token_credits` is the controller-only billing hook, while
+  `get_token_credits` exposes only the owner's balance. Account metadata,
+  lifetime usage, and reservation bookkeeping stay internal.
+  Before an external request, the backend reserves enough credits for a
+  conservative input-token ceiling plus the requested maximum output. It
+  rejects insufficient balances before spending provider or outcall funds,
+  then settles the reservation against provider-reported token usage.
+- `get_managed_ai_usage` returns the provider-reported prompt, completion, and
+  total tokens per calling principal, along with successful/failed request
+  counts. These counters use stable memory and survive upgrades.
+- Request text, message count, output tokens, and concurrent calls from the
+  same consumer canister are bounded to limit accidental or hostile spending.
+
+The API key is never returned through Candid, but standard application-subnet
+canister memory is not a cryptographic secret from subnet node operators. For
+deployments whose threat model excludes node operators, use a separate
+provider-compatible metering proxy and add a corresponding `ic-rig` HTTP/model
+adapter rather than placing the raw provider key in canister state.
+
 ## Production security checklist
 
 - Set `IC_ENV=ic` for every mainnet build or deploy. `backend/build.rs`
@@ -119,6 +164,19 @@ delegations or private keys directly:
   consumes its challenge; request a new challenge before retrying.
 - Run `cargo clippy --all-targets -- -D warnings`, the PocketIC suite, and
   `cargo audit` against `backend/Cargo.lock` for every release.
+
+## Adding official template products
+
+Backend controllers can seed a project template directly with
+`add_marketplace_template`. The method accepts one `MarketplaceTemplateInput`
+record containing the listing text, repository, release tag, manifest URL,
+package slug, and SHA-256 hash of the exact `canister_hub.toml` bytes. It does
+not require `register_repo_publisher`; that workflow remains for third-party
+publishers. Templates created this way are always public and free.
+
+The normalized repository plus `package_slug` is the template's stable
+identity. Calling the method again for that pair updates the product while
+preserving its marketplace id, creation time, and download count.
 
 ## Semantic search (`downloads` / `record_download`)
 

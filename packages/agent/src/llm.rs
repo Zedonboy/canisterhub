@@ -1,5 +1,4 @@
-//! The LLM <-> tool-calling loop, via [`ic_rig`](https://github.com/Zedonboy/ic-rig)
-//! and, for `llm_provider = "platform"`, [`ic_llm`](https://github.com/dfinity/llm).
+//! The LLM <-> tool-calling loop, via [`ic_rig`](https://github.com/Zedonboy/ic-rig).
 //!
 //! # Two provider families, one loop
 //!
@@ -11,20 +10,11 @@
 //! `ic_rig` has no bundled HTTP client - [`IcpClient`] below implements one
 //! for it.
 //!
-//! `ic_llm` instead makes a plain inter-canister call to the real on-chain
-//! LLM canister (`w36hm-eqaaa-aaaal-qr76a-cai` on mainnet, or a local
-//! Ollama-backed one - see [`ic_llm`'s own docs](https://docs.rs/ic-llm) on
-//! `icp deploy`'s `PUBLIC_CANISTER_ID:llm` auto-injection) - no API key, no
-//! HTTPS outcall, at the cost of only DFINITY's own hosted models and that
-//! canister's own request-size/schema limits (see [`IcLlmModel`]'s own doc
-//! comment). [`IcLlmModel`] below adapts it to the exact same
-//! [`ic_rig::CompletionModel`] trait the HTTPS providers implement, so
-//! everything downstream - the tool-calling loop, [`TrackingModel`]'s usage
-//! accounting, [`run_with_model`] - works identically either way. Note: a
-//! `"platform"`-configured request traps the whole call if this canister's
-//! own cycles balance is below 100B when `send()` runs (`ic_llm` always
-//! attaches that much, even for a free model - see its own README) - a
-//! real, disclosed operational requirement, not a bug if it happens.
+//! Managed IC LLM and DeepSeek models use [`BackendManagedModel`], which
+//! carries the same provider-neutral messages/tools through the CanisterHub
+//! backend. That is where controller checks, token-credit reservations, and
+//! usage accounting happen. BYOK OpenAI, Claude/Anthropic, and DeepSeek use
+//! direct HTTPS outcalls and keep their key inside this SME-owned canister.
 //!
 //! # The loop itself
 //!
@@ -36,7 +26,9 @@
 
 use crate::config::Config;
 use crate::messages::SessionKey;
-use crate::tools::{GetProfileTool, QueryDatabaseTool, RequestAdminActionTool, UpdateUsernameTool};
+use crate::remote_tools::RemoteCanisterTool;
+use crate::tools::{GetProfileTool, RequestAdminActionTool, UpdateUsernameTool};
+use candid::{CandidType, Deserialize, Principal};
 use ic_rig::completion::{CompletionRequest, CompletionResponse, ModelChoice, Usage};
 use ic_rig::http::{HttpClient, HttpError, HttpRequest, HttpResponse};
 use ic_rig::message::{AssistantContent, ToolCall as RigToolCall, UserContent};
@@ -44,6 +36,102 @@ use ic_rig::tool::ToolDefinition;
 use ic_rig::{Agent, CompletionModel, Message};
 use std::cell::Cell;
 use std::rc::Rc;
+
+#[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq)]
+enum ManagedAiService {
+    IcLlm,
+    DeepSeek,
+}
+
+#[derive(CandidType)]
+struct ManagedAiCompletionRequest {
+    service: ManagedAiService,
+    model: Option<String>,
+    messages_json: String,
+    tools_json: String,
+    max_output_tokens: Option<u32>,
+    temperature: Option<f64>,
+}
+
+#[derive(Debug, CandidType, Deserialize)]
+enum ManagedAiChoice {
+    Message(String),
+    ToolCallsJson(String),
+}
+
+#[derive(Debug, CandidType, Deserialize)]
+struct ManagedTokenUsage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+}
+
+#[derive(Debug, CandidType, Deserialize)]
+struct ManagedAiCompletionResponse {
+    choice: ManagedAiChoice,
+    usage: ManagedTokenUsage,
+    usage_reported: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ManagedAiError {
+    #[error("managed AI backend call failed: {0}")]
+    Call(String),
+    #[error("managed AI backend rejected the request: {0}")]
+    Rejected(String),
+    #[error("managed AI backend returned invalid tool calls: {0}")]
+    InvalidToolCalls(String),
+}
+
+struct BackendManagedModel {
+    backend: Principal,
+    service: ManagedAiService,
+    model: Option<String>,
+}
+
+impl CompletionModel for BackendManagedModel {
+    type Error = ManagedAiError;
+
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, Self::Error> {
+        let response = ic_cdk::call::Call::bounded_wait(self.backend, "managed_ai_completion")
+            .change_timeout(300)
+            .with_arg(ManagedAiCompletionRequest {
+                service: self.service,
+                model: self.model.clone(),
+                messages_json: serde_json::to_string(&request.messages)
+                    .map_err(|error| ManagedAiError::Call(error.to_string()))?,
+                tools_json: serde_json::to_string(&request.tools)
+                    .map_err(|error| ManagedAiError::Call(error.to_string()))?,
+                max_output_tokens: request.max_tokens,
+                temperature: request.temperature,
+            })
+            .await
+            .map_err(|error| ManagedAiError::Call(format!("{error:?}")))?
+            .candid::<Result<ManagedAiCompletionResponse, String>>()
+            .map_err(|error| ManagedAiError::Call(error.to_string()))?
+            .map_err(ManagedAiError::Rejected)?;
+
+        let choice = match response.choice {
+            ManagedAiChoice::Message(text) => ModelChoice::Message(text),
+            ManagedAiChoice::ToolCallsJson(json) => ModelChoice::ToolCall(
+                serde_json::from_str(&json)
+                    .map_err(|error| ManagedAiError::InvalidToolCalls(error.to_string()))?,
+            ),
+        };
+        let usage = response.usage_reported.then_some(Usage {
+            prompt_tokens: response.usage.prompt_tokens.min(u64::from(u32::MAX)) as u32,
+            completion_tokens: response.usage.completion_tokens.min(u64::from(u32::MAX)) as u32,
+        });
+        Ok(CompletionResponse {
+            choice,
+            reasoning: None,
+            usage,
+        })
+    }
+}
 
 /// Wraps a real provider [`CompletionModel`] to accumulate the token usage
 /// each completion call reports, into `totals` (shared with the caller via
@@ -62,11 +150,17 @@ struct TrackingModel<M> {
 impl<M: CompletionModel> CompletionModel for TrackingModel<M> {
     type Error = M::Error;
 
-    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, Self::Error> {
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, Self::Error> {
         let response = self.inner.complete(request).await?;
         if let Some(usage) = &response.usage {
             let (prompt, completion) = self.totals.get();
-            self.totals.set((prompt + u64::from(usage.prompt_tokens), completion + u64::from(usage.completion_tokens)));
+            self.totals.set((
+                prompt + u64::from(usage.prompt_tokens),
+                completion + u64::from(usage.completion_tokens),
+            ));
         }
         Ok(response)
     }
@@ -84,10 +178,8 @@ pub fn default_system_prompt() -> String {
      account of the person you are currently talking to - you have no way to \
      access or affect any other customer's data, and no administrative \
      abilities (refunds, account deletion, and similar requests must go \
-     through request_admin_action). If a database is configured for this \
-     deployment, you can also use query_database to look up read-only \
-     information (e.g. order status or product details) with a SELECT \
-     statement - never to change anything. Be concise, honest about what you \
+     through request_admin_action). Your conversation history and customer \
+     profile data are stored in this agent canister. Be concise, honest about what you \
      can and cannot do, and use request_admin_action rather than guessing or \
      refusing outright when a request is legitimate but outside your other \
      tools."
@@ -109,7 +201,11 @@ impl HttpClient for IcpClient {
         let args = HttpRequestArgs {
             url: req.url,
             method: HttpMethod::POST,
-            headers: req.headers.into_iter().map(|(name, value)| HttpHeader { name, value }).collect(),
+            headers: req
+                .headers
+                .into_iter()
+                .map(|(name, value)| HttpHeader { name, value })
+                .collect(),
             body: Some(req.body),
             // A completion response (including any tool calls) is at most a
             // few KB of JSON for the tools this template registers - well
@@ -128,9 +224,14 @@ impl HttpClient for IcpClient {
             is_replicated: Some(false),
         };
 
-        let resp = http_request(&args).await.map_err(|e| HttpError(format!("{e:?}")))?;
+        let resp = http_request(&args)
+            .await
+            .map_err(|e| HttpError(format!("{e:?}")))?;
         let status = resp.status.0.try_into().unwrap_or(u16::MAX);
-        Ok(HttpResponse { status, body: resp.body })
+        Ok(HttpResponse {
+            status,
+            body: resp.body,
+        })
     }
 }
 
@@ -138,12 +239,20 @@ fn default_model_for(provider: &str) -> &'static str {
     match provider {
         "anthropic" => ic_rig::providers::anthropic::CLAUDE_SONNET_5,
         "gemini" => ic_rig::providers::gemini::GEMINI_3_1_PRO_PREVIEW,
-        "deepseek" => ic_rig::providers::deepseek::DEEPSEEK_V4_PRO,
+        "deepseek" | "managed_deepseek" => ic_rig::providers::deepseek::DEEPSEEK_V4_PRO,
         // Free, per `ic_llm`'s own README - a sane no-cost default,
         // matching the spirit of every other provider's own free-tier-ish
         // flagship pick above.
-        "platform" => "llama3.1:8b",
+        "managed" | "platform" | "managed_ic_llm" | "direct_ic_llm" => "llama3.1:8b",
         _ => ic_rig::providers::openai::GPT_5_6,
+    }
+}
+
+fn managed_service_for(provider: &str, model: &str) -> ManagedAiService {
+    if provider == "managed_deepseek" || (provider == "managed" && model.starts_with("deepseek")) {
+        ManagedAiService::DeepSeek
+    } else {
+        ManagedAiService::IcLlm
     }
 }
 
@@ -194,18 +303,31 @@ pub struct IcLlmModel {
 
 impl IcLlmModel {
     pub fn new(model: impl Into<String>) -> Self {
-        Self { model: model.into() }
+        Self {
+            model: model.into(),
+        }
     }
 }
 
 impl CompletionModel for IcLlmModel {
     type Error = IcLlmError;
 
-    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, Self::Error> {
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, Self::Error> {
         let messages = convert_messages(request.messages);
-        let tools = request.tools.into_iter().map(convert_tool).collect::<Result<Vec<_>, _>>()?;
+        let tools = request
+            .tools
+            .into_iter()
+            .map(convert_tool)
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let response = ic_llm::chat(self.model.clone()).with_messages(messages).with_tools(tools).send().await;
+        let response = ic_llm::chat(self.model.clone())
+            .with_messages(messages)
+            .with_tools(tools)
+            .send()
+            .await;
 
         parse_response(response)
     }
@@ -232,14 +354,21 @@ fn convert_messages(messages: Vec<Message>) -> Vec<ic_llm::ChatMessage> {
                         UserContent::Text(t) => text_parts.push(t.text),
                         UserContent::ToolResult(r) => {
                             if !text_parts.is_empty() {
-                                out.push(ic_llm::ChatMessage::User { content: std::mem::take(&mut text_parts).join("\n\n") });
+                                out.push(ic_llm::ChatMessage::User {
+                                    content: std::mem::take(&mut text_parts).join("\n\n"),
+                                });
                             }
-                            out.push(ic_llm::ChatMessage::Tool { content: r.content, tool_call_id: r.call_id });
+                            out.push(ic_llm::ChatMessage::Tool {
+                                content: r.content,
+                                tool_call_id: r.call_id,
+                            });
                         }
                     }
                 }
                 if !text_parts.is_empty() {
-                    out.push(ic_llm::ChatMessage::User { content: text_parts.join("\n\n") });
+                    out.push(ic_llm::ChatMessage::User {
+                        content: text_parts.join("\n\n"),
+                    });
                 }
             }
 
@@ -252,7 +381,10 @@ fn convert_messages(messages: Vec<Message>) -> Vec<ic_llm::ChatMessage> {
                         AssistantContent::ToolCall(c) => tool_calls.push(convert_rig_tool_call(c)),
                     }
                 }
-                out.push(ic_llm::ChatMessage::Assistant(ic_llm::AssistantMessage { content: text, tool_calls }));
+                out.push(ic_llm::ChatMessage::Assistant(ic_llm::AssistantMessage {
+                    content: text,
+                    tool_calls,
+                }));
             }
         }
     }
@@ -305,7 +437,10 @@ fn convert_tool(def: ToolDefinition) -> Result<ic_llm::Tool, IcLlmError> {
 
     if let Some(props) = properties_obj {
         for (name, schema) in props {
-            let type_str = schema.get("type").and_then(|t| t.as_str()).ok_or_else(unsupported)?;
+            let type_str = schema
+                .get("type")
+                .and_then(|t| t.as_str())
+                .ok_or_else(unsupported)?;
             let param_type = match type_str {
                 "string" => ic_llm::ParameterType::String,
                 "boolean" => ic_llm::ParameterType::Boolean,
@@ -318,7 +453,8 @@ fn convert_tool(def: ToolDefinition) -> Result<ic_llm::Tool, IcLlmError> {
                 param = param.with_description(desc);
             }
             if let Some(values) = schema.get("enum").and_then(|e| e.as_array()) {
-                param = param.with_enum_values(values.iter().filter_map(|v| v.as_str().map(str::to_string)));
+                param = param
+                    .with_enum_values(values.iter().filter_map(|v| v.as_str().map(str::to_string)));
             }
             if required.contains(&name.as_str()) {
                 param = param.is_required();
@@ -339,7 +475,12 @@ fn convert_tool(def: ToolDefinition) -> Result<ic_llm::Tool, IcLlmError> {
 fn parse_response(response: ic_llm::Response) -> Result<CompletionResponse, IcLlmError> {
     let msg = response.message;
     let choice = if !msg.tool_calls.is_empty() {
-        ModelChoice::ToolCall(msg.tool_calls.into_iter().map(convert_ic_llm_tool_call).collect())
+        ModelChoice::ToolCall(
+            msg.tool_calls
+                .into_iter()
+                .map(convert_ic_llm_tool_call)
+                .collect(),
+        )
     } else if let Some(text) = msg.content {
         ModelChoice::Message(text)
     } else {
@@ -348,7 +489,11 @@ fn parse_response(response: ic_llm::Response) -> Result<CompletionResponse, IcLl
 
     // `ic_llm::Response` never reports token usage - see `IcLlmModel`'s own
     // doc comment.
-    Ok(CompletionResponse { choice, reasoning: None, usage: None::<Usage> })
+    Ok(CompletionResponse {
+        choice,
+        reasoning: None,
+        usage: None::<Usage>,
+    })
 }
 
 fn convert_ic_llm_tool_call(call: ic_llm::ToolCall) -> RigToolCall {
@@ -356,7 +501,11 @@ fn convert_ic_llm_tool_call(call: ic_llm::ToolCall) -> RigToolCall {
     for arg in call.function.arguments {
         arguments.insert(arg.name, wire_string_to_json_value(&arg.value));
     }
-    RigToolCall { id: call.id, name: call.function.name, arguments: serde_json::Value::Object(arguments) }
+    RigToolCall {
+        id: call.id,
+        name: call.function.name,
+        arguments: serde_json::Value::Object(arguments),
+    }
 }
 
 /// `ic_llm::ToolCallArgument::value` is always a plain string on the wire,
@@ -391,29 +540,69 @@ fn wire_string_to_json_value(s: &str) -> serde_json::Value {
 /// falls back to filing the same kind of request `request_admin_action`
 /// would, rather than leaving the customer with no reply at all - see
 /// `admin::file_and_notify`.
-pub async fn run_agent_loop(customer: &SessionKey, config: &Config, history: Vec<Message>, prompt: &str) -> String {
+pub async fn run_agent_loop(
+    customer: &SessionKey,
+    config: &Config,
+    history: Vec<Message>,
+    prompt: &str,
+) -> String {
     let result = dispatch(customer, config, history, prompt).await;
     match result {
         Ok(text) => text,
         Err(e) => {
             let details = format!("Automated escalation: {e} (message: {prompt})");
-            match crate::admin::file_and_notify(customer, "unresolved_conversation", &details).await {
+            match crate::admin::file_and_notify(customer, "unresolved_conversation", &details).await
+            {
                 Ok(msg) => msg,
-                Err(_) => "I'm having trouble completing this right now - please try again shortly.".to_string(),
+                Err(_) => {
+                    "I'm having trouble completing this right now - please try again shortly."
+                        .to_string()
+                }
             }
         }
     }
 }
 
-async fn dispatch(customer: &SessionKey, config: &Config, history: Vec<Message>, prompt: &str) -> Result<String, String> {
-    let provider = config.llm_provider.as_deref().unwrap_or("openai");
-    let model_id = config.llm_model.clone().unwrap_or_else(|| default_model_for(provider).to_string());
+async fn dispatch(
+    customer: &SessionKey,
+    config: &Config,
+    history: Vec<Message>,
+    prompt: &str,
+) -> Result<String, String> {
+    let provider = config.llm_provider.as_deref().unwrap_or("managed");
+    let model_id = config
+        .llm_model
+        .clone()
+        .unwrap_or_else(|| default_model_for(provider).to_string());
 
-    // `"platform"` needs no API key at all (see this module's own doc
-    // comment) - every other provider does, so the check lives here rather
-    // than unconditionally before the match.
-    if provider == "platform" {
+    // Kept only as a migration escape hatch for canisters configured before
+    // managed platform calls moved behind the backend. It is intentionally
+    // not offered by the dashboard.
+    if provider == "direct_ic_llm" {
         return run_with_model(IcLlmModel::new(model_id), config, customer, history, prompt).await;
+    }
+
+    if matches!(
+        provider,
+        "managed" | "managed_ic_llm" | "managed_deepseek" | "platform"
+    ) {
+        let backend = config
+            .protocol_id
+            .map(Ok)
+            .unwrap_or_else(crate::protocol::canister_id)?;
+        let service = managed_service_for(provider, &model_id);
+        return run_with_model(
+            BackendManagedModel {
+                backend,
+                service,
+                model: Some(model_id),
+            },
+            config,
+            customer,
+            history,
+            prompt,
+        )
+        .await;
     }
     let Some(api_key) = config.llm_api_key.clone() else {
         return Err("llm_api_key is not configured".to_string());
@@ -436,31 +625,67 @@ async fn dispatch(customer: &SessionKey, config: &Config, history: Vec<Message>,
             let client = ic_rig::providers::deepseek::Client::new(IcpClient, api_key);
             run_with_model(client.model(model_id), config, customer, history, prompt).await
         }
-        other => Err(format!("unknown llm_provider '{other}' - expected one of openai/anthropic/gemini/deepseek/platform")),
+        other => Err(format!(
+            "unknown llm_provider '{other}' - expected managed, openai, anthropic, or deepseek"
+        )),
     }
 }
 
-async fn run_with_model<M: CompletionModel>(model: M, config: &Config, customer: &SessionKey, history: Vec<Message>, prompt: &str) -> Result<String, String> {
-    let preamble = config.system_prompt.clone().unwrap_or_else(default_system_prompt);
-    let max_iterations = config.max_tool_iterations.map(u32::from).unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS).max(1);
+async fn run_with_model<M: CompletionModel>(
+    model: M,
+    config: &Config,
+    customer: &SessionKey,
+    history: Vec<Message>,
+    prompt: &str,
+) -> Result<String, String> {
+    let preamble = config
+        .system_prompt
+        .clone()
+        .unwrap_or_else(default_system_prompt);
+    let max_iterations = config
+        .max_tool_iterations
+        .map(u32::from)
+        .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS)
+        .max(1);
 
     // Recorded into `AgentStats` below regardless of how `chat` turns
     // out - see `TrackingModel`'s doc comment.
     let usage_totals = Rc::new(Cell::new((0u64, 0u64)));
-    let tracked_model = TrackingModel { inner: model, totals: usage_totals.clone() };
+    let tracked_model = TrackingModel {
+        inner: model,
+        totals: usage_totals.clone(),
+    };
 
-    let agent = Agent::builder(tracked_model)
+    let builder = Agent::builder(tracked_model)
         .preamble(preamble)
-        .tool(GetProfileTool { customer: customer.clone() })
-        .tool(UpdateUsernameTool { customer: customer.clone() })
-        .tool(QueryDatabaseTool { customer: customer.clone(), ic_sql_canister_id: config.ic_sql_canister_id })
-        .tool(RequestAdminActionTool { customer: customer.clone() })
+        .tool(GetProfileTool {
+            customer: customer.clone(),
+        })
+        .tool(UpdateUsernameTool {
+            customer: customer.clone(),
+        })
+        .tool(RequestAdminActionTool {
+            customer: customer.clone(),
+        })
+        .tool(RemoteCanisterTool {
+            customer: customer.clone(),
+            canisters: crate::state::list_ai_canisters(),
+        })
         // Anthropic's API rejects a request with no `max_tokens` at all;
         // every other provider treats it as an optional cap. Set
         // unconditionally so switching `llm_provider` never breaks on this.
         .max_tokens(1024)
-        .max_iterations(max_iterations)
-        .build();
+        .max_iterations(max_iterations);
+    // The owner's private console additionally gets read-only tools over all
+    // conversations; no customer session ever does (see `owner_tools.rs`).
+    let agent = if crate::owner_tools::is_console(customer) {
+        builder
+            .tool(crate::owner_tools::ListConversationsTool)
+            .tool(crate::owner_tools::ReadConversationTool)
+            .build()
+    } else {
+        builder.build()
+    };
 
     let result = agent.chat(prompt, history).await.map_err(|e| e.to_string());
     let (prompt_tokens, completion_tokens) = usage_totals.get();
@@ -472,12 +697,16 @@ async fn run_with_model<M: CompletionModel>(model: M, config: &Config, customer:
 mod ic_llm_model_tests {
     use super::*;
     use crate::messages::{Channel, SessionKey};
-    use crate::tools::{GetProfileTool, QueryDatabaseTool, RequestAdminActionTool, UpdateUsernameTool};
+    use crate::remote_tools::RemoteCanisterTool;
+    use crate::tools::{GetProfileTool, RequestAdminActionTool, UpdateUsernameTool};
     use ic_llm::{AssistantMessage, ChatMessage, Response};
     use ic_rig::tool::Tool as _;
 
     fn key(id: &str) -> SessionKey {
-        SessionKey { channel: Channel::WhatsApp, session_id: id.to_string() }
+        SessionKey {
+            channel: Channel::WhatsApp,
+            session_id: id.to_string(),
+        }
     }
 
     // ── convert_tool ─────────────────────────────────────────────────────
@@ -490,14 +719,27 @@ mod ic_llm_model_tests {
     fn convert_tool_succeeds_on_every_real_tool_schema() {
         let customer = key("probe");
         let defs = [
-            GetProfileTool { customer: customer.clone() }.definition(),
-            UpdateUsernameTool { customer: customer.clone() }.definition(),
-            QueryDatabaseTool { customer: customer.clone(), ic_sql_canister_id: None }.definition(),
+            GetProfileTool {
+                customer: customer.clone(),
+            }
+            .definition(),
+            UpdateUsernameTool {
+                customer: customer.clone(),
+            }
+            .definition(),
             RequestAdminActionTool { customer }.definition(),
+            RemoteCanisterTool {
+                customer: key("probe"),
+                canisters: vec![],
+            }
+            .definition(),
         ];
         for def in defs {
             let name = def.name.clone();
-            assert!(convert_tool(def).is_ok(), "convert_tool failed on the real '{name}' schema");
+            assert!(
+                convert_tool(def).is_ok(),
+                "convert_tool failed on the real '{name}' schema"
+            );
         }
     }
 
@@ -520,9 +762,21 @@ mod ic_llm_model_tests {
         assert_eq!(f.name, "set_status");
         assert_eq!(f.description.as_deref(), Some("Set the order status."));
         let params = f.parameters.unwrap();
-        assert_eq!(params.required.as_deref(), Some(["status".to_string()].as_slice()));
-        let status_prop = params.properties.as_ref().unwrap().iter().find(|p| p.name == "status").unwrap();
-        assert_eq!(status_prop.enum_.as_deref(), Some(["open".to_string(), "closed".to_string()].as_slice()));
+        assert_eq!(
+            params.required.as_deref(),
+            Some(["status".to_string()].as_slice())
+        );
+        let status_prop = params
+            .properties
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|p| p.name == "status")
+            .unwrap();
+        assert_eq!(
+            status_prop.enum_.as_deref(),
+            Some(["open".to_string(), "closed".to_string()].as_slice())
+        );
     }
 
     #[test]
@@ -536,12 +790,18 @@ mod ic_llm_model_tests {
                 "required": []
             }),
         };
-        assert!(matches!(convert_tool(def), Err(IcLlmError::UnsupportedToolSchema(name)) if name == "bulk_op"));
+        assert!(
+            matches!(convert_tool(def), Err(IcLlmError::UnsupportedToolSchema(name)) if name == "bulk_op")
+        );
     }
 
     #[test]
     fn convert_tool_rejects_a_schema_with_no_object_properties_at_all() {
-        let def = ToolDefinition { name: "weird".to_string(), description: "d".to_string(), parameters: serde_json::json!({ "type": "oneOf" }) };
+        let def = ToolDefinition {
+            name: "weird".to_string(),
+            description: "d".to_string(),
+            parameters: serde_json::json!({ "type": "oneOf" }),
+        };
         assert!(convert_tool(def).is_err());
     }
 
@@ -550,23 +810,47 @@ mod ic_llm_model_tests {
     #[test]
     fn convert_messages_maps_system_and_plain_user_text() {
         let out = convert_messages(vec![Message::system("be nice"), Message::user("hello")]);
-        assert_eq!(out, vec![ChatMessage::System { content: "be nice".to_string() }, ChatMessage::User { content: "hello".to_string() }]);
+        assert_eq!(
+            out,
+            vec![
+                ChatMessage::System {
+                    content: "be nice".to_string()
+                },
+                ChatMessage::User {
+                    content: "hello".to_string()
+                }
+            ]
+        );
     }
 
     #[test]
     fn convert_messages_turns_tool_results_into_separate_tool_messages_not_a_user_message() {
         let msg = Message::User {
             content: vec![
-                UserContent::ToolResult(ic_rig::message::ToolResult { call_id: "1".to_string(), name: "a".to_string(), content: "ok".to_string() }),
-                UserContent::ToolResult(ic_rig::message::ToolResult { call_id: "2".to_string(), name: "b".to_string(), content: "also ok".to_string() }),
+                UserContent::ToolResult(ic_rig::message::ToolResult {
+                    call_id: "1".to_string(),
+                    name: "a".to_string(),
+                    content: "ok".to_string(),
+                }),
+                UserContent::ToolResult(ic_rig::message::ToolResult {
+                    call_id: "2".to_string(),
+                    name: "b".to_string(),
+                    content: "also ok".to_string(),
+                }),
             ],
         };
         let out = convert_messages(vec![msg]);
         assert_eq!(
             out,
             vec![
-                ChatMessage::Tool { content: "ok".to_string(), tool_call_id: "1".to_string() },
-                ChatMessage::Tool { content: "also ok".to_string(), tool_call_id: "2".to_string() },
+                ChatMessage::Tool {
+                    content: "ok".to_string(),
+                    tool_call_id: "1".to_string()
+                },
+                ChatMessage::Tool {
+                    content: "also ok".to_string(),
+                    tool_call_id: "2".to_string()
+                },
             ]
         );
     }
@@ -575,13 +859,25 @@ mod ic_llm_model_tests {
     fn convert_messages_keeps_an_assistants_text_and_tool_calls_in_one_message() {
         let msg = Message::Assistant {
             content: vec![
-                AssistantContent::Text(ic_rig::message::Text { text: "checking...".to_string() }),
-                AssistantContent::ToolCall(RigToolCall { id: "call-1".to_string(), name: "get_profile".to_string(), arguments: serde_json::json!({}) }),
+                AssistantContent::Text(ic_rig::message::Text {
+                    text: "checking...".to_string(),
+                }),
+                AssistantContent::ToolCall(RigToolCall {
+                    id: "call-1".to_string(),
+                    name: "get_profile".to_string(),
+                    arguments: serde_json::json!({}),
+                }),
             ],
         };
         let out = convert_messages(vec![msg]);
         assert_eq!(out.len(), 1);
-        let ChatMessage::Assistant(AssistantMessage { content, tool_calls }) = &out[0] else { panic!("expected an Assistant message") };
+        let ChatMessage::Assistant(AssistantMessage {
+            content,
+            tool_calls,
+        }) = &out[0]
+        else {
+            panic!("expected an Assistant message")
+        };
         assert_eq!(content.as_deref(), Some("checking..."));
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, "call-1");
@@ -606,11 +902,20 @@ mod ic_llm_model_tests {
 
     #[test]
     fn wire_string_to_json_value_recovers_real_types() {
-        assert_eq!(wire_string_to_json_value("true"), serde_json::Value::Bool(true));
-        assert_eq!(wire_string_to_json_value("false"), serde_json::Value::Bool(false));
+        assert_eq!(
+            wire_string_to_json_value("true"),
+            serde_json::Value::Bool(true)
+        );
+        assert_eq!(
+            wire_string_to_json_value("false"),
+            serde_json::Value::Bool(false)
+        );
         assert_eq!(wire_string_to_json_value("42"), serde_json::json!(42));
         assert_eq!(wire_string_to_json_value("3.5"), serde_json::json!(3.5));
-        assert_eq!(wire_string_to_json_value("bob"), serde_json::Value::String("bob".to_string()));
+        assert_eq!(
+            wire_string_to_json_value("bob"),
+            serde_json::Value::String("bob".to_string())
+        );
     }
 
     // ── parse_response ───────────────────────────────────────────────────
@@ -620,7 +925,11 @@ mod ic_llm_model_tests {
         let response = Response {
             message: AssistantMessage {
                 content: Some("ignored".to_string()),
-                tool_calls: vec![convert_rig_tool_call(RigToolCall { id: "1".to_string(), name: "get_profile".to_string(), arguments: serde_json::json!({}) })],
+                tool_calls: vec![convert_rig_tool_call(RigToolCall {
+                    id: "1".to_string(),
+                    name: "get_profile".to_string(),
+                    arguments: serde_json::json!({}),
+                })],
             },
         };
         let parsed = parse_response(response).unwrap();
@@ -629,16 +938,32 @@ mod ic_llm_model_tests {
 
     #[test]
     fn parse_response_returns_text_when_there_are_no_tool_calls() {
-        let response = Response { message: AssistantMessage { content: Some("hi there".to_string()), tool_calls: vec![] } };
+        let response = Response {
+            message: AssistantMessage {
+                content: Some("hi there".to_string()),
+                tool_calls: vec![],
+            },
+        };
         let parsed = parse_response(response).unwrap();
         assert!(matches!(parsed.choice, ModelChoice::Message(text) if text == "hi there"));
-        assert!(parsed.usage.is_none(), "ic_llm reports no token usage - see IcLlmModel's own doc comment");
+        assert!(
+            parsed.usage.is_none(),
+            "ic_llm reports no token usage - see IcLlmModel's own doc comment"
+        );
     }
 
     #[test]
     fn parse_response_errors_when_neither_text_nor_tool_calls() {
-        let response = Response { message: AssistantMessage { content: None, tool_calls: vec![] } };
-        assert!(matches!(parse_response(response), Err(IcLlmError::EmptyResponse)));
+        let response = Response {
+            message: AssistantMessage {
+                content: None,
+                tool_calls: vec![],
+            },
+        };
+        assert!(matches!(
+            parse_response(response),
+            Err(IcLlmError::EmptyResponse)
+        ));
     }
 
     #[test]
@@ -646,5 +971,19 @@ mod ic_llm_model_tests {
         // Free per `ic_llm`'s own README - see `default_model_for`'s doc
         // comment on why this specific one was picked.
         assert_eq!(default_model_for("platform"), "llama3.1:8b");
+    }
+
+    #[test]
+    fn managed_mode_selects_the_service_from_the_model() {
+        assert_eq!(
+            managed_service_for("managed", "deepseek-v4-pro"),
+            ManagedAiService::DeepSeek
+        );
+        for model in ["llama3.1:8b", "qwen3:32b", "llama4-scout", "qwen2.5:0.5b"] {
+            assert_eq!(
+                managed_service_for("managed", model),
+                ManagedAiService::IcLlm
+            );
+        }
     }
 }

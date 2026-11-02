@@ -17,7 +17,7 @@
 //! automatically. Deliberately not hardcoded here — a machine-specific path
 //! baked into the test source would break for every other environment.
 
-use backend::{MarketplaceItem, MarketplaceItemType};
+use backend::{MarketplaceItem, MarketplaceItemType, MarketplaceTemplateInput};
 use candid::{encode_one, Principal};
 use ic_vetkeys::types::{AccessRights, ByteBuf};
 use ic_vetkeys::TransportSecretKey;
@@ -446,6 +446,90 @@ fn templates_are_marketplace_items_and_must_be_free() {
     let (item,): (Option<MarketplaceItem>,) =
         query_candid_as(&pic, backend_id, alice(), "get_marketplace_item", (id,)).unwrap();
     assert_eq!(item.unwrap().item_type, MarketplaceItemType::Template);
+}
+
+#[test]
+fn controller_can_add_and_update_an_official_template_without_repo_registration() {
+    let (pic, backend_id) = setup();
+    let input = MarketplaceTemplateInput {
+        title: "Official app template".to_string(),
+        description: "Several packages configured as one app".to_string(),
+        web_url: Some("https://example.com/templates/app".to_string()),
+        git_repo_url: TEST_REPO_URL.to_string(),
+        download_url: TEST_RELEASE_ASSET_V1.to_string(),
+        release_tag: "v1".to_string(),
+        package_slug: "app-template".to_string(),
+        manifest_hash: fake_wasm_hash(),
+    };
+
+    let (added,): (Result<u64, String>,) = update_candid_as(
+        &pic,
+        backend_id,
+        admin(),
+        "add_marketplace_template",
+        (input.clone(),),
+    )
+    .unwrap();
+    let id = added.unwrap();
+
+    let (item,): (Option<MarketplaceItem>,) =
+        query_candid_as(&pic, backend_id, alice(), "get_marketplace_item", (id,)).unwrap();
+    let item = item.unwrap();
+    assert_eq!(item.item_type, MarketplaceItemType::Template);
+    assert_eq!(item.publisher, admin());
+    assert_eq!(item.price, None);
+    assert_eq!(item.encrypted_key, None);
+
+    let (recorded,): (Result<(), String>,) =
+        update_candid_as(&pic, backend_id, alice(), "record_download", (id,)).unwrap();
+    recorded.unwrap();
+
+    let updated_input = MarketplaceTemplateInput {
+        title: "Official app template v2".to_string(),
+        download_url: TEST_RELEASE_ASSET_V2.to_string(),
+        release_tag: "v2".to_string(),
+        ..input
+    };
+    let (updated,): (Result<u64, String>,) = update_candid_as(
+        &pic,
+        backend_id,
+        admin(),
+        "add_marketplace_template",
+        (updated_input,),
+    )
+    .unwrap();
+    assert_eq!(updated.unwrap(), id);
+
+    let (item,): (Option<MarketplaceItem>,) =
+        query_candid_as(&pic, backend_id, alice(), "get_marketplace_item", (id,)).unwrap();
+    let item = item.unwrap();
+    assert_eq!(item.title, "Official app template v2");
+    assert_eq!(item.downloads, 1);
+}
+
+#[test]
+fn non_controller_cannot_add_an_official_template() {
+    let (pic, backend_id) = setup();
+    let input = MarketplaceTemplateInput {
+        title: "Untrusted template".to_string(),
+        description: "Must not be added".to_string(),
+        web_url: None,
+        git_repo_url: TEST_REPO_URL.to_string(),
+        download_url: TEST_RELEASE_ASSET_V1.to_string(),
+        release_tag: "v1".to_string(),
+        package_slug: "untrusted-template".to_string(),
+        manifest_hash: fake_wasm_hash(),
+    };
+
+    let (result,): (Result<u64, String>,) = update_candid_as(
+        &pic,
+        backend_id,
+        mallory(),
+        "add_marketplace_template",
+        (input,),
+    )
+    .unwrap();
+    assert!(result.unwrap_err().contains("controller"));
 }
 
 #[test]

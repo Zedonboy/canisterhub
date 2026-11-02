@@ -29,9 +29,11 @@
 use crate::config::Config;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use sigstore::bundle::Bundle;
-use sigstore::bundle::verify::policy::{GitHubWorkflowRepository, OIDCIssuer, PolicyResult, SingleX509ExtPolicy, VerificationPolicy};
+use sigstore::bundle::verify::policy::{
+    GitHubWorkflowRepository, OIDCIssuer, PolicyResult, SingleX509ExtPolicy, VerificationPolicy,
+};
 use sigstore::bundle::verify::Verifier;
+use sigstore::bundle::Bundle;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
@@ -104,9 +106,16 @@ struct Attestation {
     bundle: Bundle,
 }
 
-async fn fetch_attestations(config: &Config, owner: &str, repo: &str, digest_hex: &str) -> anyhow::Result<Vec<Bundle>> {
+async fn fetch_attestations(
+    config: &Config,
+    owner: &str,
+    repo: &str,
+    digest_hex: &str,
+) -> anyhow::Result<Vec<Bundle>> {
     let mut request = reqwest::Client::new()
-        .get(format!("https://api.github.com/repos/{owner}/{repo}/attestations/sha256:{digest_hex}"))
+        .get(format!(
+            "https://api.github.com/repos/{owner}/{repo}/attestations/sha256:{digest_hex}"
+        ))
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "canister-hub-orchestrator");
     if let Some(token) = config.github_api_token.as_deref() {
@@ -124,7 +133,11 @@ async fn fetch_attestations(config: &Config, owner: &str, repo: &str, digest_hex
 /// for `wasm_bytes` and was genuinely signed by a GitHub Actions run in
 /// `git_repo_url` - fails closed (an error) if none is found or none
 /// verifies, same posture as `wasm_hash` checking.
-pub async fn verify_build_provenance(config: &Config, git_repo_url: &str, wasm_bytes: &[u8]) -> anyhow::Result<()> {
+pub async fn verify_build_provenance(
+    config: &Config,
+    git_repo_url: &str,
+    wasm_bytes: &[u8],
+) -> anyhow::Result<()> {
     let (owner, repo) = parse_github_owner_repo(git_repo_url)?;
     let digest_hex = to_hex(&Sha256::digest(wasm_bytes));
 
@@ -175,14 +188,16 @@ mod tests {
 
     #[test]
     fn parses_owner_and_repo_lowercased() {
-        let (owner, repo) = parse_github_owner_repo("https://github.com/Alice/Cool-Project").unwrap();
+        let (owner, repo) =
+            parse_github_owner_repo("https://github.com/Alice/Cool-Project").unwrap();
         assert_eq!(owner, "alice");
         assert_eq!(repo, "cool-project");
     }
 
     #[test]
     fn parses_a_dot_git_suffixed_url() {
-        let (owner, repo) = parse_github_owner_repo("https://github.com/alice/cool-project.git").unwrap();
+        let (owner, repo) =
+            parse_github_owner_repo("https://github.com/alice/cool-project.git").unwrap();
         assert_eq!(owner, "alice");
         assert_eq!(repo, "cool-project");
     }

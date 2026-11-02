@@ -1,113 +1,99 @@
 # agent
 
-A **template** for an AI customer-support canister: receives customer
-messages forwarded by [`connector`](../connector), holds a conversation via
-tool calling with either a real LLM provider's API (OpenAI, Anthropic,
-Gemini, or DeepSeek - an HTTPS outcall via
-[`ic_rig`](https://github.com/Zedonboy/ic-rig)) or the real on-chain LLM
-canister (`llm_provider = "platform"`, via
-[`ic_llm`](https://docs.rs/ic-llm) - no API key needed; see `src/llm.rs`'s
-doc comment for the tradeoff), and sends the reply back through `connector`. Not meant to be
-deployed as-is - see `src/llm_context.md` (also served live via the
-`llm_context` candid method) for the full architecture and, most
-importantly, how to adapt it for a specific business.
+`agent` is the single messaging and AI module. It receives WhatsApp and
+Telegram webhooks, mail from `mail_bridge`, runs the configured LLM/tool loop,
+stores conversations/messages, and sends replies through the same channel.
+The former standalone `connector` package is no longer a workspace member.
 
-## The one thing to understand before changing anything
+The agent owns its data. Conversations, customer profiles, inbound messages,
+administrative requests, statistics, configuration, and discovered tool
+metadata are stored directly in this canister with `ic-stable-structures` and
+survive upgrades; no external data canister is required.
 
-**Every tool the model can call directly is scoped to the current
-customer's own data and cannot be administrative.** This is enforced by
-`ic_rig::Tool::call`'s signature in `src/tools.rs` (a tool struct holds the
-current customer's identity as a field set by the dispatcher, with no way
-for the model's arguments to supply or override it) and by keeping every
-genuinely administrative action behind one reserved tool,
-`RequestAdminActionTool`, which never performs anything itself - it only
-files a request and notifies an external system over a signed webhook
-(`src/admin.rs`). Read `tools.rs`'s and `admin.rs`'s module doc comments in
-full before adding or changing a tool.
+The canister also serves the certified `chat-ui`. Its `get_links` query
+advertises the SME inbox at `/inbox` as an `Admin` link and the customer web
+chat at `/chat` as a `Public` link.
 
-## Quick tour
+Controllers configure the canister with `Config`, test conversations through
+`receive_message`, and attach business canisters through
+the dynamic configuration's **Agentic Canisters** list (or the compatibility
+`add_canister(principal)` method). Registration reads and validates each
+target canister's `llm_context` before persisting it.
 
-- `src/lib.rs` - candid surface: `receive_message` (called by `connector`),
-  `http_request`/`http_request_update` (the admin webhook callback only),
-  `update_config`/`get_config`, observability queries, `llm_context`.
-- `src/config.rs` - `Config`/`ConfigUpdate`, identical pattern to
-  `connector`'s (see that canister's README.md for the full three-state
-  partial-update explanation).
-- `src/llm.rs` - the LLM/tool-calling loop.
-- `src/tools.rs` - **read this first.** The customer-scoped tool registry
-  and the security invariant every tool must preserve.
-- `src/db.rs` - inter-canister client for [`ic-sql`](../ic-sql) (the
-  "prebuilt SQL database" `query_database` reads from, if
-  `Config::ic_sql_canister_id` is set) - plain functions, reusable by any
-  tool's own logic, not only `query_database`.
-- `src/admin.rs` - the administrative escalation boundary: outbound
-  webhook notification, inbound signed callback.
-- `src/messages.rs` / `src/state.rs` / `src/http.rs` / `src/outbound.rs` -
-  candid types, stable storage, the IC HTTP Gateway types, and relaying
-  replies back through `connector`, respectively.
-- `src/llm_context.md` - the full template documentation, also served at
-  runtime via the `llm_context` candid method.
+The install-time `Config` argument is optional. When it is omitted, the
+canister installs with `Config::default()` and a controller can complete setup
+through the dynamic configuration API.
 
-## Setup
+The grouped dynamic-configuration surface exposes every runtime setting,
+including AI, WhatsApp, Telegram, email, administrative escalation, project
+integrations, and `connected_canisters`. Adding a connected canister discovers
+its `ai_*` methods; removing it removes those tools from subsequent LLM turns.
+Secret fields are write-only and never returned by `get_config`. Browser push
+is routed through the CanisterHub protocol, so the agent no longer needs or
+exposes a notification-canister principal.
+The agent canister ID and the WhatsApp, Telegram, administrative callback, and
+mail ingress endpoints remain read-only. The older controller-only
+`get_runtime_config`/`update_config` methods remain available for compatibility.
 
-1. Deploy `connector` first (see `../connector/README.md`) and note its
-   canister id.
-2. Deploy this canister with an initial `Config` (get an API key from
-   whichever provider you pick - see `src/llm_context.md`'s "Choosing a
-   provider"):
-   ```
-   icp canister install agent --argument '(record {
-     connector_principal = opt principal "<connector-canister-id>";
-     system_prompt = opt "You are a support assistant for Acme Corp. You can look up and update the current customer'\''s own profile. For refunds, account deletion, or anything else outside that, use request_admin_action rather than refusing.";
-     llm_provider = opt "openai";
-     llm_model = null;
-     llm_api_key = opt "sk-...";
-     max_tool_iterations = null;
-     admin_webhook_url = opt "https://your-admin-system.example.com";
-     admin_webhook_secret = opt "a-long-random-shared-secret";
-     ic_sql_canister_id = null;
-   })'
-   ```
-   Set `ic_sql_canister_id` to a deployed [`ic-sql`](../ic-sql) canister's id
-   to enable `query_database` (read-only `SELECT`s a customer's question can
-   be answered from); leave it `null` to skip that tool entirely (the model
-   can still call it, but every call fails with a clear "no database is
-   configured" error).
-3. On `connector`, set `agent_canister` (or whatever forwarding
-   configuration `connector` uses - see its README.md) to this canister's
-   id, so inbound messages actually reach `receive_message`.
-4. Build whatever receives `POST <admin_webhook_url>/admin/requests` and
-   later calls back `POST <this-canister>/webhook/admin` - see
-   `src/llm_context.md`'s "Escalating to a human" section for the exact
-   payload shapes and signature scheme. `admin_agent` (a sibling template
-   in this project) is one option for the receiving side.
+## AI access
 
-## Adapting this for a real business
+The SME owner chooses one of two access models in the dashboard:
 
-See `src/llm_context.md`'s "Adapting this template for a specific business"
-section for the full step-by-step - in short: replace `get_profile`/
-`update_username` with your own customer-scoped tools, write a system
-prompt that's honest about scope and points at `request_admin_action` for
-anything outside it, and decide what counts as administrative for your
-business (when in doubt, treat it as administrative).
+- **Managed** — choose DeepSeek or one of the free IC LLM models. The agent calls the CanisterHub
+  backend, which resolves the SME account from the agent's controllers,
+  reserves token credits, forwards provider-neutral messages and tool
+  definitions, and records usage. No provider key is stored in the agent.
+- **Own API key** — Claude/Anthropic, DeepSeek, or OpenAI. The key remains in
+  this SME-controlled canister and the agent calls that provider directly via
+  a non-replicated HTTPS outcall.
 
-## Regenerating `agent.did`
+The protocol principal defaults to the value compiled in `src/protocol.rs`, so
+the SME does not have to configure it; dynamic config exposes that default for
+visibility and an optional deployment override. For managed calls, the backend reads the calling canister's
+controllers and charges the matching controller's account-level token-credit
+balance; no project identifier is configured or sent.
 
-```sh
-cargo build --target wasm32-unknown-unknown --release
-candid-extractor ../target/wasm32-unknown-unknown/release/agent.wasm > agent.did
+## AI canister contract
+
+`llm_context() -> text` must return JSON:
+
+```json
+{
+  "description": "Order service",
+  "methods": [{
+    "name": "ai_lookup_order",
+    "description": "Look up the current customer's order",
+    "parameters": {
+      "type": "object",
+      "properties": { "order_id": { "type": "string" } },
+      "required": ["order_id"]
+    }
+  }]
+}
 ```
 
-## Testing
+Every listed method must start with `ai_` and expose:
 
-`cargo test --lib` covers the pure logic - in particular
-`tools.rs`'s `no_tool_parameter_looks_like_a_customer_identifier` and
-`update_username_only_ever_touches_the_key_the_caller_supplied`, which
-exercise this template's core security invariant directly. PocketIC
-integration tests (`tests/agent_tests.rs`) cover `Config`/
-`ConfigUpdate`, access control, and the admin webhook's HMAC verification -
-plus, thanks to `ic_rig`'s bring-your-own-HTTP-client design, a real
-end-to-end run of `llm::run_agent_loop` with a **mocked** HTTPS outcall
-standing in for the provider's API (no live provider account or API key
-needed). See that test file's own doc comment for exactly what it does and
-doesn't cover.
+```candid
+type AiContext = record {
+  agent : principal;
+  channel : variant { WhatsApp; Telegram; Email };
+  session_id : text;
+};
+
+ai_lookup_order : (AiContext, text) -> (variant { Ok : text; Err : text });
+```
+
+The second argument and successful result are JSON text. The agent creates
+`AiContext`; models cannot choose its identity fields. A target canister must
+verify `msg_caller()` is its configured agent (and matches `context.agent`)
+before any protected action, then scope work from the context instead of
+accepting a customer/account identifier in JSON.
+
+Build and test from `packages/`:
+
+```sh
+cargo check -p agent
+cargo test -p agent --lib
+cargo build --target wasm32-unknown-unknown --release -p agent
+```

@@ -98,8 +98,6 @@ fn dev_config() -> Config {
         github_oauth_client_secret: None,
         public_base_url: None,
         github_api_token: None,
-        vapid_public_key: None,
-        vapid_private_key: None,
     }
 }
 
@@ -125,19 +123,43 @@ async fn main() {
     );
     job.set_project_name("flight-booking-fbef9034".to_string());
     job.add_canisters([
-        ("backend".to_string(), "4caro-hl777-77775-aaaba-cai".to_string()),
-        ("connector".to_string(), "46el7-ql777-77775-aaada-cai".to_string()),
-        ("agent".to_string(), "4zfnl-5t777-77775-aaadq-cai".to_string()),
-        ("admin_agent".to_string(), "4xhad-gd777-77775-aaacq-cai".to_string()),
-        ("ic-sql".to_string(), "4fbx2-kt777-77775-aaabq-cai".to_string()),
-        ("static".to_string(), "4qggx-l3777-77775-aaaca-cai".to_string()),
+        (
+            "backend".to_string(),
+            "4caro-hl777-77775-aaaba-cai".to_string(),
+        ),
+        (
+            "connector".to_string(),
+            "46el7-ql777-77775-aaada-cai".to_string(),
+        ),
+        (
+            "agent".to_string(),
+            "4zfnl-5t777-77775-aaadq-cai".to_string(),
+        ),
+        (
+            "admin_agent".to_string(),
+            "4xhad-gd777-77775-aaacq-cai".to_string(),
+        ),
+        (
+            "ic-sql".to_string(),
+            "4fbx2-kt777-77775-aaabq-cai".to_string(),
+        ),
+        (
+            "static".to_string(),
+            "4qggx-l3777-77775-aaaca-cai".to_string(),
+        ),
         // Added later, real deploys against this same running local project -
         // see the conversation: `vector_db` via the dashboard's own "Deploy
         // Database" button (verifying that real end-to-end pipeline),
         // `auth` via `icp new`/`build`/`deploy` by hand (verifying the new
         // `packages/auth` building block).
-        ("vector_db".to_string(), "5uljf-s3777-77775-aaaea-cai".to_string()),
-        ("auth".to_string(), "5tkpr-7d777-77775-aaaeq-cai".to_string()),
+        (
+            "vector_db".to_string(),
+            "5uljf-s3777-77775-aaaea-cai".to_string(),
+        ),
+        (
+            "auth".to_string(),
+            "5tkpr-7d777-77775-aaaeq-cai".to_string(),
+        ),
     ]);
     job.state = JobState::Succeeded;
     job.final_message = Some(
@@ -154,9 +176,14 @@ async fn main() {
     // comment) - if it isn't, this just logs to stderr and the seeded job's
     // `llm_context` stays `None`, same as any job that hasn't reached this
     // point yet.
-    let project_dir = std::path::PathBuf::from("data/jobs/fbef9034-c885-4d51-8559-75f89e6ced1a/flight-booking-fbef9034");
-    let canister_ids: serde_json::Map<String, serde_json::Value> =
-        job.canisters.iter().map(|(name, info)| (name.clone(), serde_json::Value::String(info.id.clone()))).collect();
+    let project_dir = std::path::PathBuf::from(
+        "data/jobs/fbef9034-c885-4d51-8559-75f89e6ced1a/flight-booking-fbef9034",
+    );
+    let canister_ids: serde_json::Map<String, serde_json::Value> = job
+        .canisters
+        .iter()
+        .map(|(name, info)| (name.clone(), serde_json::Value::String(info.id.clone())))
+        .collect();
     let llm_context = orchestrator::llm::tools::generate_llm_context(
         job.project_name.as_deref().unwrap_or(&job.id),
         &job.request,
@@ -168,9 +195,14 @@ async fn main() {
     .await;
     if llm_context.lines().count() > 3 {
         job.set_llm_context(llm_context);
-        println!("seeded job: generated a real llm_context ({} bytes) from the live local canisters", job.llm_context.as_ref().unwrap().len());
+        println!(
+            "seeded job: generated a real llm_context ({} bytes) from the live local canisters",
+            job.llm_context.as_ref().unwrap().len()
+        );
     } else {
-        eprintln!("seeded job: local network/canisters not reachable right now - llm_context left unset");
+        eprintln!(
+            "seeded job: local network/canisters not reachable right now - llm_context left unset"
+        );
     }
 
     jobs.insert(job);
@@ -180,8 +212,15 @@ async fn main() {
     // identity here. Used only for the one-time JWT bootstrap right below -
     // the orchestrator has no ongoing need for a `backend` agent past
     // startup (see the `decouple-orchestrator-api` project notes).
-    let backend_agent = Agent::builder().with_url("http://127.0.0.1:8000").with_identity(AnonymousIdentity).build().unwrap();
-    backend_agent.fetch_root_key().await.expect("failed to fetch the local replica's root key - is `icp network start` running?");
+    let backend_agent = Agent::builder()
+        .with_url("http://127.0.0.1:8000")
+        .with_identity(AnonymousIdentity)
+        .build()
+        .unwrap();
+    backend_agent
+        .fetch_root_key()
+        .await
+        .expect("failed to fetch the local replica's root key - is `icp network start` running?");
 
     // `REQUIRE_AUTH=true` (see this file's own header comment) needs this
     // populated - same real `get_jwt_signing_key` call `main.rs`'s own

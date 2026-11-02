@@ -5600,7 +5600,6 @@ dependencies = [
  "ic-management-canister-types 0.8.0",
  "ic-utils",
  "k256",
- "p256",
  "pocket-ic",
  "pty-process",
  "rand 0.8.8",

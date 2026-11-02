@@ -10,8 +10,15 @@ use std::sync::Arc;
 /// Builds an `ic-agent` client. `local` controls whether the replica's root key is
 /// fetched (required for any non-mainnet replica, whose root key isn't the
 /// well-known NNS one baked into ic-agent) and must never be set for mainnet.
-pub async fn build_agent(url: &str, identity: Arc<dyn Identity>, local: bool) -> anyhow::Result<Agent> {
-    let agent = Agent::builder().with_url(url).with_arc_identity(identity).build()?;
+pub async fn build_agent(
+    url: &str,
+    identity: Arc<dyn Identity>,
+    local: bool,
+) -> anyhow::Result<Agent> {
+    let agent = Agent::builder()
+        .with_url(url)
+        .with_arc_identity(identity)
+        .build()?;
     if local {
         agent.fetch_root_key().await?;
     }
@@ -24,9 +31,17 @@ pub async fn build_agent(url: &str, identity: Arc<dyn Identity>, local: bool) ->
 /// identity is configured: error out (for anything that needs to write, e.g.
 /// indexing or deploying) or fall back to the anonymous identity (for
 /// read-only uses).
-pub async fn build_agent_for_network(config: &Config, network: &str, require_identity: bool) -> anyhow::Result<(Agent, Principal)> {
+pub async fn build_agent_for_network(
+    config: &Config,
+    network: &str,
+    require_identity: bool,
+) -> anyhow::Result<(Agent, Principal)> {
     let local = network != "ic";
-    let url = if local { &config.ic_url_local } else { &config.ic_url_mainnet };
+    let url = if local {
+        &config.ic_url_local
+    } else {
+        &config.ic_url_mainnet
+    };
 
     let identity = match resolve_identity(config)? {
         Some(identity) => identity,
@@ -77,9 +92,11 @@ pub fn identity_from_seed_phrase(phrase: &str) -> anyhow::Result<Arc<dyn Identit
         .map_err(|e| anyhow::anyhow!("IDENTITY_SEED_PHRASE is not a valid BIP-39 mnemonic: {e}"))?;
     let seed = Seed::new(&mnemonic, "");
 
-    let path: DerivationPath = IC_DERIVATION_PATH.parse().expect("IC_DERIVATION_PATH is a valid BIP-32 path");
-    let extended_key =
-        XPrv::derive_from_path(seed.as_bytes(), &path).map_err(|e| anyhow::anyhow!("failed to derive key from seed phrase: {e}"))?;
+    let path: DerivationPath = IC_DERIVATION_PATH
+        .parse()
+        .expect("IC_DERIVATION_PATH is a valid BIP-32 path");
+    let extended_key = XPrv::derive_from_path(seed.as_bytes(), &path)
+        .map_err(|e| anyhow::anyhow!("failed to derive key from seed phrase: {e}"))?;
     let signing_key: k256::ecdsa::SigningKey = extended_key.into();
     let secret_key: k256::SecretKey = signing_key.into();
 
@@ -93,8 +110,12 @@ pub fn load_identity_from_pem(path: &Path) -> anyhow::Result<Arc<dyn Identity>> 
     if let Ok(id) = Secp256k1Identity::from_pem_file(path) {
         return Ok(Arc::new(id));
     }
-    let id = BasicIdentity::from_pem_file(path)
-        .map_err(|e| anyhow::anyhow!("failed to load identity from {}: not a recognized Secp256k1 or Ed25519 PEM ({e})", path.display()))?;
+    let id = BasicIdentity::from_pem_file(path).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to load identity from {}: not a recognized Secp256k1 or Ed25519 PEM ({e})",
+            path.display()
+        )
+    })?;
     Ok(Arc::new(id))
 }
 
@@ -111,6 +132,9 @@ mod tests {
         let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         let identity = identity_from_seed_phrase(phrase).expect("valid phrase");
         let principal = identity.sender().expect("sender");
-        assert_eq!(principal.to_text(), "tgzar-4lpln-fq34h-6hxo4-wlm3x-6g3or-6hxvr-d6jbw-ooh2b-lzsw4-aqe");
+        assert_eq!(
+            principal.to_text(),
+            "tgzar-4lpln-fq34h-6hxo4-wlm3x-6g3or-6hxvr-d6jbw-ooh2b-lzsw4-aqe"
+        );
     }
 }

@@ -33,7 +33,15 @@ use std::time::Duration;
 /// consistent behavior). Shell-quoted as a whole (single-quoted, with any
 /// embedded `'` escaped) before being interpolated into the command
 /// string.
-pub async fn call_candid_text(project_dir: &Path, name: &str, method: &str, args: &str, is_query: bool, is_mainnet: bool, timeout: Duration) -> Option<String> {
+pub async fn call_candid_text(
+    project_dir: &Path,
+    name: &str,
+    method: &str,
+    args: &str,
+    is_query: bool,
+    is_mainnet: bool,
+    timeout: Duration,
+) -> Option<String> {
     let quoted_args = shell_single_quote(args);
     let query_flag = if is_query { " --query" } else { "" };
     let command = if is_mainnet {
@@ -46,7 +54,10 @@ pub async fn call_candid_text(project_dir: &Path, name: &str, method: &str, args
         return None;
     }
     let envelope = parse_json_envelope(&result.stdout)?;
-    envelope.get("response_candid")?.as_str().map(str::to_string)
+    envelope
+        .get("response_candid")?
+        .as_str()
+        .map(str::to_string)
 }
 
 fn shell_single_quote(s: &str) -> String {
@@ -85,18 +96,27 @@ mod tests {
                        Do you want to send this message? [y/N]\n\
                        {\"response_bytes\":\"44\",\"response_text\":null,\"response_candid\":\"(record { messages_processed = 0 : nat64 })\"}\n";
         let envelope = parse_json_envelope(stdout).unwrap();
-        assert_eq!(envelope.get("response_candid").and_then(|v| v.as_str()), Some("(record { messages_processed = 0 : nat64 })"));
+        assert_eq!(
+            envelope.get("response_candid").and_then(|v| v.as_str()),
+            Some("(record { messages_processed = 0 : nat64 })")
+        );
     }
 
     #[test]
     fn parse_json_envelope_reads_the_normal_clean_output_directly() {
         let stdout = "{\"response_bytes\":\"44\",\"response_text\":null,\"response_candid\":\"(vec { \\\"passengers\\\" })\"}\n";
         let envelope = parse_json_envelope(stdout).unwrap();
-        assert_eq!(envelope.get("response_candid").and_then(|v| v.as_str()), Some("(vec { \"passengers\" })"));
+        assert_eq!(
+            envelope.get("response_candid").and_then(|v| v.as_str()),
+            Some("(vec { \"passengers\" })")
+        );
     }
 
     #[test]
     fn shell_single_quote_escapes_embedded_single_quotes() {
-        assert_eq!(shell_single_quote("SELECT * FROM t WHERE name = 'Bob'"), r#"'SELECT * FROM t WHERE name = '"'"'Bob'"'"''"#);
+        assert_eq!(
+            shell_single_quote("SELECT * FROM t WHERE name = 'Bob'"),
+            r#"'SELECT * FROM t WHERE name = '"'"'Bob'"'"''"#
+        );
     }
 }

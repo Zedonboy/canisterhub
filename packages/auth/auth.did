@@ -34,6 +34,9 @@ type ConfigFieldSchema = record {
   field_type : ConfigType;
   description : text;
   label : text;
+  group : opt text;
+  group_label : opt text;
+  group_description : opt text;
   // Optional typed filter for canister-picker fields. `None` has the
   // same meaning as `Some(CanisterType::Custom)`.
   canister_type : opt CanisterType;
@@ -41,8 +44,18 @@ type ConfigFieldSchema = record {
   is_readonly : opt bool;
   default_value : opt ConfigValue;
 };
+type ConfigVectorType = variant {
+  Text; Number; Float; Boolean;
+  Select : record { options : vec text };
+  CanisterPicker : record { module_type_filter : opt text };
+  SecretText;
+};
+type ConfigVectorValue = variant {
+  Text : text; Number : int64; Float : float64; Boolean : bool; PrincipalId : principal;
+};
 type ConfigType = variant {
   Text;
+  TextArea;
   CanisterPicker : record { module_type_filter : opt text };
   Boolean;
   Float;
@@ -51,6 +64,7 @@ type ConfigType = variant {
   SecretText;
   Select : record { options : vec text };
   Number;
+  Vector : record { element_type : ConfigVectorType };
 };
 // `update_config`'s argument. Providers remain managed separately. An outer
 // `None` leaves a field untouched; the nested option for the redirect URL
@@ -68,6 +82,7 @@ type ConfigValue = variant {
   Float : float64;
   PrincipalId : principal;
   Number : int64;
+  Vector : vec ConfigVectorValue;
 };
 type HttpRequest = record {
   url : text;
@@ -165,6 +180,8 @@ type UpdateProfile = record {
   avatar_url : opt opt text;
   display_name : opt opt text;
 };
+type LinkKind = variant { Admin; Public };
+type CanisterLink = record { label : text; url : text; kind : LinkKind };
 service : () -> {
   // Minimal, non-sensitive identity lookup for application canisters.
   authorize_principal : (principal) -> (opt Authorization) query;
@@ -179,11 +196,10 @@ service : () -> {
   // management canister, which only an update call can make).
   begin_oauth : (text, bool) -> (Result);
   canister_metadata : () -> (CanisterMetadata) query;
-  get_admin_panel_url : () -> (opt text) query;
   get_auth_config : () -> (Result_1) query;
   get_config : () -> (vec record { text; ConfigValue }) query;
   get_config_schema : () -> (vec ConfigFieldSchema) query;
-  get_home_page_url : () -> (opt text) query;
+  get_links : () -> (vec CanisterLink) query;
   // This caller's own profile - `None` if it has never called
   // `update_my_profile` (there's nothing to auto-create on a read-only
   // call). Rejects the anonymous principal, same as every other

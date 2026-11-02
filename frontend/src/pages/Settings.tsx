@@ -19,6 +19,7 @@ const KIND_LABELS: Record<CanisterKind, string> = {
   connector: "Connector",
   agent: "Agent",
   admin_agent: "Admin Agent",
+  notification: "Notification",
   auth: "Auth",
   database: "Database",
   analytics: "Analytics",
@@ -27,33 +28,34 @@ const KIND_LABELS: Record<CanisterKind, string> = {
 };
 
 /** Real browser Web Push subscribe/unsubscribe (`lib/pushNotifications.ts`) -
- * account-wide, not actually scoped to this one project (a subscription is
- * tied to the signed-in principal, same as the Wallet), but shown here on
- * the General tab since this is where account-level preferences live.
+ * scoped to this project's installed notification module. Each module uses a
+ * distinct service-worker registration, so projects may use independent
+ * VAPID identities without replacing one another's browser subscription.
  * `"denied"` is a dead end this UI can't undo - only the browser's own site
  * settings can, so that state just explains itself instead of showing a
  * now-useless toggle. */
-function PushNotificationsCard() {
+function PushNotificationsCard({ canisterId, network }: { canisterId?: string; network: string }) {
   const [status, setStatus] = useState<"loading" | "enabled" | "disabled" | "denied">("loading");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!isPushSupported()) {
+    if (!canisterId || !isPushSupported()) {
       setStatus("disabled");
       return;
     }
-    getPushStatus().then(setStatus).catch(() => setStatus("disabled"));
-  }, []);
+    getPushStatus(canisterId).then(setStatus).catch(() => setStatus("disabled"));
+  }, [canisterId]);
 
   const enable = async () => {
     setBusy(true);
     try {
-      await enablePushNotifications();
+      if (!canisterId) throw new Error("Install the notification module first.");
+      await enablePushNotifications(canisterId, network);
       setStatus("enabled");
       toast.success("Notifications enabled", "This browser will now receive push notifications.");
     } catch (e) {
       toast.error("Couldn't enable notifications", e instanceof Error ? e.message : String(e));
-      setStatus(await getPushStatus().catch(() => "disabled"));
+      setStatus(await (canisterId ? getPushStatus(canisterId) : Promise.resolve("disabled" as const)).catch(() => "disabled"));
     } finally {
       setBusy(false);
     }
@@ -62,7 +64,8 @@ function PushNotificationsCard() {
   const disable = async () => {
     setBusy(true);
     try {
-      await disablePushNotifications();
+      if (!canisterId) return;
+      await disablePushNotifications(canisterId, network);
       setStatus("disabled");
       toast.success("Notifications disabled");
     } catch (e) {
@@ -84,13 +87,15 @@ function PushNotificationsCard() {
             <div>
               <div className="text-sm text-[#e2e8f0]">Push notifications</div>
               <p className="text-xs text-[#4a5568] mt-0.5 max-w-sm">
-                {status === "denied"
+                {!canisterId
+                  ? "Install a notification module in this project to manage project-owned browser notifications."
+                  : status === "denied"
                   ? "Blocked in your browser's site settings for this page - allow notifications there to turn this on."
                   : "Get notified in this browser when something needs your attention, even when the dashboard isn't open."}
               </p>
             </div>
           </div>
-          {status !== "denied" && (
+          {canisterId && status !== "denied" && (
             <Button
               variant={status === "enabled" ? "secondary" : "primary"}
               size="sm"
@@ -117,6 +122,7 @@ function PushNotificationsCard() {
 function GeneralTab({ job, refetch }: { job: Project; refetch: () => void }) {
   const [name, setName] = useState(job.project_name ?? "");
   const [saving, setSaving] = useState(false);
+  const notificationCanister = Object.values(job.canisters).find((info) => info.kind === "notification");
 
   const save = async () => {
     const trimmed = name.trim();
@@ -166,7 +172,7 @@ function GeneralTab({ job, refetch }: { job: Project; refetch: () => void }) {
         </CardContent>
       </Card>
 
-      <PushNotificationsCard />
+      <PushNotificationsCard canisterId={notificationCanister?.id} network={job.network} />
     </div>
   );
 }

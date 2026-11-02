@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Boxes, Menu, X } from "lucide-react";
-import { Container, Button } from "./ui";
+import { Container, ButtonLink } from "./ui";
 
 const LINKS = [
   { href: "#platform", label: "Platform" },
@@ -29,7 +29,7 @@ export function Nav() {
         </nav>
 
         <div className="hidden md:flex items-center">
-          <Button variant="primary" size="md">Launch Dashboard</Button>
+          <ButtonLink variant="primary" size="md">Launch Dashboard</ButtonLink>
         </div>
 
         <button className="md:hidden text-[#e2e8f0]" onClick={() => setOpen((v) => !v)} aria-label="Toggle menu">
@@ -45,7 +45,7 @@ export function Nav() {
             </a>
           ))}
           <div className="pt-2">
-            <Button variant="primary" size="md" className="w-full">Launch Dashboard</Button>
+            <ButtonLink variant="primary" size="md" className="w-full">Launch Dashboard</ButtonLink>
           </div>
         </div>
       )}
