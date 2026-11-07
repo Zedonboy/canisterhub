@@ -1,13 +1,14 @@
-name: Release agent, inventory, and asset storage modules
+name: Release installable packages
 
-# Builds the agent, inventory, and asset storage modules, then publishes each
-# module's Wasm and Candid interface to a GitHub Release.
+# Builds all installable Rust packages, then publishes each package's Wasm and
+# Candid interface to a GitHub Release.
 # `packages/build.sh` builds the UIs before Rust so that:
 #   - agent.wasm contains chat-ui
 #   - order_inventory.wasm contains inventory-browser and storefront
+#   - restaurant.wasm contains restaurant-ui
 #
-# The backend canister is deliberately not built or published here: it is the
-# marketplace/catalog service, not one of the packages users install.
+# admin_agent and app_api are excluded from the package workspace; connector
+# and notification have been retired.
 on:
   workflow_dispatch:
     inputs:
@@ -48,6 +49,8 @@ jobs:
             packages/inventory-browser/package-lock.json
             packages/storefront/package-lock.json
             packages/table-browser/package-lock.json
+            packages/payment-ui/package-lock.json
+            packages/restaurant-ui/package-lock.json
 
       - name: Cache package build artifacts
         uses: Swatinem/rust-cache@v2
@@ -59,12 +62,12 @@ jobs:
 
       - name: Verify release assets
         run: |
-          test -s packages/bin/agent.wasm
-          test -s packages/bin/agent.did
-          test -s packages/bin/order_inventory.wasm
-          test -s packages/bin/order_inventory.did
-          test -s packages/bin/assetstorage.wasm
-          test -s packages/bin/assetstorage.did
+          for package in \
+            agent assetstorage auth ic-kv ic-sql kora-payment \
+            order_inventory paystack-payment restaurant; do
+            test -s "packages/bin/${package}.wasm"
+            test -s "packages/bin/${package}.did"
+          done
 
       - name: Generate module checksums
         working-directory: packages/bin
@@ -72,10 +75,22 @@ jobs:
           sha256sum \
             agent.wasm \
             agent.did \
-            order_inventory.wasm \
-            order_inventory.did \
             assetstorage.wasm \
             assetstorage.did \
+            auth.wasm \
+            auth.did \
+            ic-kv.wasm \
+            ic-kv.did \
+            ic-sql.wasm \
+            ic-sql.did \
+            kora-payment.wasm \
+            kora-payment.did \
+            order_inventory.wasm \
+            order_inventory.did \
+            paystack-payment.wasm \
+            paystack-payment.did \
+            restaurant.wasm \
+            restaurant.did \
             > SHA256SUMS
 
       - name: Publish module release
@@ -85,9 +100,21 @@ jobs:
           files: |
             packages/bin/agent.wasm
             packages/bin/agent.did
-            packages/bin/order_inventory.wasm
-            packages/bin/order_inventory.did
             packages/bin/assetstorage.wasm
             packages/bin/assetstorage.did
+            packages/bin/auth.wasm
+            packages/bin/auth.did
+            packages/bin/ic-kv.wasm
+            packages/bin/ic-kv.did
+            packages/bin/ic-sql.wasm
+            packages/bin/ic-sql.did
+            packages/bin/kora-payment.wasm
+            packages/bin/kora-payment.did
+            packages/bin/order_inventory.wasm
+            packages/bin/order_inventory.did
+            packages/bin/paystack-payment.wasm
+            packages/bin/paystack-payment.did
+            packages/bin/restaurant.wasm
+            packages/bin/restaurant.did
             packages/bin/SHA256SUMS
           fail_on_unmatched_files: true
