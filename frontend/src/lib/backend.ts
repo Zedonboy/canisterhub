@@ -75,7 +75,6 @@ function adaptKind(kind: RawCanisterKind): CanisterKind {
   if (kind === RawCanisterKind.Connector) return "connector";
   if (kind === RawCanisterKind.Agent) return "agent";
   if (kind === RawCanisterKind.AdminAgent) return "admin_agent";
-  if (kind === RawCanisterKind.Notification) return "notification";
   if (kind === RawCanisterKind.Auth) return "auth";
   if (kind === RawCanisterKind.Database) return "database";
   if (kind === RawCanisterKind.Analytics) return "analytics";
@@ -89,7 +88,7 @@ function encodeKind(kind: CanisterKind): RawCanisterKind {
   if (kind === "connector") return RawCanisterKind.Connector;
   if (kind === "agent") return RawCanisterKind.Agent;
   if (kind === "admin_agent") return RawCanisterKind.AdminAgent;
-  if (kind === "notification") return RawCanisterKind.Notification;
+  if (kind === "notification") return RawCanisterKind.Other;
   if (kind === "auth") return RawCanisterKind.Auth;
   if (kind === "database") return RawCanisterKind.Database;
   if (kind === "analytics") return RawCanisterKind.Analytics;

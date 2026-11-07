@@ -59,8 +59,10 @@ html, body {
 
 ::selection { background: #00d4ff33; color: #e2e8f0; }
 
-a { color: inherit; text-decoration: none; }
-button { cursor: pointer; }
+@layer base {
+  a { color: inherit; text-decoration: none; }
+  button { cursor: pointer; }
+}
 
 .gradient-text {
   background: linear-gradient(90deg, #00d4ff 0%, #00e676 100%);

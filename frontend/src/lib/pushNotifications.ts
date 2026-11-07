@@ -1,6 +1,7 @@
 // Real browser Web Push subscribe/unsubscribe against the protocol backend.
 
 import { getBackendActor } from "./actors";
+import { resolveIdentity } from "./auth";
 
 const SERVICE_WORKER_URL = "/sw.js";
 const SERVICE_WORKER_SCOPE = "/";
@@ -67,7 +68,8 @@ export async function enablePushNotifications(): Promise<void> {
     throw new Error("The browser returned an incomplete push subscription.");
   }
 
-  const result = await actor.push_subscribe({ endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth });
+  const principal = await resolveIdentity().then((identity) => identity.getPrincipal());
+  const result = await actor.push_subscribe(principal, { endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth });
   if ("Err" in result) throw new Error(result.Err);
 }
 
@@ -82,7 +84,8 @@ export async function disablePushNotifications(): Promise<void> {
 
   const endpoint = subscription.endpoint;
   const actor = await getBackendActor();
-  const result = await actor.push_unsubscribe(endpoint);
+  const principal = await resolveIdentity().then((identity) => identity.getPrincipal());
+  const result = await actor.push_unsubscribe(principal, endpoint);
   if ("Err" in result) throw new Error(result.Err);
   await subscription.unsubscribe();
 }

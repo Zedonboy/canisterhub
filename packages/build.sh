@@ -36,14 +36,11 @@ for ui in table-browser inventory-browser storefront chat-ui payment-ui restaura
   ui_dir="$workspace_dir/$ui"
   if [[ -d "$ui_dir" ]]; then
     echo "Building $ui..."
-    if command -v npm >/dev/null 2>&1; then
-      (cd "$ui_dir" && npm install && npm run build)
-    elif command -v deno >/dev/null 2>&1; then
-      (cd "$ui_dir" && deno install --no-lock --allow-scripts && deno task --no-lock build)
-    else
-      echo "error: either 'npm' or 'deno' is required to build $ui" >&2
+    if ! command -v npm >/dev/null 2>&1; then
+      echo "error: required command 'npm' is not installed" >&2
       exit 1
     fi
+    (cd "$ui_dir" && npm install && npm run build)
   fi
 done
 

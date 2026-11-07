@@ -1,6 +1,8 @@
-#!/usr/bin/env -S deno run -A
+#!/usr/bin/env node
 
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,7 +16,7 @@ function text(value) {
 
 function usage() {
   console.log(`Usage:
-  deno task seed-packages --file ./production-packages.v1.0.0.json [options]
+  npm run seed-packages -- --file ./production-packages.v1.0.0.json [options]
 
 Options:
   -f, --file <path>          Package JSON file (required)
@@ -79,20 +81,21 @@ function candidArgs(packages) {
 }
 
 async function main() {
-  const options = parseArgs(Deno.args);
+  const options = parseArgs(process.argv.slice(2));
   if (options.help) return usage();
   if (!options.file) throw new Error("--file is required");
 
-  const packages = packagesFrom(JSON.parse(await Deno.readTextFile(path.resolve(options.file))));
+  const packages = packagesFrom(JSON.parse(await readFile(path.resolve(options.file), "utf8")));
   const candid = candidArgs(packages);
   if (options.dryRun) {
     console.log(`Validated ${packages.length} package(s).\n${candid}`);
     return;
   }
 
-  const argsFile = await Deno.makeTempFile({ suffix: ".did" });
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), "canister-hub-seed-packages-"));
+  const argsFile = path.join(tempDir, "package-infos.did");
   try {
-    await Deno.writeTextFile(argsFile, candid);
+    await writeFile(argsFile, candid, { mode: 0o600 });
     const args = [
       "canister", "call", options.backend, "upload_package_infos",
       "--args-file", argsFile,
@@ -114,11 +117,11 @@ async function main() {
     }
     console.log(`Seeded ${packages.length} package(s) into ${options.backend}; package ids were assigned by the backend.`);
   } finally {
-    await Deno.remove(argsFile).catch(() => undefined);
+    await rm(tempDir, { recursive: true, force: true });
   }
 }
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
-  Deno.exit(1);
+  process.exitCode = 1;
 });

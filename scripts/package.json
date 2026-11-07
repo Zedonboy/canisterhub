@@ -6,7 +6,8 @@
   "scripts": {
     "generate": "icp-bindgen --did-file ../backend/backend.did --out-dir ./bindings --actor-disabled --declarations-flat --force",
     "publish": "npm run generate && node publish_to_marketplace.js",
-    "upload-catalog": "deno run -A upload_marketplace_catalog.js"
+    "upload-catalog": "node upload_marketplace_catalog.js",
+    "seed-packages": "node seed_package_infos.js"
   },
   "dependencies": {
     "@dfinity/vetkeys": "0.4.0",

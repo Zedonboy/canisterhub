@@ -23,7 +23,7 @@ function getDevServerConfig() {
   // leave URLs such as `http%3A%2F%2F...` after the SDK decodes `ic_env`.
   const values = [
     ["PUBLIC_CANISTER_ID:backend", backendId],
-    ["AUTH_NETWORK", network.managed ? "local" : "ic"],
+    ["PUBLIC_AUTH_NETWORK", network.managed ? "local" : "ic"],
     ["IC_HOST_LOCAL", network.api_url],
     ["IC_HOST_MAINNET", "https://ic0.app"],
     ["ORCHESTRATOR_URL", "http://127.0.0.1:8787"],
@@ -44,11 +44,9 @@ export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: [
-      // This workspace's node_modules mixes an npm-installed tree (real
-      // directories at the root) with Deno-managed packages (symlinks into
-      // node_modules/.deno), leaving two physical copies of react and
-      // react-dom on disk. Without these aliases the bundler can pull one
-      // copy for the app and the other for a library (e.g.
+      // Dependency installations can leave multiple physical copies of React
+      // and React DOM. Without these aliases the bundler can pull one copy
+      // for the app and another for a library (e.g.
       // @headlessui/react), after which hooks run against a null dispatcher
       // and every mount crashes with "Cannot read properties of null
       // (reading 'useId')". Pin every react* import at the root copy.

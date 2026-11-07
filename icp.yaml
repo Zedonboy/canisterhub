@@ -19,3 +19,12 @@ canisters:
   # - packages/ic-kv
   # - packages/vector_db
   # - packages/analytics
+
+environments:
+  - name: ic
+    network: ic
+    canisters: [frontend, backend]
+    settings:
+      frontend:
+        environment_variables:
+          PUBLIC_AUTH_NETWORK: "ic"

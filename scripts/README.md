@@ -19,7 +19,7 @@ v1.0.0 release data without changing canister state:
 
 ```bash
 cd scripts
-deno task seed-packages --file ./production-packages.v1.0.0.json --dry-run
+npm run seed-packages -- --file ./production-packages.v1.0.0.json --dry-run
 ```
 
 Seed a local backend (the default environment) - run after `icp deploy
@@ -27,13 +27,13 @@ backend` so a fresh local network carries the same production registry the
 dashboard's upgrade detection expects:
 
 ```bash
-deno task seed-packages --file ./production-packages.v1.0.0.json
+npm run seed-packages -- --file ./production-packages.v1.0.0.json
 ```
 
 Seed the production backend with a controller identity:
 
 ```bash
-deno task seed-packages \
+npm run seed-packages -- \
   --file ./production-packages.v1.0.0.json \
   --environment ic \
   --identity deploy
@@ -67,19 +67,19 @@ release URLs and local file paths, then validate it without changing state:
 
 ```bash
 cd scripts
-deno task upload-catalog --file ./catalog.json --dry-run
+npm run upload-catalog -- --file ./catalog.json --dry-run
 ```
 
 Upload to the local backend with the current default identity:
 
 ```bash
-deno task upload-catalog --file ./catalog.json
+npm run upload-catalog -- --file ./catalog.json
 ```
 
 Upload to mainnet with a named controller identity:
 
 ```bash
-deno task upload-catalog \
+npm run upload-catalog -- \
   --file ./catalog.json \
   --environment ic \
   --identity deploy

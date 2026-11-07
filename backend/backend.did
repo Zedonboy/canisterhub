@@ -25,7 +25,6 @@ type CanisterInfo = record {
 type CanisterKind = variant {
   Analytics;
   // Legacy project-owned notification canister kind.
-  Notification;
   Auth;
   Static;
   Connector;
@@ -594,10 +593,10 @@ service : () -> {
   push_import_vapid : (text, text) -> (Result_3);
   push_init_vapid : (text) -> (Result_3);
   push_ensure_vapid : () -> (Result_3);
-  push_list_subscriptions : () -> (Result_14) query;
+  push_list_subscriptions : (principal) -> (Result_14) query;
   push_send : (principal, PushNotification) -> (Result_15);
-  push_subscribe : (PushSubscription) -> (Result);
-  push_unsubscribe : (text) -> (Result);
+  push_subscribe : (principal, PushSubscription) -> (Result);
+  push_unsubscribe : (principal, text) -> (Result);
   push_vapid_public_key : () -> (Result_3) query;
   // Bumps an item's download counter by one - a bare popularity signal, not
   // tied to any real payment/entitlement check (a production deployment would

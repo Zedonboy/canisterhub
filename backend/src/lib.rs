@@ -301,15 +301,13 @@ impl Storable for MarketplaceItem {
 // so the dashboard can go call it directly for anything else.
 // ---------------------------------------------------------------------------
 
-/// Which building block a tracked canister actually is. `Notification` is
-/// retained for decoding older project records; Web Push now lives in backend.
+/// Which building block a tracked canister actually is. Web Push now lives in
+/// backend, so notification records are represented as `Other`.
 #[derive(Clone, Copy, Debug, CandidType, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CanisterKind {
     Connector,
     Agent,
     AdminAgent,
-    /// Legacy project-owned Web Push canister kind.
-    Notification,
     Auth,
     Database,
     Analytics,
@@ -1009,18 +1007,30 @@ fn push_vapid_public_key() -> Result<Vec<u8>, String> {
 }
 
 #[update]
-fn push_subscribe(_subscription: PushSubscription) -> Result<(), String> {
-    web_push::subscribe(require_authenticated_caller("subscribe to push notifications")?, _subscription)
+fn push_subscribe(principal: Principal, subscription: PushSubscription) -> Result<(), String> {
+    let caller = require_authenticated_caller("subscribe to push notifications")?;
+    if principal != caller {
+        return Err("subscription principal must match the authenticated caller".to_string());
+    }
+    web_push::subscribe(caller, subscription)
 }
 
 #[update]
-fn push_unsubscribe(_endpoint: String) -> Result<(), String> {
-    web_push::unsubscribe(require_authenticated_caller("unsubscribe from push notifications")?, &_endpoint)
+fn push_unsubscribe(principal: Principal, endpoint: String) -> Result<(), String> {
+    let caller = require_authenticated_caller("unsubscribe from push notifications")?;
+    if principal != caller {
+        return Err("subscription principal must match the authenticated caller".to_string());
+    }
+    web_push::unsubscribe(caller, &endpoint)
 }
 
 #[query]
-fn push_list_subscriptions() -> Result<Vec<PushSubscription>, String> {
-    Ok(web_push::list(&require_authenticated_caller("list push subscriptions")?))
+fn push_list_subscriptions(principal: Principal) -> Result<Vec<PushSubscription>, String> {
+    let caller = require_authenticated_caller("list push subscriptions")?;
+    if principal != caller {
+        return Err("subscription principal must match the authenticated caller".to_string());
+    }
+    Ok(web_push::list(&caller))
 }
 
 #[update]

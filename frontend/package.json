@@ -7,6 +7,7 @@
     "generate": "icp-bindgen --did-file ../backend/backend.did --out-dir ./src/bindings --force",
     "dev": "npm run generate && vite",
     "build": "npm run generate && tsc -b && vite build",
+    "build:prod": "NODE_ENV=production npm run build",
     "preview": "vite preview"
   },
   "dependencies": {

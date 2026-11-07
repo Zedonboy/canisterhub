@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run -A
+#!/usr/bin/env node
 "use strict";
 
 /**
@@ -10,7 +10,7 @@
  * private key itself.
  *
  * Usage:
- *   deno task upload-catalog --file ./catalog.json --identity deploy -e ic
+ *   npm run upload-catalog -- --file ./catalog.json --identity deploy -e ic
  *
  * Run with --help for every option and the catalog shape.
  */
@@ -28,7 +28,7 @@ const backendDid = path.join(projectRoot, "backend", "backend.did");
 
 function usage() {
   console.log(`Usage:
-  deno run -A scripts/upload_marketplace_catalog.js --file <catalog.json> [options]
+  node scripts/upload_marketplace_catalog.js --file <catalog.json> [options]
 
 Options:
   -f, --file <path>          JSON catalog to upload (required)

@@ -2,6 +2,7 @@ import { safeGetCanisterEnv } from "@icp-sdk/core/agent/canister-env";
 
 type RuntimeCanisterEnv = {
   readonly ["PUBLIC_CANISTER_ID:backend"]?: string;
+  readonly PUBLIC_AUTH_NETWORK?: string;
   readonly AUTH_NETWORK?: string;
   readonly IC_HOST_LOCAL?: string;
   readonly IC_HOST_MAINNET?: string;
@@ -22,8 +23,10 @@ export function runtimeValue(name: keyof RuntimeCanisterEnv): string | undefined
 }
 
 export function runtimeNetwork(): string {
-  const configured = runtimeValue("AUTH_NETWORK");
+  const configured = runtimeValue("PUBLIC_AUTH_NETWORK") ?? runtimeValue("AUTH_NETWORK");
+  console.log("Runtime Configured: ", configured)
   if (configured) return configured;
+  
 
   // A frontend and its backend are deployed into the same icp-cli
   // environment. IC gateway domains therefore identify a mainnet build
