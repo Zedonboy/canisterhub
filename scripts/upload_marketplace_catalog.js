@@ -147,7 +147,7 @@ function prepareCatalog(raw, catalogDir) {
   if (!Array.isArray(packages)) throw new Error("catalog.packages must be an array");
 
   const prepareCommon = (item, label) => ({
-    title: requiredString(item, "title", label),
+    title: requiredString(item, item.package_name ? "package_name" : "title", label),
     description: requiredString(item, "description", label),
     webUrl: optionalString(item, "web_url", label),
     gitRepoUrl: requiredString(item, "git_repo_url", label),
@@ -169,6 +169,10 @@ function prepareCatalog(raw, catalogDir) {
     }),
     packages: packages.map((item, index) => {
       const label = `packages[${index}]`;
+      const packageName = requiredString(item, "package_name", label);
+      if (/\.[a-z0-9]{1,8}$/i.test(packageName)) {
+        throw new Error(`${label}.package_name must be a display name without a file extension`);
+      }
       const common = prepareCommon(item, label);
       if (item.price_e8s !== undefined && item.price_e8s !== null) {
         throw new Error(

@@ -510,13 +510,13 @@ function MarketplaceSection({ job }: { job: Project }) {
     return all.filter((item) => item.title.toLowerCase().includes(q) || item.description.toLowerCase().includes(q));
   }, [items, query]);
 
-  // No search in progress: show a "Featured" shortlist (most downloaded
-  // first) rather than the whole catalog - once searching, show every
-  // match instead, not just the featured subset.
-  const displayed = useMemo(() => {
-    if (query.trim()) return filtered;
-    return [...filtered].sort((a, b) => Number(b.downloads - a.downloads)).slice(0, 6);
-  }, [filtered, query]);
+  // Show the whole catalog (most downloaded first), not a shortlist - the
+  // search box above filters it live in the browser, same pattern as the
+  // standalone Marketplace page.
+  const displayed = useMemo(
+    () => [...filtered].sort((a, b) => Number(b.downloads - a.downloads)),
+    [filtered],
+  );
 
   return (
     <div>
@@ -541,7 +541,7 @@ function MarketplaceSection({ job }: { job: Project }) {
         displayed.length > 0 ? (
           <>
             {!query.trim() && (
-              <h3 className="text-[11px] font-medium text-[#4a5568] uppercase tracking-wider mb-3">Featured</h3>
+              <h3 className="text-[11px] font-medium text-[#4a5568] uppercase tracking-wider mb-3">All packages</h3>
             )}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {displayed.map((item) => {
@@ -698,11 +698,9 @@ export default function Overview() {
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">
             {needsAttention && <Badge variant={job.state === "failed" ? "red" : "amber"}>{job.state === "failed" ? "Failed" : "Awaiting your answer"}</Badge>}
-            {/* Marketplace install dialog disabled for production launch (no funds yet) - see TODO.md
             <Button variant="primary" size="sm" className="gap-1.5" onClick={() => setShowInstallDialog(true)}>
               <Sparkles size={14} /> Create &amp; Deploy a Canister
             </Button>
-            */}
           </div>
         </div>
       </div>

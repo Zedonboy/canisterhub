@@ -16,7 +16,7 @@ function text(value) {
 
 function usage() {
   console.log(`Usage:
-  npm run seed-packages -- --file ./production-packages.v1.0.0.json [options]
+  npm run seed-packages -- --file ./production-packages.v1.1.0.json [options]
 
 Options:
   -f, --file <path>          Package JSON file (required)
@@ -51,22 +51,23 @@ function packagesFrom(raw) {
   if (!Array.isArray(raw) || raw.length === 0) throw new Error("package file must be a non-empty JSON array");
   return raw.map((pkg, index) => {
     const label = `packages[${index}]`;
-    for (const field of ["description", "package_name", "version", "sha"]) {
+    for (const field of ["description", "package_name", "download_url", "version", "sha"]) {
       if (typeof pkg[field] !== "string" || pkg[field].trim() === "") {
         throw new Error(`${label}.${field} must be a non-empty string`);
       }
     }
-    if (!pkg.package_name.startsWith("https://")) throw new Error(`${label}.package_name must use HTTPS`);
-    const artifactName = new URL(pkg.package_name).pathname.split("/").filter(Boolean).at(-1);
+    const artifactName = new URL(pkg.download_url).pathname.split("/").filter(Boolean).at(-1);
     if (!artifactName?.endsWith(".wasm")) {
-      throw new Error(`${label}.package_name must be a GitHub release URL ending with a .wasm filename`);
+      throw new Error(`${label}.download_url must end with a .wasm filename`);
+    }
+    if (`${pkg.package_name}.wasm` !== artifactName) {
+      throw new Error(`${label}.package_name must match the download_url filename without its .wasm extension`);
     }
     if (!/^[0-9a-f]{64}$/.test(pkg.sha)) throw new Error(`${label}.sha must be lowercase SHA-256 hex`);
-    const releasePath = new URL(pkg.package_name).pathname;
-    if (new URL(pkg.package_name).hostname !== "github.com" || !releasePath.includes("/releases/download/")) {
-      throw new Error(`${label}.package_name must point to a GitHub release asset`);
+    if (new URL(pkg.download_url).protocol !== "https:") {
+      throw new Error(`${label}.download_url must use HTTPS`);
     }
-    return { ...pkg, url: pkg.package_name };
+    return { ...pkg, url: pkg.download_url };
   });
 }
 

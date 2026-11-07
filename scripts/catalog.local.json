@@ -1,0 +1,114 @@
+{
+  "templates": [
+    {
+      "title": "Food Order Service",
+      "description": "A restaurant ordering stack with accounts, relational persistence, API, analytics, and storefront.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/food-order-service.canister_hub.toml",
+      "release_tag": "1.1.0",
+      "package_slug": "food-order-service",
+      "manifest_file": "../Templates/food-order-service/canister_hub.toml"
+    },
+    {
+      "title": "Laundry Order Service",
+      "description": "Customer accounts, relational order storage, operations API, and a deployable laundry storefront.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/laundry-order-service.canister_hub.toml",
+      "release_tag": "1.1.0",
+      "package_slug": "laundry-order-service",
+      "manifest_file": "../Templates/laundry-order-service/canister_hub.toml"
+    },
+    {
+      "title": "Spreadsheet Service",
+      "description": "A persistent spreadsheet architecture with SilVer UI, identity, and relational storage.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/spreadsheet-service.canister_hub.toml",
+      "release_tag": "1.1.0",
+      "package_slug": "spreadsheet-service",
+      "manifest_file": "../Templates/spreadsheet-service/canister_hub.toml"
+    }
+  ],
+  "packages": [
+    {
+      "package_name": "agent",
+      "description": "Give your business an always-available assistant that helps you respond to customers, stay on top of conversations, and handle everyday work faster—while keeping you in control.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/agent.wasm",
+      "release_tag": "1.1.0",
+      "package_slug": "agent",
+      "wasm_file": ".release-cache/agent.wasm"
+    },
+    {
+      "package_name": "order_inventory",
+      "description": "Run your shop with less stress. Keep products organized, track stock, receive customer orders, and manage your online storefront from one simple place.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/order_inventory.wasm",
+      "release_tag": "1.1.0",
+      "package_slug": "order-inventory",
+      "wasm_file": ".release-cache/order_inventory.wasm"
+    },
+    {
+      "package_name": "assetstorage",
+      "description": "Keep your business images, documents, and other important files together in a dependable home, ready to use across your website and business tools.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/assetstorage.wasm",
+      "release_tag": "1.1.0",
+      "package_slug": "assetstorage",
+      "wasm_file": ".release-cache/assetstorage.wasm"
+    },
+    {
+      "package_name": "auth",
+      "description": "Manage user authentication, identity, and secure access for your Internet Computer applications.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/auth.wasm",
+      "release_tag": "1.1.0",
+      "package_slug": "auth",
+      "wasm_file": ".release-cache/auth.wasm"
+    },
+    {
+      "package_name": "ic-kv",
+      "description": "Store and retrieve structured key-value data on the Internet Computer.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/ic-kv.wasm",
+      "release_tag": "1.1.0",
+      "package_slug": "ic-kv",
+      "wasm_file": ".release-cache/ic-kv.wasm"
+    },
+    {
+      "package_name": "ic-sql",
+      "description": "Use a SQL database canister to manage relational data for your Internet Computer application.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/ic-sql.wasm",
+      "release_tag": "1.1.0",
+      "package_slug": "ic-sql",
+      "wasm_file": ".release-cache/ic-sql.wasm"
+    },
+    {
+      "package_name": "kora-payment",
+      "description": "Accept customer payments through Kora checkout and track payment results in your project.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/kora-payment.wasm",
+      "release_tag": "1.1.0",
+      "package_slug": "kora-payment",
+      "wasm_file": ".release-cache/kora-payment.wasm"
+    },
+    {
+      "package_name": "paystack-payment",
+      "description": "Accept customer payments through Paystack and track payment results in your project.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/paystack-payment.wasm",
+      "release_tag": "1.1.0",
+      "package_slug": "paystack-payment",
+      "wasm_file": ".release-cache/paystack-payment.wasm"
+    },
+    {
+      "package_name": "restaurant",
+      "description": "Manage a restaurant menu, portion-based orders, kitchen fulfillment, and payment collection.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/restaurant.wasm",
+      "release_tag": "1.1.0",
+      "package_slug": "restaurant",
+      "wasm_file": ".release-cache/restaurant.wasm"
+    }
+  ]
+}

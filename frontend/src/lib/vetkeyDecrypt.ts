@@ -16,7 +16,7 @@
 //   the exact `input` a real buyer's own `EncryptedVetKey.decryptAndVerify`
 //   call below must pass, since this `KeyManager` design backs both the
 //   symmetric derivation and the IBE identity with the same vetkd input.
-// - The Wasm artifact resolved from the item's `canister_hub.toml` is
+// - A paid listing's direct `.wasm` release asset contains
 //   `[12-byte random nonce][AES-256-GCM ciphertext+tag]` of the plaintext
 //   wasm, encrypted with a random AES-256 key (the one `encrypted_key`
 //   protects) - a plain WebCrypto `AES-GCM` layout, not anything vetKD-
@@ -24,7 +24,6 @@
 
 import { TransportSecretKey, DerivedPublicKey, EncryptedVetKey, IbeCiphertext } from "@icp-sdk/vetkeys";
 import type { Principal } from "@icp-sdk/core/principal";
-import { parse } from "smol-toml";
 import { backendCanisterId, getMarketplaceActor } from "./actors";
 import { MarketplaceItemType, type MarketplaceItem } from "../bindings/backend";
 
@@ -33,9 +32,8 @@ import { MarketplaceItemType, type MarketplaceItem } from "../bindings/backend";
  * `keyIdToVetkdInput`, which this must match for a derived vetkey to
  * actually decrypt/verify against what the publisher encrypted. */
 /** Confirms the just-downloaded release artifact is byte-for-byte what the
- * verified publisher recorded on-chain at publish time. The manifest at
- * `item.download_url` and the GitHub Release asset its `wasm_url` points at
- * are both off-chain and publisher-mutable *after* publishing (a release
+ * verified publisher recorded on-chain at publish time. The executable at
+ * `item.download_url` is off-chain and publisher-mutable *after* publishing (a release
  * asset can be swapped without changing its URL) - `item.wasm_hash` is the
  * one part of this install path that can't be, so every install must check
  * the downloaded bytes against it before ever being installed. */
@@ -94,16 +92,11 @@ async function decryptItemAesKey(item: MarketplaceItem): Promise<Uint8Array> {
  * artifact itself is already the plaintext wasm, no crypto involved at all. */
 export async function fetchMarketplaceWasm(item: MarketplaceItem): Promise<Uint8Array> {
   if (item.item_type !== MarketplaceItemType.Package) throw new Error("templates cannot be installed as a single Wasm package");
-  const manifestResponse = await fetch(item.download_url);
-  if (!manifestResponse.ok) {
-    throw new Error(`failed to download canister_hub.toml: ${manifestResponse.status} ${manifestResponse.statusText}`);
+  const wasmUrl = new URL(item.download_url);
+  if (wasmUrl.protocol !== "https:" || !wasmUrl.pathname.toLowerCase().endsWith(".wasm")) {
+    throw new Error("This package's download_url must point directly to a .wasm executable. Update the marketplace listing from its package seed file.");
   }
-  const manifest = parse(await manifestResponse.text()) as { package?: { wasm_url?: unknown } };
-  const wasmUrl = manifest.package?.wasm_url;
-  if (typeof wasmUrl !== "string" || !/^https?:\/\//.test(wasmUrl)) {
-    throw new Error("package canister_hub.toml must contain an absolute package.wasm_url");
-  }
-  const response = await fetch(wasmUrl);
+  const response = await fetch(wasmUrl, { redirect: "follow", cache: "no-store" });
   if (!response.ok) throw new Error(`failed to download release artifact: ${response.status} ${response.statusText}`);
   const bytes = new Uint8Array(await response.arrayBuffer());
   await verifyWasmHash(bytes, item.wasm_hash);

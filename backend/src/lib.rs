@@ -203,9 +203,10 @@ pub struct MarketplaceItem {
     /// or the packages/configuration that make up a template.
     #[serde(alias = "release_download_url")]
     pub download_url: String,
-    /// SHA-256 of the exact bytes an installer fetches from the manifest's
-    /// `wasm_url` — the AES-GCM-encrypted artifact for a paid item, the raw
-    /// Wasm itself for a free one. Supplied by the verified publisher at
+    /// SHA-256 of the exact bytes an installer fetches — the executable at
+    /// `download_url` for a direct package release, or the manifest's
+    /// `wasm_url` for older/paid releases. This is the AES-GCM-encrypted
+    /// artifact for a paid item and raw Wasm for a free one. Supplied by the verified publisher at
     /// publish time; this canister never downloads or recomputes it. This is
     /// what anchors install-time integrity to something immutable once
     /// published, since `download_url`'s manifest and the GitHub Release
@@ -822,12 +823,13 @@ fn validate_package_slug(package_slug: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_manifest_download_url(
+fn validate_marketplace_download_url(
     download_url: &str,
     owner: &str,
     repo: &str,
     release_tag: &str,
     package_slug: &str,
+    allow_wasm_asset: bool,
 ) -> Result<(), String> {
     ensure_text_size("download_url", download_url, MAX_URL_BYTES)?;
     let expected_prefix =
@@ -842,9 +844,14 @@ fn validate_manifest_download_url(
         return Err("download_url must end with one GitHub Release asset file name".to_string());
     }
     let package_manifest = format!("{package_slug}.canister_hub.toml");
-    if file_name != "canister_hub.toml" && file_name != package_manifest {
+    let is_manifest = file_name == "canister_hub.toml" || file_name == package_manifest;
+    let is_wasm = allow_wasm_asset && file_name.ends_with(".wasm")
+        && file_name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.'));
+    if !is_manifest && !is_wasm {
         return Err(format!(
-            "download_url must point to canister_hub.toml or {package_slug}.canister_hub.toml"
+            "download_url must point to a release Wasm asset or package manifest"
         ));
     }
     Ok(())
@@ -1083,12 +1090,13 @@ fn add_marketplace_template(info: MarketplaceTemplateInput) -> Result<u64, Strin
     }
 
     let (owner, repo) = parse_github_owner_repo(&info.git_repo_url)?;
-    validate_manifest_download_url(
+    validate_marketplace_download_url(
         &info.download_url,
         &owner,
         &repo,
         &info.release_tag,
         &info.package_slug,
+        false,
     )?;
 
     Ok(upsert_marketplace_item(
@@ -1206,7 +1214,14 @@ fn publish_marketplace_item(
 
     let (owner, repo) = parse_github_owner_repo(&git_repo_url)?;
     let repo_key = format!("{owner}/{repo}");
-    validate_manifest_download_url(&download_url, &owner, &repo, &release_tag, &package_slug)?;
+    validate_marketplace_download_url(
+        &download_url,
+        &owner,
+        &repo,
+        &release_tag,
+        &package_slug,
+        item_type == MarketplaceItemType::Package,
+    )?;
 
     let registered_owner = REPO_OWNERS.with(|m| m.borrow().get(&repo_key));
     if registered_owner != Some(caller) {
@@ -1259,16 +1274,21 @@ fn list_marketplace_items() -> Vec<MarketplaceItem> {
 /// stable memory (no destructive migration) while excluding them from every
 /// read/install/payment path until their publisher republishes them.
 fn is_current_marketplace_item(item: &MarketplaceItem) -> bool {
+    let manifest_name = format!("{}.canister_hub.toml", item.package_slug);
+    let is_current_asset = item
+        .download_url
+        .rsplit_once('/')
+        .is_some_and(|(_, file_name)| {
+            let is_manifest = file_name.eq_ignore_ascii_case("canister_hub.toml")
+                || file_name.eq_ignore_ascii_case(&manifest_name);
+            let is_package_wasm = item.item_type == MarketplaceItemType::Package
+                && file_name.to_ascii_lowercase().ends_with(".wasm");
+            is_manifest || is_package_wasm
+        });
+
     validate_package_slug(&item.package_slug).is_ok()
         && item.wasm_hash.len() == WASM_HASH_BYTES
-        && item
-            .download_url
-            .rsplit_once('/')
-            .is_some_and(|(_, file_name)| {
-                file_name.eq_ignore_ascii_case("canister_hub.toml")
-                    || file_name
-                        .eq_ignore_ascii_case(&format!("{}.canister_hub.toml", item.package_slug))
-            })
+        && is_current_asset
 }
 
 /// Bumps an item's download counter by one - a bare popularity signal, not

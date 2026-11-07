@@ -13,13 +13,33 @@ npm run generate
 
 ## Production package releases
 
+The `Release installable packages` GitHub Action also uploads each built `.wasm`
+to Cloudflare R2 and attaches `package-seed.json` to the GitHub Release. The seed
+file contains the R2 `download_url` and SHA-256 for every package, so it can be
+passed to `seed_package_infos.js` or used to refresh the marketplace catalog.
+
+Configure these repository settings before running the workflow:
+
+| GitHub setting | Key | Value |
+| --- | --- | --- |
+| Variable | `R2_S3_BUCKET_URL` | S3 endpoint and bucket, e.g. `https://<ACCOUNT_ID>.r2.cloudflarestorage.com/canisterhub-packages` |
+| Variable | `R2_PUBLIC_BASE_URL` | Public bucket URL or custom domain, without a trailing slash |
+| Secret | `R2_ACCESS_KEY_ID` | R2 S3 Access Key ID, scoped to this bucket |
+| Secret | `R2_SECRET_ACCESS_KEY` | Matching R2 S3 Secret Access Key |
+
+The workflow derives the S3 endpoint and bucket name from `R2_S3_BUCKET_URL` and
+stores objects under `<tag>/<package>.wasm`. `R2_PUBLIC_BASE_URL`
+must resolve publicly to the same bucket and allow browser `GET`/`HEAD` requests
+from the app's origins through the bucket's CORS policy. Do not use the S3 API
+endpoint as the public base URL.
+
 `seed_package_infos.js` uploads the current package release registry used to
 detect upgrades on installed project canisters. Validate the checked-in
 v1.0.0 release data without changing canister state:
 
 ```bash
 cd scripts
-npm run seed-packages -- --file ./production-packages.v1.0.0.json --dry-run
+npm run seed-packages -- --file ./production-packages.v1.1.0.json --dry-run
 ```
 
 Seed a local backend (the default environment) - run after `icp deploy
@@ -27,23 +47,25 @@ backend` so a fresh local network carries the same production registry the
 dashboard's upgrade detection expects:
 
 ```bash
-npm run seed-packages -- --file ./production-packages.v1.0.0.json
+npm run seed-packages -- --file ./production-packages.v1.1.0.json
 ```
 
 Seed the production backend with a controller identity:
 
 ```bash
 npm run seed-packages -- \
-  --file ./production-packages.v1.0.0.json \
+  --file ./production-packages.v1.1.0.json \
   --environment ic \
   --identity deploy
 ```
 
-Each seed row's `package_name` is the HTTPS GitHub Release URL for its `.wasm`
-artifact. The script maps that field to the backend's `url` field. The backend
-automatically sets each package name from the final `.wasm` filename, such as
-`agent.wasm`; seed files do not include a separate `name`. Modules use that stable artifact name as their dynamic configuration
-dependency ID. The seed file also does not choose the backend's
+Each seed row's `package_name` is the release artifact name without its
+extension (for example, `agent`), and `download_url` is a direct HTTPS `.wasm`
+URL (the generated release seed uses the configured R2 public base URL). The
+script checks that the name matches the URL filename and maps `download_url` to
+the backend's `url` field. The backend keeps the
+artifact filename, such as `agent.wasm`, as the dynamic configuration
+dependency ID. The seed file does not choose the backend's
 internal package ID: on first upload the backend assigns
 `<hyphenated-name>-<raw_rand hex>` and retains it for later releases of the
 same artifact. The backend also retains the
@@ -91,6 +113,10 @@ first canister update. Templates use `add_marketplace_template`; packages are
 registered to the same controller principal and then use
 `publish_marketplace_item`. Repository/slug pairs are upserts, so rerunning a
 catalog updates listings rather than duplicating them.
+
+Package rows use `package_name` as their extension-free marketplace title and
+`download_url` as the direct `.wasm` release asset URL. The installer downloads
+that executable directly; templates continue to use manifest URLs.
 
 This bulk path intentionally supports only free packages. Continue using
 `publish_to_marketplace.js` (or the versioned GitHub Action below) for paid

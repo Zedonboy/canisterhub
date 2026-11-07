@@ -13,11 +13,11 @@
   ],
   "packages": [
     {
-      "title": "Private AI Agent",
+      "package_name": "Private AI Agent",
       "description": "An SME-owned administrative AI agent with local conversation storage.",
       "web_url": "https://example.com/packages/agent",
       "git_repo_url": "https://github.com/owner/repository",
-      "download_url": "https://github.com/owner/repository/releases/download/v1/agent.canister_hub.toml",
+      "download_url": "https://github.com/owner/repository/releases/download/v1/agent.wasm",
       "release_tag": "v1",
       "package_slug": "agent",
       "wasm_file": "../packages/bin/agent.wasm"

@@ -43,7 +43,7 @@ export function CommandPalette({ projectId }: CommandPaletteProps) {
     { id: "wallet",    label: "Wallet & Billing", description: "Token balances & cycles",  icon: <CreditCard size={14} />,     action: () => navigate(`/project/${pid}/wallet`),       category: "Navigate" },
     // Disabled for production launch (no funds for AI/marketplace yet)
     // { id: "orchestrate", label: "Secretary",      description: "Command your infra with AI", icon: <Sparkles size={14} />,     action: () => navigate(`/project/${pid}/orchestrate`),  category: "Navigate" },
-    // { id: "marketplace", label: "Marketplace",    description: "Browse canister products", icon: <Store size={14} />,          action: () => navigate("/marketplace"),                 category: "Navigate" },
+    { id: "marketplace", label: "Marketplace",    description: "Browse canister products", icon: <Store size={14} />,          action: () => navigate("/marketplace"),                 category: "Navigate" },
   ], [pid, navigate]);
 
   const filtered = useMemo(() => {

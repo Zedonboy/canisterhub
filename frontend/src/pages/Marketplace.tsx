@@ -14,6 +14,7 @@ import { listTemplates, type TemplateSummary } from "@/lib/templates";
 export default function Marketplace() {
   const navigate = useNavigate();
   const [activeTag, setActiveTag] = useState("All");
+  const [searchQuery, setSearchQuery] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
   const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   useEffect(() => {
@@ -24,8 +25,12 @@ export default function Marketplace() {
   }, []);
 
   const tags = useMemo(() => ["All", ...Array.from(new Set(products.map((p) => p.tag)))], [products]);
-  const popular = products.filter((p) => p.popular);
-  const filtered = activeTag === "All" ? products : products.filter((p) => p.tag === activeTag);
+  const popular = searchQuery.trim() ? [] : products.filter((p) => p.popular);
+  const query = searchQuery.trim().toLowerCase();
+  const filtered = products.filter((product) =>
+    (activeTag === "All" || product.tag === activeTag)
+    && (!query || [product.name, product.tagline, product.description].some((value) => value.toLowerCase().includes(query))),
+  );
 
   return (
     <div className="min-h-screen bg-[#0a0e1a] flex flex-col">
@@ -41,7 +46,7 @@ export default function Marketplace() {
           <p className="text-sm text-[#4a5568] mb-8">
             Browse pre-built canister products and install them into any project in seconds
           </p>
-          <ProductSearch />
+          <ProductSearch showResults={false} onQueryChange={setSearchQuery} />
           <button
             onClick={() => navigate("/market/publisher")}
             className="flex items-center gap-1.5 text-xs text-[#4a5568] hover:text-[#00d4ff] transition-colors mt-4"
@@ -88,7 +93,7 @@ export default function Marketplace() {
         )}
 
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-semibold text-[#e2e8f0]">All Products</h2>
+          <h2 className="text-base font-semibold text-[#e2e8f0]">{query ? `Results for “${searchQuery.trim()}”` : "All Products"}</h2>
         </div>
 
         <div className="flex flex-wrap gap-1.5 mb-5">
@@ -149,6 +154,9 @@ export default function Marketplace() {
             </div>
           ))}
         </div>
+        {query && filtered.length === 0 && (
+          <p className="py-12 text-center text-sm text-[#4a5568]">No packages match “{searchQuery.trim()}”.</p>
+        )}
       </main>
 
       <Footer />

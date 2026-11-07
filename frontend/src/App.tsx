@@ -6,8 +6,7 @@ import { RequireAuth } from "@/components/RequireAuth";
 const Login = lazy(() => import("@/pages/Login"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Account = lazy(() => import("@/pages/Account"));
-// Disabled for production launch (no funds for AI/marketplace yet).
-// const Marketplace = lazy(() => import("@/pages/Marketplace"));
+const Marketplace = lazy(() => import("@/pages/Marketplace"));
 const Overview = lazy(() => import("@/pages/Overview"));
 const Auth = lazy(() => import("@/pages/Auth"));
 const AuthDetail = lazy(() => import("@/pages/AuthDetail"));
@@ -23,7 +22,7 @@ const CanisterViewData = lazy(() => import("@/pages/CanisterViewData"));
 const SettingsPage = lazy(() => import("@/pages/Settings"));
 const WalletPage = lazy(() => import("@/pages/Wallet"));
 const ProductInstall = lazy(() => import("@/pages/ProductInstall"));
-// const MarketplaceItemDetail = lazy(() => import("@/pages/MarketplaceItemDetail"));
+const MarketplaceItemDetail = lazy(() => import("@/pages/MarketplaceItemDetail"));
 const PublisherSetup = lazy(() => import("@/pages/PublisherSetup"));
 // const Orchestrate = lazy(() => import("@/pages/Orchestrate"));
 const Runtime = lazy(() => import("@/pages/Runtime"));
@@ -44,15 +43,13 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
           <Route path="/account" element={<RequireAuth><Account /></RequireAuth>} />
-          {/* Disabled for production launch (no funds for AI/marketplace yet).
           <Route path="/marketplace" element={<RequireAuth><Marketplace /></RequireAuth>} />
           <Route path="/market/product/:product_id" element={<RequireAuth><ProductInstall /></RequireAuth>} />
           <Route path="/market/publisher" element={<RequireAuth><PublisherSetup /></RequireAuth>} />
-          */}
           <Route path="/templates/:slug" element={<RequireAuth><TemplateInstall /></RequireAuth>} />
           <Route path="/project/:id" element={<RequireAuth><AppShell /></RequireAuth>}>
             <Route path="overview" element={<Overview />} />
-            {/* <Route path="overview/product/:product_id" element={<MarketplaceItemDetail />} /> */}
+            <Route path="overview/product/:product_id" element={<MarketplaceItemDetail />} />
             <Route path="auth" element={<Auth />} />
             <Route path="auth/:canisterId" element={<AuthDetail />} />
             <Route path="storage" element={<Storage />} />

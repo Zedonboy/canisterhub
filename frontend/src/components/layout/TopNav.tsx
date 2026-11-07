@@ -51,7 +51,6 @@ export function TopNav({ active }: { active: "projects" | "marketplace" }) {
           >
             Projects
           </button>
-          {/* Marketplace disabled for production launch (no funds yet)
           <button
             onClick={() => navigate("/marketplace")}
             className={active === "marketplace"
@@ -60,7 +59,6 @@ export function TopNav({ active }: { active: "projects" | "marketplace" }) {
           >
             Marketplace
           </button>
-          */}
         </div>
       </div>
 
@@ -138,7 +136,6 @@ export function TopNav({ active }: { active: "projects" | "marketplace" }) {
       >
         Projects
       </button>
-      {/* Marketplace disabled for production launch (no funds yet)
       <button
         onClick={() => navigate("/marketplace")}
         className={active === "marketplace"
@@ -147,7 +144,6 @@ export function TopNav({ active }: { active: "projects" | "marketplace" }) {
       >
         Marketplace
       </button>
-      */}
     </div>
     </>
   );

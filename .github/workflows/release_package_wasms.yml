@@ -1,7 +1,7 @@
 name: Release installable packages
 
-# Builds all installable Rust packages, then publishes each package's Wasm and
-# Candid interface to a GitHub Release.
+# Builds all installable Rust packages, uploads the Wasm files to Cloudflare R2,
+# then publishes the artifacts and an R2-backed package seed file to GitHub.
 # `packages/build.sh` builds the UIs before Rust so that:
 #   - agent.wasm contains chat-ui
 #   - order_inventory.wasm contains inventory-browser and storefront
@@ -25,6 +25,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: auto
+  R2_S3_BUCKET_URL: ${{ vars.R2_S3_BUCKET_URL }}
+  R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+  RELEASE_TAG: ${{ inputs.tag_name || github.ref_name }}
 
 jobs:
   release-packages:
@@ -93,6 +99,44 @@ jobs:
             restaurant.did \
             > SHA256SUMS
 
+      - name: Validate R2 configuration
+        run: |
+          test -n "$AWS_ACCESS_KEY_ID" || { echo "Missing Actions secret R2_ACCESS_KEY_ID"; exit 1; }
+          test -n "$AWS_SECRET_ACCESS_KEY" || { echo "Missing Actions secret R2_SECRET_ACCESS_KEY"; exit 1; }
+          test -n "$R2_S3_BUCKET_URL" || { echo "Missing Actions variable R2_S3_BUCKET_URL"; exit 1; }
+          test -n "$R2_PUBLIC_BASE_URL" || { echo "Missing Actions variable R2_PUBLIC_BASE_URL"; exit 1; }
+          case "$R2_PUBLIC_BASE_URL" in https://*) ;; *) echo "R2_PUBLIC_BASE_URL must use https://"; exit 1 ;; esac
+          node --input-type=module -e '
+            const bucketUrl = new URL(process.env.R2_S3_BUCKET_URL);
+            const bucket = bucketUrl.pathname.split("/").filter(Boolean);
+            if (bucketUrl.protocol !== "https:" || bucket.length !== 1 || bucketUrl.search || bucketUrl.hash) {
+              throw new Error("R2_S3_BUCKET_URL must look like https://<account-id>.r2.cloudflarestorage.com/<bucket-name>");
+            }
+          '
+
+      - name: Upload Wasm packages to Cloudflare R2
+        run: |
+          set -euo pipefail
+          R2_ENDPOINT="$(node --input-type=module -e 'process.stdout.write(new URL(process.env.R2_S3_BUCKET_URL).origin)')"
+          R2_BUCKET_NAME="$(node --input-type=module -e 'process.stdout.write(new URL(process.env.R2_S3_BUCKET_URL).pathname.split("/").filter(Boolean)[0])')"
+          for package in \
+            agent assetstorage auth ic-kv ic-sql kora-payment \
+            order_inventory paystack-payment restaurant; do
+            aws s3 cp "packages/bin/${package}.wasm" \
+              "s3://${R2_BUCKET_NAME}/${RELEASE_TAG}/${package}.wasm" \
+              --endpoint-url "$R2_ENDPOINT" \
+              --content-type application/wasm \
+              --cache-control "public, max-age=31536000, immutable"
+          done
+
+      - name: Generate R2 package seed file
+        run: |
+          node scripts/create_r2_package_seed.js \
+            --version "$RELEASE_TAG" \
+            --base-url "$R2_PUBLIC_BASE_URL" \
+            --wasm-dir packages/bin \
+            --output package-seed.json
+
       - name: Publish module release
         uses: softprops/action-gh-release@v2
         with:
@@ -117,4 +161,5 @@ jobs:
             packages/bin/restaurant.wasm
             packages/bin/restaurant.did
             packages/bin/SHA256SUMS
+            package-seed.json
           fail_on_unmatched_files: true

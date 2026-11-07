@@ -78,33 +78,8 @@ export default function Dashboard() {
       <main className="flex-1 px-4 sm:px-6 py-6 max-w-7xl mx-auto w-full">
         <div className="py-12 flex flex-col items-center text-center animate-fade-in">
           <h1 className="text-3xl font-bold text-[#e2e8f0] mb-2">What will you build today?</h1>
-          {/* AI prompt box + marketplace link disabled for production launch (no funds yet)
-          <p className="text-sm text-[#4a5568] mb-8">
-            Describe what you want, and Secretary will set up a new project for it
-          </p>
-          <div className="w-full max-w-2xl rounded-2xl border border-[#1e2d47] bg-[#0d1526] shadow-[0_0_50px_-18px_#00d4ff33] overflow-hidden text-left">
-            <textarea
-              rows={2}
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submitPrompt();
-                }
-              }}
-              disabled={creatingFromPrompt}
-              placeholder='e.g. "Build a flight booking app with Stripe payments and an admin dashboard"'
-              className="w-full min-h-[64px] bg-transparent text-sm text-[#e2e8f0] placeholder-[#4a5568] outline-none resize-none px-5 pt-4 disabled:opacity-60"
-            />
-            <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-[#1e2d47]">
-              <span className="text-[11px] text-[#4a5568]">Enter to start · Shift+Enter for newline</span>
-              <Button variant="primary" size="sm" className="gap-1.5 flex-shrink-0" onClick={submitPrompt} disabled={creatingFromPrompt || !prompt.trim()}>
-                {creatingFromPrompt ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                {creatingFromPrompt ? "Creating…" : "Start building"}
-              </Button>
-            </div>
-          </div>
+          {/* AI prompt box disabled for production launch (no funds yet) -
+              the marketplace itself is back, so keep the browse link. */}
           <button
             onClick={() => navigate("/marketplace")}
             className="flex items-center gap-1.5 text-xs text-[#4a5568] hover:text-[#00d4ff] transition-colors mt-4"
@@ -112,7 +87,6 @@ export default function Dashboard() {
             <ShoppingBag size={12} />
             Browse the full Marketplace
           </button>
-          */}
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
