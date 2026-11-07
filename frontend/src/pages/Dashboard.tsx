@@ -153,16 +153,6 @@ export default function Dashboard() {
                       <StatusDot status={jobStatus(job)} />
                     </div>
 
-                    <div className="flex flex-wrap gap-1">
-                      {canisters.length > 0 ? (
-                        canisters.map(([canisterName]) => <Badge key={canisterName}>{canisterName}</Badge>)
-                      ) : (
-                        <span className="text-[10px] text-[#4a5568]">
-                          {job.state === "running" || job.state === "awaiting_answer" ? "still building…" : "no canisters yet"}
-                        </span>
-                      )}
-                    </div>
-
                     <div className="flex items-center justify-between text-[10px] text-[#4a5568]">
                       <span>{canisters.length} canister{canisters.length === 1 ? "" : "s"}</span>
                       <span>Updated {relativeTime(job.updated_at)}</span>

@@ -22,8 +22,10 @@ import {
   type CyclesLedgerWithdrawError,
   type CyclesLedgerService,
 } from "./candid/cyclesLedger";
-import { addProjectCanisters } from "./backend";
+import { addProjectCanisters, getProject } from "./backend";
 import type { Project, CanisterInfo, CanisterKind } from "./backend";
+import { encodeProjectContext } from "./candid/agentInit";
+import { projectPackageCanistersByName } from "./packageRegistry";
 import { runtimeValue } from "./canisterEnv";
 import { getCanisterMetadata } from "./canisterMetadata";
 import type { CanisterMetadata } from "./candid/canisterMetadata";
@@ -156,6 +158,7 @@ async function createCanisterWithCyclesLedger(
         memory_allocation: [],
         freezing_threshold: [],
         reserved_cycles_limit: [],
+        log_visibility: [{ controllers: null }],
       }],
       subnet_selection: [],
     }],
@@ -183,13 +186,14 @@ async function installWasm(
   canisterId: Principal,
   wasmModule: Uint8Array,
   mode: InstallMode,
+  initArg: Uint8Array,
 ): Promise<void> {
   if (wasmModule.byteLength <= DIRECT_INSTALL_LIMIT) {
     await actor.install_code({
       mode,
       canister_id: canisterId,
       wasm_module: wasmModule,
-      arg: EMPTY_CANDID_ARGS,
+      arg: initArg,
       sender_canister_version: [],
     });
     return;
@@ -212,12 +216,23 @@ async function installWasm(
       store_canister: [],
       chunk_hashes_list: chunkHashes,
       wasm_module_hash: wasmModuleHash,
-      arg: EMPTY_CANDID_ARGS,
+      arg: initArg,
       sender_canister_version: [],
     });
   } finally {
     await actor.clear_chunk_store({ canister_id: canisterId }).catch(() => undefined);
   }
+}
+
+/** The universal `ProjectContext` install argument used by marketplace,
+ * template, and arbitrary Runtime deployments. */
+async function projectInitArg(projectId: string): Promise<Uint8Array> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error(`Project ${projectId} was not found`);
+  return encodeProjectContext({
+    projectId,
+    packageCanisters: await projectPackageCanistersByName(project),
+  });
 }
 
 /** `None` if unset - mirrors `deploy.ts::orchestratorPrincipal`. */
@@ -251,12 +266,15 @@ function slugify(s: string): string {
  * comment) so `Runtime.tsx` can skip its post-deploy redirect to the
  * Settings page for a module that wouldn't have anything to show there. */
 export async function deployWasmRuntime(label: string, wasmModule: Uint8Array, network: string, projectId: string, userPrincipal: Principal): Promise<DeployedRuntimeCanister> {
+  // Build the init args before creating anything, so a missing project
+  // fails before cycles are spent on the new canister.
+  const initArg = await projectInitArg(projectId);
   const orchestrator = orchestratorPrincipal();
   const controllers = orchestrator ? [userPrincipal, orchestrator] : [userPrincipal];
   const canisterId = await createCanisterWithCyclesLedger(network, controllers);
   const actor = await managementActor(network, canisterId);
 
-  await installWasm(actor, canisterId, wasmModule, { install: null });
+  await installWasm(actor, canisterId, wasmModule, { install: null }, initArg);
 
   const canisterIdText = canisterId.toText();
   const [kind, hasConfig] = await Promise.all([
@@ -265,7 +283,7 @@ export async function deployWasmRuntime(label: string, wasmModule: Uint8Array, n
   ]);
 
   const name = `${RUNTIME_PREFIX}${slugify(label)}-${canisterIdText.slice(0, 5)}`;
-  await addProjectCanisters(projectId, [[name, { id: canisterIdText, kind }]]);
+  await addProjectCanisters(projectId, [[name, { id: canisterIdText, kind, packageName: null }]]);
 
   return { name, id: canisterIdText, kind, hasConfig };
 }
@@ -315,7 +333,7 @@ export async function attachRuntimeCanister(canisterIdText: string, label: strin
   ]);
 
   const name = `${RUNTIME_PREFIX}${slugify(label || normalizedId.slice(0, 5))}-${normalizedId.slice(0, 5)}`;
-  await addProjectCanisters(project.id, [[name, { id: normalizedId, kind }]]);
+  await addProjectCanisters(project.id, [[name, { id: normalizedId, kind, packageName: null }]]);
 
   return { name, id: normalizedId, kind, hasConfig };
 }
@@ -332,8 +350,12 @@ export type UpdateMode = "upgrade" | "reinstall";
  * code. Nothing to update on `backend` itself either way: the canister's
  * id and project entry are unchanged, only its code (and, for `reinstall`,
  * its stable memory) is. */
-export async function upgradeWasmRuntime(canisterId: string, wasmModule: Uint8Array, network: string, mode: UpdateMode = "upgrade"): Promise<void> {
+export async function upgradeWasmRuntime(canisterId: string, wasmModule: Uint8Array, network: string, mode: UpdateMode, projectId: string): Promise<void> {
   const targetCanisterId = Principal.fromText(canisterId);
   const actor = await managementActor(network, targetCanisterId);
-  await installWasm(actor, targetCanisterId, wasmModule, mode === "reinstall" ? { reinstall: null } : { upgrade: [] });
+  // `reinstall` re-runs the module's `init`, so it gets the same
+  // `ProjectContext` argument a fresh deploy sends; `upgrade` calls the
+  // package's no-arg `post_upgrade`, which must receive `()`.
+  const initArg = mode === "reinstall" ? await projectInitArg(projectId) : EMPTY_CANDID_ARGS;
+  await installWasm(actor, targetCanisterId, wasmModule, mode === "reinstall" ? { reinstall: null } : { upgrade: [] }, initArg);
 }

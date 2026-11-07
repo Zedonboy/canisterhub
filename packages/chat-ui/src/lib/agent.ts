@@ -1,6 +1,7 @@
 import { HttpAgent, type Identity } from "@icp-sdk/core/agent";
 import { resolveIdentity } from "./auth";
 import { network } from "./canisterId";
+import { DELEGATION_REFRESH_EVENT } from "./parentDelegation";
 
 function icHost(): string {
   return network() === "ic" ? "https://icp0.io" : window.location.origin;
@@ -8,6 +9,9 @@ function icHost(): string {
 
 // One agent per principal, so signing in/out never reuses a stale agent.
 const agentCache = new Map<string, Promise<HttpAgent>>();
+if (typeof window !== "undefined") {
+  window.addEventListener(DELEGATION_REFRESH_EVENT, () => agentCache.clear());
+}
 
 async function buildAgent(identity: Identity): Promise<HttpAgent> {
   const agent = await HttpAgent.create({ host: icHost(), identity });

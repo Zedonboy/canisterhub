@@ -133,7 +133,8 @@ export function OrderDetail({ order, onClose, onChanged }: { order: Order; onClo
               {order.lines.map((l) => (
                 <tr key={l.inventoryId.toString()} className="border-b border-[#1e2d47] last:border-0">
                   <td className="px-3 py-2 text-[#e2e8f0]">
-                    {l.name} {l.kind === "Service" && <Badge variant="gray" className="ml-1">service</Badge>}
+                    <div>{l.name} {l.kind === "Service" && <Badge variant="gray" className="ml-1">service</Badge>}</div>
+                    {l.sku && <div className="font-mono text-[10px] text-[#4a5568]">{l.sku}</div>}
                   </td>
                   <td className="px-3 py-2 text-right font-mono">{l.quantity.toString()}</td>
                   <td className="px-3 py-2 text-right font-mono">{formatMoney(l.unitPriceMinor, order.currency)}</td>

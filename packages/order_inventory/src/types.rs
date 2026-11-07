@@ -15,7 +15,8 @@ pub enum AiChannel {
 
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AiContext {
-    pub agent: Principal,
+    pub project_id: String,
+    pub agent_canister_id: Principal,
     pub channel: AiChannel,
     pub session_id: String,
 }
@@ -50,6 +51,9 @@ pub struct InventoryItem {
     pub kind: InventoryKind,
     pub price_minor: u64,
     pub currency: String,
+    /// Payment terms selected by the vendor for this item.
+    #[serde(default)]
+    pub payment_method: PaymentMethod,
     /// Public http(s) URL of the item's picture, normally a file on a
     /// separate asset-storage canister. Items stored before this field
     /// existed decode as `None`.
@@ -70,6 +74,9 @@ pub struct CreateInventoryItem {
     pub kind: InventoryKind,
     pub price_minor: u64,
     pub currency: String,
+    /// Defaults to cash on delivery for older clients.
+    #[serde(default)]
+    pub payment_method: Option<PaymentMethod>,
     /// See `InventoryItem::image_url`.
     #[serde(default)]
     pub image_url: Option<String>,
@@ -84,6 +91,7 @@ pub struct UpdateInventoryItem {
     pub kind: Option<InventoryKind>,
     pub price_minor: Option<u64>,
     pub currency: Option<String>,
+    pub payment_method: Option<PaymentMethod>,
     /// Sets the item's image URL; an empty string removes it.
     pub image_url: Option<String>,
     pub stock_quantity: Option<u64>,
@@ -111,17 +119,22 @@ pub struct PlaceOrder {
     pub items: Vec<OrderItemRequest>,
     pub customer_name: Option<String>,
     pub customer_phone: Option<String>,
+    /// Required for prepaid orders and passed to the hosted payment provider.
+    #[serde(default)]
+    pub customer_email: Option<String>,
     pub delivery_location: DeliveryLocation,
     pub note: Option<String>,
-    /// Omitted by older clients and treated as cash on delivery.
-    #[serde(default)]
-    pub payment_method: Option<PaymentMethod>,
 }
 
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct OrderLine {
     pub inventory_id: u64,
     pub name: String,
+    /// SKU snapshotted at order placement, like `name`, so the modal and
+    /// receipts stay accurate if the item is later edited. Lines stored
+    /// before this field existed decode as `None`.
+    #[serde(default)]
+    pub sku: Option<String>,
     pub kind: InventoryKind,
     pub unit_price_minor: u64,
     pub quantity: u64,
@@ -166,8 +179,14 @@ pub enum PaymentStatus {
 pub struct Order {
     pub id: u64,
     pub customer: CustomerIdentity,
+    /// Agent that created this order, retained for the verified payment
+    /// receipt callback. Storefront orders have no originating agent.
+    #[serde(default)]
+    pub agent_canister_id: Option<Principal>,
     pub customer_name: Option<String>,
     pub customer_phone: Option<String>,
+    #[serde(default)]
+    pub customer_email: Option<String>,
     pub items: Vec<OrderLine>,
     pub total_minor: u64,
     pub currency: String,
@@ -183,6 +202,9 @@ pub struct Order {
     /// Immutable merchant reference supplied to the payment provider.
     #[serde(default)]
     pub payment_reference: Option<String>,
+    /// Hosted checkout URL supplied by the configured payment module.
+    #[serde(default)]
+    pub checkout_url: Option<String>,
     #[serde(default)]
     pub amount_paid_minor: u64,
     #[serde(default)]
@@ -310,6 +332,33 @@ pub enum OrderError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Serialize)]
+    struct LegacyOrderLine {
+        inventory_id: u64,
+        name: String,
+        kind: InventoryKind,
+        unit_price_minor: u64,
+        quantity: u64,
+        line_total_minor: u64,
+    }
+
+    #[test]
+    fn legacy_order_lines_decode_without_sku() {
+        let legacy = LegacyOrderLine {
+            inventory_id: 3,
+            name: "Jollof Rice".to_string(),
+            kind: InventoryKind::Product,
+            unit_price_minor: 4000,
+            quantity: 2,
+            line_total_minor: 8000,
+        };
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&legacy, &mut bytes).unwrap();
+        let decoded: OrderLine = ciborium::from_reader(bytes.as_slice()).unwrap();
+        assert_eq!(decoded.inventory_id, 3);
+        assert_eq!(decoded.sku, None);
+    }
 
     #[derive(Serialize)]
     struct LegacySettings {

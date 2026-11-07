@@ -146,28 +146,41 @@ type ListPermitted = record { permission: Permission };
 
 type ValidationResult = variant { Ok : text; Err : text };
 
-type AssetCanisterArgs = variant {
-  Init: InitArgs;
-  Upgrade: UpgradeArgs;
+type ProjectCanister = record { canister_id: principal; package_name: text };
+type ProjectContext = record { project_id: text; canisters: vec ProjectCanister };
+type CanisterType = variant { Storage; Auth; Database; Custom };
+type ConfigVectorType = variant {
+  Text; CanisterPicker : record { module_type_filter : opt text }; Boolean;
+  Float; SecretText; Select : record { options : vec text }; Number;
 };
-
-type InitArgs = record {
-  set_permissions: opt SetPermissions;
+type ConfigVectorValue = variant {
+  Text : text; Boolean : bool; Float : float64; PrincipalId : principal; Number : int64;
 };
-
-type UpgradeArgs = record {
-  set_permissions: opt SetPermissions;
+type ConfigType = variant {
+  Text; TextArea; CanisterPicker : record { module_type_filter : opt text }; Boolean;
+  Float; SecretText; Select : record { options : vec text };
+  Vector : record { element_type : ConfigVectorType }; Number;
 };
-
-/// Sets the list of principals granted each permission.
-type SetPermissions = record {
-  prepare: vec principal;
-  commit: vec principal;
-  manage_permissions: vec principal;
+type ConfigValue = variant {
+  Text : text; Boolean : bool; Float : float64;
+  Vector : vec ConfigVectorValue; PrincipalId : principal; Number : int64;
 };
+type ConfigFieldSchema = record {
+  key : text; is_readonly : opt bool; is_required : bool; field_type : ConfigType;
+  description : text; label : text; canister_type : opt CanisterType; package_name : opt text;
+  group : opt text; group_label : opt text; group_description : opt text;
+  default_value : opt ConfigValue;
+};
+type LinkKind = variant { Admin; Public };
+type CanisterLink = record { label : text; url : text; kind : LinkKind };
 
-service: (asset_canister_args: opt AssetCanisterArgs) -> {
+service: (project_context: ProjectContext) -> {
   api_version: () -> (nat16) query;
+  get_project_context: () -> (variant { Ok: opt ProjectContext; Err: text }) query;
+  get_config_schema: () -> (vec ConfigFieldSchema) query;
+  get_config: () -> (vec record { text; ConfigValue }) query;
+  set_config: (vec record { text; ConfigValue }) -> (variant { Ok; Err: text });
+  get_links: () -> (vec CanisterLink) query;
 
   get: (record {
     key: Key;

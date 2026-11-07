@@ -568,7 +568,7 @@ fn llm_context() -> String {
 // ---------------------------------------------------------------------------
 
 #[ic_cdk::init]
-fn init() {
+fn init(_project_context: canister_hub_sdk::ProjectContext) {
     storage::init_dynamic_config_store();
     assets::certify();
 }

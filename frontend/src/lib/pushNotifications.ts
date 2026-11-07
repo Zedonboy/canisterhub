@@ -1,14 +1,9 @@
-// Real browser Web Push subscribe/unsubscribe against a project's installed
-// notification module. Each module gets a distinct service-worker scope so
-// one browser can subscribe to several projects with different VAPID keys.
+// Real browser Web Push subscribe/unsubscribe against the protocol backend.
 
-import { getNotificationActor } from "./actors";
+import { getBackendActor } from "./actors";
 
 const SERVICE_WORKER_URL = "/sw.js";
-
-function serviceWorkerScope(canisterId: string): string {
-  return `/push/${canisterId}/`;
-}
+const SERVICE_WORKER_SCOPE = "/";
 
 async function waitUntilActive(registration: ServiceWorkerRegistration): Promise<void> {
   if (registration.active) return;
@@ -33,10 +28,10 @@ export function isPushSupported(): boolean {
  * their browser settings can undo this), `"enabled"` means this exact
  * browser currently holds a live `PushSubscription`, `"disabled"` covers
  * everything else (including "never asked yet"). */
-export async function getPushStatus(canisterId: string): Promise<"enabled" | "disabled" | "denied"> {
+export async function getPushStatus(): Promise<"enabled" | "disabled" | "denied"> {
   if (!isPushSupported()) return "disabled";
   if (Notification.permission === "denied") return "denied";
-  const registration = await navigator.serviceWorker.getRegistration(serviceWorkerScope(canisterId));
+  const registration = await navigator.serviceWorker.getRegistration(SERVICE_WORKER_SCOPE);
   const subscription = await registration?.pushManager.getSubscription();
   return subscription ? "enabled" : "disabled";
 }
@@ -44,13 +39,13 @@ export async function getPushStatus(canisterId: string): Promise<"enabled" | "di
 /** Registers the service worker, requests notification permission, creates
  * a real `PushSubscription` against the backend canister's VAPID public key,
  * and records it under the signed-in caller's principal. */
-export async function enablePushNotifications(canisterId: string, network: string): Promise<void> {
+export async function enablePushNotifications(): Promise<void> {
   if (!isPushSupported()) {
     throw new Error("This browser doesn't support push notifications.");
   }
 
-  const actor = await getNotificationActor(canisterId, network);
-  const keyResult = await actor.push_vapid_public_key();
+  const actor = await getBackendActor();
+  const keyResult = await actor.push_ensure_vapid();
   if ("Err" in keyResult) throw new Error(keyResult.Err);
   const applicationServerKey = new Uint8Array(keyResult.Ok);
 
@@ -60,7 +55,7 @@ export async function enablePushNotifications(canisterId: string, network: strin
   }
 
   const registration = await navigator.serviceWorker.register(SERVICE_WORKER_URL, {
-    scope: serviceWorkerScope(canisterId),
+    scope: SERVICE_WORKER_SCOPE,
   });
   await waitUntilActive(registration);
   const subscription =
@@ -79,19 +74,15 @@ export async function enablePushNotifications(canisterId: string, network: strin
 /** Unsubscribes this browser and removes its backend record. The backend
  * also prunes stale records automatically when a push service returns
  * HTTP 404 or 410. */
-export async function disablePushNotifications(canisterId: string, network: string): Promise<void> {
+export async function disablePushNotifications(): Promise<void> {
   if (!isPushSupported()) return;
-  const registration = await navigator.serviceWorker.getRegistration(serviceWorkerScope(canisterId));
+  const registration = await navigator.serviceWorker.getRegistration(SERVICE_WORKER_SCOPE);
   const subscription = await registration?.pushManager.getSubscription();
   if (!subscription) return;
 
   const endpoint = subscription.endpoint;
+  const actor = await getBackendActor();
+  const result = await actor.push_unsubscribe(endpoint);
+  if ("Err" in result) throw new Error(result.Err);
   await subscription.unsubscribe();
-
-  try {
-    const actor = await getNotificationActor(canisterId, network);
-    await actor.push_unsubscribe(endpoint);
-  } catch {
-    // Best-effort - see this function's own doc comment.
-  }
 }

@@ -1,11 +1,17 @@
 import { useState } from "react";
-import { Check, Fingerprint, LogOut, MessageCircle, Pencil, ShieldCheck } from "lucide-react";
+import { Check, Fingerprint, LoaderCircle, LogOut, MapPin, MessageCircle, Pencil, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/Button";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Composer } from "@/components/Composer";
 import { NotificationNotice } from "@/components/NotificationNotice";
 import { MessageList, TypingDots, type BubbleLabels } from "@/components/MessageList";
-import { webMessages, webSend, type ChatMessage } from "@/lib/chat";
+import {
+  webMessages,
+  webPendingClientData,
+  webSend,
+  webSubmitClientData,
+  type ChatMessage,
+} from "@/lib/chat";
 import { errorText } from "@/lib/format";
 import { MAX_DISPLAY_NAME, loadDisplayName, saveDisplayName } from "@/lib/displayName";
 import { useCustomerAuth } from "@/lib/customerAuth";
@@ -86,10 +92,15 @@ function Chat({ principal, onSignOut }: { principal: string; onSignOut: () => vo
   const [name, setName] = useState(loadDisplayName);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [sharingLocation, setSharingLocation] = useState(false);
+  const [clientDataError, setClientDataError] = useState<string | null>(null);
 
   // Poll while idle too, so a reply typed by the business owner shows up
   // without the customer doing anything. Faster while a reply is expected.
   const { data, error, loading, refresh } = usePolling(() => webMessages(0), sending ? 2000 : 5000, [principal]);
+  const pending = usePolling(() => webPendingClientData(), sending ? 2000 : 5000, [principal]);
+  const clientRequest = pending.data;
+  const wantsLocation = !!clientRequest && "Location" in clientRequest.kind;
 
   const messages: ChatMessage[] = [...(data ?? [])];
   if (sending) messages.push({ index: -1, role: "customer", text: sending, at: Date.now() });
@@ -110,14 +121,64 @@ function Chat({ principal, onSignOut }: { principal: string; onSignOut: () => vo
         />
       )}
 
+      {clientRequest && (
+        <div className="shrink-0 mx-3 mb-2 rounded-lg border border-c-accent-a44 bg-c-accent-a11 p-3">
+          <p className="text-sm font-medium text-c-text">Information needed</p>
+          <p className="mt-1 text-xs text-c-muted">{clientRequest.prompt}</p>
+          {wantsLocation && (
+            <Button
+              className="mt-3"
+              variant="primary"
+              size="sm"
+              disabled={sharingLocation}
+              onClick={() => {
+                setSharingLocation(true);
+                setClientDataError(null);
+                navigator.geolocation.getCurrentPosition(
+                  ({ coords }) => {
+                    setSending("Shared current location");
+                    webSubmitClientData(
+                      clientRequest.id,
+                      { Location: { latitude: coords.latitude, longitude: coords.longitude } },
+                      name,
+                    )
+                      .then(async () => {
+                        await Promise.all([refresh(), pending.refresh()]);
+                      })
+                      .catch((e) => setClientDataError(errorText(e)))
+                      .finally(() => {
+                        setSending(null);
+                        setSharingLocation(false);
+                      });
+                  },
+                  (e) => {
+                    setClientDataError(e.message || "Your browser could not share this location.");
+                    setSharingLocation(false);
+                  },
+                  { enableHighAccuracy: true, timeout: 15_000, maximumAge: 60_000 },
+                );
+              }}
+            >
+              {sharingLocation ? <LoaderCircle size={14} className="animate-spin" /> : <MapPin size={14} />}
+              {sharingLocation ? "Getting location…" : "Share current location"}
+            </Button>
+          )}
+          {clientDataError && <p className="mt-2 text-xs text-c-danger">{clientDataError}</p>}
+        </div>
+      )}
+
       <Composer
-        placeholder="Type your message…"
+        placeholder={clientRequest && !wantsLocation ? clientRequest.prompt : "Type your message…"}
         disabled={loading && !data && !error}
         onSend={async (text) => {
           setSending(text);
           try {
-            await webSend(text, name);
-            await refresh();
+            if (clientRequest && !wantsLocation) {
+              await webSubmitClientData(clientRequest.id, { Text: text }, name);
+            } else {
+              await webSend(text, name);
+            }
+            await Promise.all([refresh(), pending.refresh()]);
           } finally {
             setSending(null);
           }

@@ -8,7 +8,7 @@
     },
     {
       "name": "ai_place_order",
-      "description": "Create a cash-on-delivery or prepaid order for the current customer. Prices and totals are recomputed by the canister. Prepaid orders remain AwaitingPayment until a trusted payment processor verifies exact payment; the agent cannot mark them paid. A delivery address is required. GPS latitude and longitude are optional, but must be supplied together.",
+      "description": "Create an order for the current customer. For every item pass only inventory_id and quantity; never pass or determine a price, line total, order total, currency, or payment method. Inventory reloads each product by ID and uses the vendor's current catalog price, currency, stock, and payment terms to calculate the order total. The payment charge amount is taken from that server-calculated total. Customers and the agent cannot choose vendor payment terms. One order may contain only items sharing the same payment terms. For prepaid orders, collect the customer's email and provide it as customer_email so the payment provider can create a hosted checkout. Prepaid orders remain AwaitingPayment until a trusted payment processor verifies exact payment; the agent cannot mark them paid. When the result contains checkout_url, send that URL to the customer so they can pay. A delivery address is required. GPS latitude and longitude are optional, but must be supplied together.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -25,6 +25,7 @@
           },
           "customer_name": { "type": ["string", "null"] },
           "customer_phone": { "type": ["string", "null"] },
+          "customer_email": { "type": ["string", "null"], "format": "email" },
           "delivery_location": {
             "type": "object",
             "properties": {
@@ -37,7 +38,6 @@
             "additionalProperties": false
           },
           "note": { "type": ["string", "null"] }
-          ,"payment_method": { "type": ["string", "null"], "enum": ["CashOnDelivery", "Prepaid", null], "description": "Defaults to CashOnDelivery when omitted." }
         },
         "required": ["items", "delivery_location"],
         "additionalProperties": false
@@ -47,6 +47,16 @@
       "name": "ai_list_my_orders",
       "description": "List orders belonging to the current customer conversation.",
       "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "ai_get_my_order",
+      "description": "Retrieve one order belonging to the current customer conversation. The canister verifies ownership and returns the same not-found response for missing or other customers' orders.",
+      "parameters": {
+        "type": "object",
+        "properties": { "order_id": { "type": "integer", "minimum": 1 } },
+        "required": ["order_id"],
+        "additionalProperties": false
+      }
     },
     {
       "name": "ai_cancel_my_order",
@@ -79,6 +89,11 @@
     {
       "name": "ai_list_all_inventory",
       "description": "Staff only: list every product and service, including inactive items and current stock levels.",
+      "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "ai_list_my_inventory",
+      "description": "Controller only: list all products and services in this inventory, including inactive items and current stock levels. The calling agent canister must itself be a controller and the conversation must be authorized as SME staff.",
       "parameters": { "type": "object", "properties": {}, "additionalProperties": false }
     },
     {

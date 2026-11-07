@@ -1,6 +1,6 @@
 // In-memory stand-in for the order_inventory canister (VITE_MOCK=1).
 
-import type { Business, CheckoutInput, Item, Kind, Order } from "./api";
+import type { Business, CheckoutInput, Item, Kind, Order, PaymentMethod } from "./api";
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const DAY = 86_400_000;
@@ -13,9 +13,9 @@ function tile(emoji: string, hue: number): string {
 const business: Business = { name: "Bright Home & Laundry", currency: "NGN" };
 
 let nextId = 1;
-const mk = (name: string, kind: Kind, naira: number, description: string, emoji: string, hue: number, stock: number | null, age: number, noImage = false): Item => ({
+const mk = (name: string, kind: Kind, naira: number, description: string, emoji: string, hue: number, stock: number | null, age: number, noImage = false, paymentMethod: PaymentMethod = "CashOnDelivery"): Item => ({
   id: nextId++, name, kind, description, priceMinor: BigInt(naira * 100), currency: "NGN",
-  imageUrl: noImage ? null : tile(emoji, hue), stock, sku: `BHL-${String(nextId).padStart(3, "0")}`, createdAt: Date.now() - age * DAY,
+  imageUrl: noImage ? null : tile(emoji, hue), stock, sku: `BHL-${String(nextId).padStart(3, "0")}`, createdAt: Date.now() - age * DAY, paymentMethod,
 });
 
 const items: Item[] = [
@@ -23,7 +23,7 @@ const items: Item[] = [
   mk("Dry Cleaning - Suit", "Service", 4500, "Two-piece suit professionally dry cleaned, pressed and hung on a hanger with protective cover.", "🧥", 260, null, 38),
   mk("Duvet Cleaning", "Service", 7000, "Deep wash for queen or king duvets, including anti-allergen rinse.", "🛏️", 180, null, 30),
   mk("Express Ironing (10 items)", "Service", 3000, "Same-day ironing for up to ten shirts or trousers.", "👔", 20, null, 25),
-  mk("Eco Laundry Detergent 2L", "Product", 5200, "Plant-based liquid detergent, gentle on skin and fabrics. Fragrance-free option.", "🧴", 140, 24, 20),
+  mk("Eco Laundry Detergent 2L", "Product", 5200, "Plant-based liquid detergent, gentle on skin and fabrics. Fragrance-free option.", "🧴", 140, 24, 20, false, "Prepaid"),
   mk("Fabric Softener - Lavender 1.5L", "Product", 3400, "Soft, long-lasting lavender scent. Works in all machines.", "💜", 280, 3, 18),
   mk("Stain Remover Spray", "Product", 2200, "Tackles oil, wine and grass stains before washing.", "✨", 50, 40, 15),
   mk("Laundry Basket - Foldable", "Product", 8900, "Collapsible 60L basket with sturdy handles. Folds flat for storage.", "🧺", 330, 12, 12),
@@ -53,12 +53,14 @@ export const mock = {
       if (item.stock !== null && l.quantity > item.stock) throw new Error(`only ${item.stock} units of ${item.name} are available`);
       return { item, qty: l.quantity };
     });
+    if (new Set(lines.map(({ item }) => item.paymentMethod)).size > 1) throw new Error("Items with different vendor payment terms must be placed in separate orders.");
     for (const { item, qty } of lines) if (item.stock !== null) item.stock -= qty;
     const order: Order = {
       id: orderId++, status: "Pending", createdAt: Date.now(), currency: "NGN",
       totalMinor: lines.reduce((s, { item, qty }) => s + item.priceMinor * BigInt(qty), 0n),
       lines: lines.map(({ item, qty }) => ({ id: item.id, name: item.name, kind: item.kind, quantity: qty, unitMinor: item.priceMinor, totalMinor: item.priceMinor * BigInt(qty) })),
       address: input.address, instructions: input.instructions || null, customerName: input.name || null, customerPhone: input.phone || null, note: input.note || null,
+      checkoutUrl: lines[0]?.item.paymentMethod === "Prepaid" ? "https://checkout.example.test/mock" : null,
     };
     orders.unshift(order);
     return order;
@@ -83,10 +85,10 @@ export const mock = {
 
 // A couple of past orders so "My orders" isn't empty on first sign-in.
 orders.push(
-  { id: 1031, status: "Completed", createdAt: Date.now() - 9 * DAY, currency: "NGN", totalMinor: 1_100_000n,
+  { id: 1031, status: "Completed", createdAt: Date.now() - 9 * DAY, currency: "NGN", totalMinor: 1_100_000n, checkoutUrl: null,
     lines: [{ id: 1, name: "Wash & Fold (5kg)", kind: "Service", quantity: 1, unitMinor: 650_000n, totalMinor: 650_000n }, { id: 5, name: "Eco Laundry Detergent 2L", kind: "Product", quantity: 1, unitMinor: 520_000n, totalMinor: 520_000n }],
     address: "14 Allen Avenue, Ikeja", instructions: null, customerName: "Amaka", customerPhone: null, note: null },
-  { id: 1036, status: "OutForDelivery", createdAt: Date.now() - 2 * DAY, currency: "NGN", totalMinor: 450_000n,
+  { id: 1036, status: "OutForDelivery", createdAt: Date.now() - 2 * DAY, currency: "NGN", totalMinor: 450_000n, checkoutUrl: null,
     lines: [{ id: 2, name: "Dry Cleaning - Suit", kind: "Service", quantity: 1, unitMinor: 450_000n, totalMinor: 450_000n }],
     address: "14 Allen Avenue, Ikeja", instructions: "Call at the gate", customerName: "Amaka", customerPhone: null, note: null },
 );

@@ -2,6 +2,7 @@
   "version": "5",
   "specifiers": {
     "npm:@dfinity/utils@5": "5.0.0_@icp-sdk+core@6.1.0",
+    "npm:@headlessui/react@^2.2.10": "2.2.10_react@19.3.0_react-dom@19.3.0__react@19.3.0",
     "npm:@icp-sdk/auth@^10.0.1": "10.0.1_@icp-sdk+core@6.1.0",
     "npm:@icp-sdk/bindgen@0.4": "0.4.0",
     "npm:@icp-sdk/bindgen@0.4.0": "0.4.0",
@@ -306,6 +307,52 @@
       "os": ["win32"],
       "cpu": ["x64"]
     },
+    "@floating-ui/core@1.8.0": {
+      "integrity": "sha512-0CIZ5itps/8x7BG8dEIhs53BvCUH2PCoogtakwRTut+Arm58sJooJ0AuZhLw2HJYIR5cMLNPBSS728sPho2khQ==",
+      "dependencies": [
+        "@floating-ui/utils"
+      ]
+    },
+    "@floating-ui/dom@1.8.0": {
+      "integrity": "sha512-yXSrzeHZBTZadLOlfyhCkJHNeLJnHRnRInwdZ40L7ZiaAtrBwoYlsDrX3v5zB1Utk7CLfzcOVnVVWoXEky7Ceg==",
+      "dependencies": [
+        "@floating-ui/core",
+        "@floating-ui/utils"
+      ]
+    },
+    "@floating-ui/react-dom@2.1.9_react@19.3.0_react-dom@19.3.0__react@19.3.0": {
+      "integrity": "sha512-JDjEFGCpImxDCA7JJKviA0M9+RtmJdj0m/NVU5IMgBK+AmZouAQQ7/+2GLH0GXXY0YMw9oXPB8hKdbPYg5QLYg==",
+      "dependencies": [
+        "@floating-ui/dom",
+        "react",
+        "react-dom"
+      ]
+    },
+    "@floating-ui/react@0.26.28_react@19.3.0_react-dom@19.3.0__react@19.3.0": {
+      "integrity": "sha512-yORQuuAtVpiRjpMhdc0wJj06b9JFjrYF4qp96j++v2NBpbi6SEGF7donUJ3TMieerQ6qVkAv1tgr7L4r5roTqw==",
+      "dependencies": [
+        "@floating-ui/react-dom",
+        "@floating-ui/utils",
+        "react",
+        "react-dom",
+        "tabbable"
+      ]
+    },
+    "@floating-ui/utils@0.2.12": {
+      "integrity": "sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww=="
+    },
+    "@headlessui/react@2.2.10_react@19.3.0_react-dom@19.3.0__react@19.3.0": {
+      "integrity": "sha512-5pVLNK9wlpxTUTy9GpgbX/SdcRh+HBnPktjM2wbiLTH4p+2EPHBO1aoSryUCuKUIItdDWO9ITlhUL8UnUN/oIA==",
+      "dependencies": [
+        "@floating-ui/react",
+        "@react-aria/focus",
+        "@react-aria/interactions",
+        "@tanstack/react-virtual",
+        "react",
+        "react-dom",
+        "use-sync-external-store"
+      ]
+    },
     "@icp-sdk/auth@10.0.1_@icp-sdk+core@6.1.0": {
       "integrity": "sha512-FMq8OJQqhLJUfS2h8z/tCVBFTceo2qT/J4mD2cRwx3kTFeA0x2rc7VjQfnOmevkyJ564tJa4Hjrre0YvLhkqAg==",
       "dependencies": [
@@ -356,6 +403,24 @@
         "@noble/curves@1.9.7",
         "@noble/hashes@1.8.0",
         "idb-keyval"
+      ]
+    },
+    "@internationalized/date@3.12.4": {
+      "integrity": "sha512-M1dEn4c1U1HsSlaVR8upZtSqvXrTkHDfv18H01uCSJyjVLDxnBR38v/fMxecmlwXKR4i9HeZcmgQAPE6A+aGJQ==",
+      "dependencies": [
+        "@swc/helpers"
+      ]
+    },
+    "@internationalized/number@3.6.9": {
+      "integrity": "sha512-GgWy2caO/+hV9sT/oCTWGHvbjmJMPT9kkXzoKRLnkEq7adghhR7UprhvY9sXrKfrp3NcDfhF6QQHXR1KfQbB8g==",
+      "dependencies": [
+        "@swc/helpers"
+      ]
+    },
+    "@internationalized/string@3.2.10": {
+      "integrity": "sha512-PDx6//vHSpRnHfxqMqto11zQvhsaU74O3mKv2F/0eicGZcl9NLjQmGlbHz/LsJh5tLKp4A4L7ZVTzN1/MmMTvA==",
+      "dependencies": [
+        "@swc/helpers"
       ]
     },
     "@jridgewell/gen-mapping@0.3.13": {
@@ -410,6 +475,31 @@
     },
     "@noble/hashes@2.4.0": {
       "integrity": "sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA=="
+    },
+    "@react-aria/focus@3.22.1_react@19.3.0_react-dom@19.3.0__react@19.3.0": {
+      "integrity": "sha512-CPxtkyrBi/HYY5P3lE/57sQ6qfa0lN8E55TOm89H0kNGv0lKt+/0zP7lWERzBjRr5IxBVrQX4gFEowBN52LPaA==",
+      "dependencies": [
+        "@swc/helpers",
+        "react",
+        "react-aria",
+        "react-dom"
+      ]
+    },
+    "@react-aria/interactions@3.28.1_react@19.3.0_react-dom@19.3.0__react@19.3.0": {
+      "integrity": "sha512-Bqb+HrD5I5MHS2SKBhISYqo2SW8Y2dfzgF/Y1lIJq7xqLxheo9vzxPGEHhz+XzkgGfoqEJx8A6a3C7uiqS3HWA==",
+      "dependencies": [
+        "@react-types/shared",
+        "@swc/helpers",
+        "react",
+        "react-aria",
+        "react-dom"
+      ]
+    },
+    "@react-types/shared@3.37.0_react@19.3.0": {
+      "integrity": "sha512-VNlZuifu4tHdxWPfHvoMfKsHA9kVTCGkduv5vKVTdinm8wHFJNhyVB5RzIMiRFj0q3RKoCbP68u2zaoBSiFueg==",
+      "dependencies": [
+        "react"
+      ]
     },
     "@rolldown/pluginutils@1.0.0-rc.3": {
       "integrity": "sha512-eybk3TjzzzV97Dlj5c+XrBFW57eTNhzod66y9HrBlzJ6NsCrWCp/2kaPS3K9wJmurBC0Tdw4yPjXKZqlznim3Q=="
@@ -556,6 +646,12 @@
         "@noble/hashes@2.4.0"
       ]
     },
+    "@swc/helpers@0.5.23": {
+      "integrity": "sha512-5lSsMOTXURePglDfvuAQUqkGek9Hg2kksOYay2m0+XR++b2NWYL/4sWyuvVBIs8oKnJaxkdi9whaL/sqN13afw==",
+      "dependencies": [
+        "tslib"
+      ]
+    },
     "@tailwindcss/node@4.3.3": {
       "integrity": "sha512-/T8IKEsf9VTU6tLjgC7+sv2mOPtQxzE2jMw7u4Tt40Tx+QSZxpzh95/H6cMKoja9XuW7iMdLJYBB0o9G1CaAgg==",
       "dependencies": [
@@ -656,6 +752,17 @@
         "vite"
       ]
     },
+    "@tanstack/react-virtual@3.14.25_react@19.3.0_react-dom@19.3.0__react@19.3.0": {
+      "integrity": "sha512-LYNLaogi8NZUqjPgJ0byKQrXprkDJsZLd94u0i1UpYtXz2fgvbP4KrHygM4MSgSAvEaqykQofYdJ1Vuf7XIz/Q==",
+      "dependencies": [
+        "@tanstack/virtual-core",
+        "react",
+        "react-dom"
+      ]
+    },
+    "@tanstack/virtual-core@3.19.10": {
+      "integrity": "sha512-/ltpH0qUCs5XQYE7fIhgA+aqgC5NzSfLTDQkC+N1wOOdvIYx1FH/kz2LGfSeanNbekqy3WBu6mNIbqXhxE/pew=="
+    },
     "@types/babel__core@7.20.5": {
       "integrity": "sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==",
       "dependencies": [
@@ -716,6 +823,12 @@
         "@types/babel__core",
         "react-refresh",
         "vite"
+      ]
+    },
+    "aria-hidden@1.2.6": {
+      "integrity": "sha512-ik3ZgC9dY/lYVVM++OISsaYDeg1tb0VtP5uL3ouh1koGOaUMDPpbFIei4JkFimWUFPn90sbMNMXQAIVOlnYKJA==",
+      "dependencies": [
+        "tslib"
       ]
     },
     "asn1js@3.0.10": {
@@ -1002,6 +1115,22 @@
     "pvutils@1.2.0": {
       "integrity": "sha512-BbubeCEyTuQjVMakvJQ/Sxbc93F2pwmbsxONT/ZRrwU7Ua38d8unYTwXpTVLAKJ4BDuH9IGztCjQcd/N/39Dvg=="
     },
+    "react-aria@3.53.1_react@19.3.0_react-dom@19.3.0__react@19.3.0": {
+      "integrity": "sha512-dikisyOjJd3D2fFrIDWmVWzqiLz5B86GzZv1zxs7xI4dVc0JIz/1Wa52I20gYvVL2WXeFXlygYsle/QcOMhtcg==",
+      "dependencies": [
+        "@internationalized/date",
+        "@internationalized/number",
+        "@internationalized/string",
+        "@react-types/shared",
+        "@swc/helpers",
+        "aria-hidden",
+        "clsx",
+        "react",
+        "react-dom",
+        "react-stately",
+        "use-sync-external-store"
+      ]
+    },
     "react-dom@19.3.0_react@19.3.0": {
       "integrity": "sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==",
       "dependencies": [
@@ -1030,6 +1159,18 @@
       ],
       "optionalPeers": [
         "react-dom"
+      ]
+    },
+    "react-stately@3.51.0_react@19.3.0": {
+      "integrity": "sha512-YJcmkAXu2XOQP97hO/qz/cC3qv9kni3oVhwBlxWr358BHePJUpY15XwL3YSRMKxYt4EkslPqAz11JRirMfANGw==",
+      "dependencies": [
+        "@internationalized/date",
+        "@internationalized/number",
+        "@internationalized/string",
+        "@react-types/shared",
+        "@swc/helpers",
+        "react",
+        "use-sync-external-store"
       ]
     },
     "react@19.3.0": {
@@ -1087,6 +1228,9 @@
     "source-map-js@1.2.2": {
       "integrity": "sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw=="
     },
+    "tabbable@6.5.1": {
+      "integrity": "sha512-dMCuwDUY6Noz3zVKLefBC4wq+aJV20yc7vWmM7uTNGwtQSFF5kX7OUIUsxuVajz/bdt5Xqdah3/0NLjth+cM5A=="
+    },
     "tailwind-merge@3.7.0": {
       "integrity": "sha512-XPPUyAc+cvspz3lHTcR/QgPfW2A0lv/xQNIjX3HGhLR+Nq2lHaLq5MtTesHn8GUr3W3DguT2KT5x3NVgRtYwmA=="
     },
@@ -1122,6 +1266,12 @@
       ],
       "bin": true
     },
+    "use-sync-external-store@1.6.0_react@19.3.0": {
+      "integrity": "sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==",
+      "dependencies": [
+        "react"
+      ]
+    },
     "vite@7.3.1_@types+node@24.19.1": {
       "integrity": "sha512-w+N7Hifpc3gRjZ63vYBXA56dvvRlNWRczTdmCBBa+CotUzAPf5b7YMdMR/8CQoeYE5LX3W4wj6RYTgonm1b9DA==",
       "dependencies": [
@@ -1149,6 +1299,7 @@
     "packageJson": {
       "dependencies": [
         "npm:@dfinity/utils@5",
+        "npm:@headlessui/react@^2.2.10",
         "npm:@icp-sdk/auth@^10.0.1",
         "npm:@icp-sdk/bindgen@0.4",
         "npm:@icp-sdk/canisters@4",

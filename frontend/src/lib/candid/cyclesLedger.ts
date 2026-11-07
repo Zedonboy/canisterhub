@@ -9,6 +9,10 @@ export interface CyclesLedgerCanisterSettings {
   memory_allocation: [] | [bigint];
   freezing_threshold: [] | [bigint];
   reserved_cycles_limit: [] | [bigint];
+  /** Mirrors the management canister's own setting - the runtime-upload
+   * deploy sets `controllers` so the Logs page's `fetch_canister_logs`
+   * tail works for them (see `lib/canisterLogs.ts`). */
+  log_visibility: [] | [{ controllers: null } | { public: null }];
 }
 
 export interface CyclesLedgerCreateCanisterArgs {
@@ -75,9 +79,23 @@ export type CyclesLedgerWithdrawResult =
   | { Ok: bigint }
   | { Err: CyclesLedgerWithdrawError };
 
+/** `icrc106_get_index_principal` - the Cycles Ledger points at its ICRC-1
+ * index canister with this query, so clients can discover (rather than
+ * hardcode) where per-account history like `get_account_transactions`
+ * lives. Verified against the real interface spec
+ * (github.com/dfinity/cycles-ledger's `cycles-ledger.did`). */
+export type CyclesLedgerIndexPrincipalError =
+  | { IndexPrincipalNotSet: null }
+  | { GenericError: { error_code: bigint; description: string } };
+
+export type CyclesLedgerIndexPrincipalResult =
+  | { Ok: Principal }
+  | { Err: CyclesLedgerIndexPrincipalError };
+
 export interface CyclesLedgerService {
   create_canister: (args: CyclesLedgerCreateCanisterArgs) => Promise<CyclesLedgerCreateCanisterResult>;
   withdraw: (args: CyclesLedgerWithdrawArgs) => Promise<CyclesLedgerWithdrawResult>;
+  icrc106_get_index_principal: () => Promise<CyclesLedgerIndexPrincipalResult>;
 }
 
 export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
@@ -91,6 +109,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     memory_allocation: IDL.Opt(IDL.Nat),
     freezing_threshold: IDL.Opt(IDL.Nat),
     reserved_cycles_limit: IDL.Opt(IDL.Nat),
+    log_visibility: IDL.Opt(IDL.Variant({ controllers: IDL.Null, public: IDL.Null })),
   });
   const CreateCanisterArgs = IDL.Record({
     from_subaccount: IDL.Opt(IDL.Vec(IDL.Nat8)),
@@ -159,6 +178,17 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
       [WithdrawArgs],
       [IDL.Variant({ Ok: IDL.Nat, Err: WithdrawError })],
       [],
+    ),
+    icrc106_get_index_principal: IDL.Func(
+      [],
+      [IDL.Variant({
+        Ok: IDL.Principal,
+        Err: IDL.Variant({
+          IndexPrincipalNotSet: IDL.Null,
+          GenericError: IDL.Record({ error_code: IDL.Nat, description: IDL.Text }),
+        }),
+      })],
+      ["query"],
     ),
   });
 };

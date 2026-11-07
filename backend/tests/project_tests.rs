@@ -13,7 +13,10 @@
 //! Uses the real PocketIC server (not a stub) — see `marketplace_tests.rs`'s
 //! own header comment for the `POCKET_IC_BIN` note, which applies here too.
 
-use backend::{CanisterInfo, CanisterKind, Project, ProjectState};
+use backend::{
+    CanisterInfo, CanisterKind, InstalledPackage, PackageInfo, PackageInfoInput, Project,
+    ProjectState,
+};
 use candid::{decode_one, encode_args, Principal};
 use pocket_ic::{PocketIc, PocketIcBuilder};
 
@@ -92,20 +95,164 @@ fn connector_id() -> CanisterInfo {
     CanisterInfo {
         id: test_principal(50),
         kind: CanisterKind::Connector,
+        package_name: None,
     }
 }
 fn database_id() -> CanisterInfo {
     CanisterInfo {
         id: test_principal(51),
         kind: CanisterKind::Database,
+        package_name: None,
     }
 }
 
-fn notification_id(byte: u8) -> CanisterInfo {
-    CanisterInfo {
-        id: test_principal(byte),
-        kind: CanisterKind::Notification,
+fn package_info(version: &str, sha_byte: char) -> PackageInfoInput {
+    PackageInfoInput {
+        description: "An SME-controlled private AI agent".to_string(),
+        url: format!("https://example.com/releases/{version}/agent.wasm"),
+        version: version.to_string(),
+        sha: std::iter::repeat_n(sha_byte, 64).collect(),
     }
+}
+
+#[test]
+fn package_installations_keep_the_installed_sha_until_an_owner_records_an_upgrade() {
+    let (pic, backend_id) = setup();
+
+    let rejected: Result<Vec<PackageInfo>, String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "upload_package_infos",
+        (vec![package_info("1.0.0", 'a')],),
+    );
+    assert!(
+        rejected.is_err(),
+        "only a backend controller may seed releases"
+    );
+
+    let seeded: Result<Vec<PackageInfo>, String> = call(
+        &pic,
+        backend_id,
+        controller(),
+        "upload_package_infos",
+        (vec![package_info("1.0.0", 'a')],),
+    );
+    let seeded = seeded.unwrap();
+    let package_id = seeded[0].id.clone();
+    assert!(package_id.starts_with("agent-wasm-"));
+    assert_eq!(package_id.len(), "agent-wasm-".len() + 64);
+    assert_eq!(seeded[0].name, "agent.wasm");
+
+    let _: Result<(), String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "create_project",
+        ("p1".to_string(), "req".to_string(), "local".to_string()),
+    );
+    let _: Result<(), String> = call(
+        &pic,
+        backend_id,
+        alice(),
+        "add_project_canisters",
+        (
+            "p1".to_string(),
+            vec![(
+                "agent-main".to_string(),
+                CanisterInfo {
+                    package_name: Some("agent.wasm".to_string()),
+                    ..connector_id()
+                },
+            )],
+        ),
+    );
+
+    let project_before_snapshot: Option<Project> = query(
+        &pic,
+        backend_id,
+        alice(),
+        "get_project",
+        ("p1".to_string(),),
+    );
+    assert_eq!(
+        project_before_snapshot.unwrap().canisters["agent-main"]
+            .package_name
+            .as_deref(),
+        Some("agent.wasm"),
+        "saving the canister also saves its package identity"
+    );
+
+    let installed: InstalledPackage = call::<Result<InstalledPackage, String>>(
+        &pic,
+        backend_id,
+        alice(),
+        "record_project_package_installation",
+        (
+            "p1".to_string(),
+            "agent-main".to_string(),
+            "agent.wasm".to_string(),
+        ),
+    )
+    .unwrap();
+    assert_eq!(installed.package_name, "agent.wasm");
+    assert_eq!(installed.version, "1.0.0");
+    assert_eq!(installed.sha, "a".repeat(64));
+
+    let reseeded: Result<Vec<PackageInfo>, String> = call(
+        &pic,
+        backend_id,
+        controller(),
+        "upload_package_infos",
+        (vec![package_info("1.1.0", 'b')],),
+    );
+    assert_eq!(
+        reseeded.unwrap()[0].id,
+        package_id,
+        "release updates retain the backend-assigned id"
+    );
+    let latest: Option<PackageInfo> = query(
+        &pic,
+        backend_id,
+        alice(),
+        "get_package_info",
+        ("agent.wasm".to_string(),),
+    );
+    assert_eq!(latest.unwrap().sha, "b".repeat(64));
+
+    let before_upgrade: Vec<InstalledPackage> = query::<Result<Vec<InstalledPackage>, String>>(
+        &pic,
+        backend_id,
+        alice(),
+        "list_project_package_installations",
+        ("p1".to_string(),),
+    )
+    .unwrap();
+    assert_eq!(before_upgrade[0].sha, "a".repeat(64));
+
+    let forbidden: Result<Vec<InstalledPackage>, String> = query(
+        &pic,
+        backend_id,
+        bob(),
+        "list_project_package_installations",
+        ("p1".to_string(),),
+    );
+    assert!(forbidden.is_err());
+
+    let upgraded: InstalledPackage = call::<Result<InstalledPackage, String>>(
+        &pic,
+        backend_id,
+        alice(),
+        "record_project_package_installation",
+        (
+            "p1".to_string(),
+            "agent-main".to_string(),
+            "agent.wasm".to_string(),
+        ),
+    )
+    .unwrap();
+    assert_eq!(upgraded.version, "1.1.0");
+    assert_eq!(upgraded.sha, "b".repeat(64));
 }
 
 #[test]
@@ -300,107 +447,6 @@ fn add_project_canisters_merges_across_calls_and_is_owner_gated() {
         as_bob.is_err(),
         "a non-owner must not be able to add canisters"
     );
-}
-
-#[test]
-fn project_accepts_only_one_shared_notification_canister() {
-    let (pic, backend_id) = setup();
-    let _: Result<(), String> = call(
-        &pic,
-        backend_id,
-        alice(),
-        "create_project",
-        ("p1".to_string(), "req".to_string(), "local".to_string()),
-    );
-
-    let first: Result<(), String> = call(
-        &pic,
-        backend_id,
-        alice(),
-        "add_project_canisters",
-        (
-            "p1".to_string(),
-            vec![("notification".to_string(), notification_id(7))],
-        ),
-    );
-    first.unwrap();
-
-    let retry: Result<(), String> = call(
-        &pic,
-        backend_id,
-        alice(),
-        "add_project_canisters",
-        (
-            "p1".to_string(),
-            vec![("notification".to_string(), notification_id(7))],
-        ),
-    );
-    retry.expect("an exact retry should be idempotent");
-
-    let second: Result<(), String> = call(
-        &pic,
-        backend_id,
-        alice(),
-        "add_project_canisters",
-        (
-            "p1".to_string(),
-            vec![("another-notification".to_string(), notification_id(8))],
-        ),
-    );
-    assert!(second
-        .unwrap_err()
-        .contains("already has notification canister"));
-
-    let project: Project = query::<Option<Project>>(
-        &pic,
-        backend_id,
-        alice(),
-        "get_project",
-        ("p1".to_string(),),
-    )
-    .unwrap();
-    assert_eq!(project.canisters.len(), 1);
-    assert_eq!(
-        project.canisters.get("notification"),
-        Some(&notification_id(7))
-    );
-
-    let _: Result<(), String> = call(
-        &pic,
-        backend_id,
-        alice(),
-        "create_project",
-        ("legacy".to_string(), "req".to_string(), "local".to_string()),
-    );
-    let _: Result<(), String> = call(
-        &pic,
-        backend_id,
-        alice(),
-        "add_project_canisters",
-        (
-            "legacy".to_string(),
-            vec![(
-                "notification".to_string(),
-                CanisterInfo {
-                    id: test_principal(9),
-                    kind: CanisterKind::Other,
-                },
-            )],
-        ),
-    );
-    let duplicate: Result<(), String> = call(
-        &pic,
-        backend_id,
-        alice(),
-        "add_project_canisters",
-        (
-            "legacy".to_string(),
-            vec![("another-notification".to_string(), notification_id(10))],
-        ),
-    );
-    assert!(duplicate
-        .unwrap_err()
-        .contains("already has notification canister"));
 }
 
 #[test]

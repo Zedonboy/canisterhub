@@ -326,10 +326,9 @@ skipped.
 
 ## Push notifications
 
-The orchestrator has no Web Push role. Each SME project installs its own
-`notification` module, which owns VAPID configuration, caller-scoped
-subscriptions, payload encryption, and HTTPS delivery; see
-`packages/notification/README.md`.
+The protocol backend owns Web Push VAPID configuration, caller-scoped
+subscriptions, payload encryption, and HTTPS delivery. Projects do not install
+a separate notification canister.
 
 ## Semantic marketplace search
 

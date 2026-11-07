@@ -97,6 +97,7 @@ export default function InventoryPage({
             <tr className="text-left text-[11px] uppercase tracking-wide text-[#4a5568] border-b border-[#1e2d47]">
               <th className="px-4 py-2.5 font-medium">Item</th>
               <th className="px-4 py-2.5 font-medium">Type</th>
+              <th className="px-4 py-2.5 font-medium">Payment</th>
               <th className="px-4 py-2.5 font-medium text-right">Price</th>
               <th className="px-4 py-2.5 font-medium text-right">Stock</th>
               <th className="px-4 py-2.5 font-medium">Status</th>
@@ -118,6 +119,7 @@ export default function InventoryPage({
                 <td className="px-4 py-2.5">
                   <Badge variant={i.kind === "Product" ? "cyan" : "default"}>{i.kind === "Product" ? "product" : "service"}</Badge>
                 </td>
+                <td className="px-4 py-2.5 text-xs text-[#9aa8bd]">{i.paymentMethod === "Prepaid" ? "Prepaid" : "Cash on delivery"}</td>
                 <td className="px-4 py-2.5 text-right font-mono">{formatMoney(i.priceMinor, i.currency)}</td>
                 <td className="px-4 py-2.5 text-right"><StockBadge item={i} /></td>
                 <td className="px-4 py-2.5">
@@ -141,7 +143,7 @@ export default function InventoryPage({
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-10 text-center text-sm text-[#4a5568]">
+                <td colSpan={7} className="px-4 py-10 text-center text-sm text-[#4a5568]">
                   {items.length === 0 ? "No items yet - add your first product or service." : "Nothing matches that filter."}
                 </td>
               </tr>

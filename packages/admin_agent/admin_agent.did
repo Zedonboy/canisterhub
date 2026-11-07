@@ -1,3 +1,5 @@
+type ProjectCanister = record { canister_id : principal; package_name : text };
+type ProjectContext = record { project_id : text; canisters : vec ProjectCanister };
 // One entry in the audit log - who did what, when. `action`/`details` are
 // free text (the tool/method name, and a human-readable summary of its
 // arguments) rather than a structured type, since what's worth recording
@@ -51,7 +53,7 @@ type Result_2 = variant { Ok : text; Err : text };
 type Result_3 = variant { Ok : vec ActionLogEntry; Err : text };
 type Result_4 = variant { Ok; Err : text };
 type Role = variant { User; Assistant };
-service : (Config) -> {
+service : (ProjectContext) -> {
   // Runs one round of conversation: sends `history` plus `prompt` (prefixed
   // with the configured system prompt) to the LLM, executes any tool calls
   // via the same functions the direct methods above call, and returns the

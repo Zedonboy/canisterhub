@@ -1,0 +1,56 @@
+[
+  {
+    "description": "Give your business an always-available assistant that helps you respond to customers, stay on top of conversations, and handle everyday work faster—while keeping you in control.",
+    "package_name": "https://github.com/Zedonboy/canisterhub/releases/download/v1.0.0/agent.wasm",
+    "version": "1.0.0",
+    "sha": "f348a1d06d142217201aa4e95993d57cf9c9d7371ddfdca2a15708c2881fc3ab"
+  },
+  {
+    "description": "Run your shop with less stress. Keep products organized, track stock, receive customer orders, and manage your online storefront from one simple place.",
+    "package_name": "https://github.com/Zedonboy/canisterhub/releases/download/v1.0.0/order_inventory.wasm",
+    "version": "1.0.0",
+    "sha": "b46b1a80ce0f75d77466f30db8fa6079f04d9cd6e7d5d9b2b12f12b4a9fe5138"
+  },
+  {
+    "description": "Keep your business images, documents, and other important files together in a dependable home, ready to use across your website and business tools.",
+    "package_name": "https://github.com/Zedonboy/canisterhub/releases/download/v1.0.0/assetstorage.wasm",
+    "version": "1.0.0",
+    "sha": "0f8cf1c394bbc663cbde218e20ba714cbe548cfb702f5f80d11c176748bc6819"
+  },
+  {
+    "description": "Manage user authentication, identity, and secure access for your Internet Computer applications.",
+    "package_name": "https://github.com/Zedonboy/canisterhub/releases/download/v1.0.0/auth.wasm",
+    "version": "1.0.0",
+    "sha": "74f911450d02fc060b5bc28193bbe0725362f3589f50db94e1b091d5f2d5df7c"
+  },
+  {
+    "description": "Store and retrieve structured key-value data on the Internet Computer.",
+    "package_name": "https://github.com/Zedonboy/canisterhub/releases/download/v1.0.0/ic-kv.wasm",
+    "version": "1.0.0",
+    "sha": "6317a3212faf3b5a809c662926cceb7da9b74d4a82526f4fbe32a6f2369c81fb"
+  },
+  {
+    "description": "Use a SQL database canister to manage relational data for your Internet Computer application.",
+    "package_name": "https://github.com/Zedonboy/canisterhub/releases/download/v1.0.0/ic-sql.wasm",
+    "version": "1.0.0",
+    "sha": "114c71ee79664c8ad1c5eaa914d5288aacd107fe5e869e467914406865062fd4"
+  },
+  {
+    "description": "Accept customer payments through Kora checkout and track payment results in your project.",
+    "package_name": "https://github.com/Zedonboy/canisterhub/releases/download/v1.0.0/kora-payment.wasm",
+    "version": "1.0.0",
+    "sha": "193962e598d820e6eb2eb9ae493374f477c28200d7451bf66dc80aa840294df9"
+  },
+  {
+    "description": "Accept customer payments through Paystack and track payment results in your project.",
+    "package_name": "https://github.com/Zedonboy/canisterhub/releases/download/v1.0.0/paystack-payment.wasm",
+    "version": "1.0.0",
+    "sha": "17de264b3707e5f6a12ff5d25fffd7362c989f045738d7eff9f27af22581f065"
+  },
+  {
+    "description": "Manage a restaurant menu, portion-based orders, kitchen fulfillment, and payment collection.",
+    "package_name": "https://github.com/Zedonboy/canisterhub/releases/download/v1.0.0/restaurant.wasm",
+    "version": "1.0.0",
+    "sha": "0121efad9b072264cfb80dc1a122b5182601826f4849fb78c0d30d930fafdf91"
+  }
+]

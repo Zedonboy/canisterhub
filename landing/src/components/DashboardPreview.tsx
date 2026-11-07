@@ -15,10 +15,10 @@ interface SampleCanister {
 }
 
 const SAMPLE_CANISTERS: SampleCanister[] = [
-  { name: "booking-engine", kind: "Agent", id: "x7k2q-fqaaa-aaaah-qcai", memory: "18.4 MB", cycles: "2.1T", status: "healthy" },
+  { name: "secretary", kind: "Agent", id: "x7k2q-fqaaa-aaaah-qcai", memory: "18.4 MB", cycles: "2.1T", status: "healthy" },
   { name: "customer-db", kind: "Database", id: "a4f9x-2iaaa-aaaah-qcai", memory: "42.1 MB", cycles: "4.6T", status: "healthy" },
-  { name: "storefront", kind: "Static", id: "bq3n1-8yaaa-aaaah-qcai", memory: "6.2 MB", cycles: "0.8T", status: "healthy" },
-  { name: "payments-connector", kind: "Connector", id: "m8r5t-vaaaa-aaaah-qcai", memory: "11.9 MB", cycles: "1.4T", status: "degraded" },
+  { name: "luna-shop", kind: "Static", id: "bq3n1-8yaaa-aaaah-qcai", memory: "6.2 MB", cycles: "0.8T", status: "healthy" },
+  { name: "payments", kind: "Connector", id: "m8r5t-vaaaa-aaaah-qcai", memory: "11.9 MB", cycles: "1.4T", status: "healthy" },
 ];
 
 function StatusDot({ status }: { status: "healthy" | "degraded" }) {
@@ -39,7 +39,7 @@ export function DashboardPreview() {
         <span className="w-2.5 h-2.5 rounded-full bg-[#ffab40]" />
         <span className="w-2.5 h-2.5 rounded-full bg-[#00e676]" />
         <span className="ml-3 px-3 py-1 rounded-md bg-[#131929] text-[11px] text-[#4a5568] font-mono truncate">
-          app.canisterhub.io/lunas-bakery
+          dashboard.canisterhub.io/lunas-kitchen
         </span>
       </div>
 
@@ -47,7 +47,7 @@ export function DashboardPreview() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-[10px] text-[#00d4ff] font-medium tracking-wide">Welcome back</p>
-            <h3 className="text-sm font-semibold text-[#e2e8f0]">Luna's Bakery</h3>
+            <h3 className="text-sm font-semibold text-[#e2e8f0]">Luna's Kitchen</h3>
           </div>
           <span className="text-[10px] px-2.5 py-1.5 rounded-md bg-[#00d4ff] text-[#0a0e1a] font-medium whitespace-nowrap">
             + Deploy

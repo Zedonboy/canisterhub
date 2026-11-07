@@ -8,35 +8,27 @@ import { toast } from "@/components/Toast";
 import { useAuth } from "@/lib/auth";
 import { formatMarketplacePrice, getMarketplaceItem, hasPurchasedMarketplaceItem, type MarketplaceItem } from "@/lib/marketplace";
 import { deployMarketplaceItem } from "@/lib/deploy";
-import { MOCK_MARKETPLACE_ITEMS } from "@/lib/mock-data";
 import type { ProjectContext } from "@/components/layout/AppShell";
 
 /** `/project/:id/overview/product/:product_id` - reached from a card in
- * `Overview.tsx`'s Marketplace section. A real marketplace item's own
- * `id` (`bigint`, as a string param) unless it's negative, which can only
- * ever be one of `MOCK_MARKETPLACE_ITEMS` (see that constant's own doc
- * comment on why real ids are never negative) - that case is resolved
- * locally, no backend call, and shown as a preview with no real Install.
- * Install here always targets *this* project directly (its `job.id` is
- * already known from the route), unlike the top-level `/market/product/:id`
- * product-category page, which still has to ask which project first. */
+ * `Overview.tsx`'s Marketplace section, resolved by the item's real `id`
+ * (`bigint`, as a string param). Install always targets *this* project
+ * directly (its `job.id` is already known from the route), unlike the
+ * top-level `/market/product/:id` product-category page, which still has
+ * to ask which project first. */
 export default function MarketplaceItemDetail() {
   const { job, refetch } = useOutletContext<ProjectContext>();
   const { product_id = "" } = useParams();
   const navigate = useNavigate();
   const { principal } = useAuth();
 
-  const isPreview = product_id.startsWith("-");
-  const previewItem = isPreview ? MOCK_MARKETPLACE_ITEMS.find((p) => p.id.toString() === product_id) ?? null : null;
-
-  const [item, setItem] = useState<MarketplaceItem | null>(previewItem);
-  const [loaded, setLoaded] = useState(isPreview);
+  const [item, setItem] = useState<MarketplaceItem | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [purchased, setPurchased] = useState(false);
 
   useEffect(() => {
-    if (isPreview) return;
     let id: bigint;
     try {
       id = BigInt(product_id);
@@ -57,7 +49,7 @@ export default function MarketplaceItemDetail() {
       })
       .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoaded(true));
-  }, [isPreview, product_id, principal]);
+  }, [product_id, principal]);
 
   const install = async () => {
     if (!item || !job) return;
@@ -113,7 +105,6 @@ export default function MarketplaceItemDetail() {
                       {purchased ? "Download" : formatMarketplacePrice(item.price)}
                     </Badge>
                   )}
-                  {isPreview && <Badge variant="cyan">Preview</Badge>}
                 </div>
                 <div className="flex items-center gap-3 text-xs text-[#4a5568]">
                   <span className="flex items-center gap-1"><Download size={11} /> {item.downloads.toString()} downloads</span>
@@ -128,8 +119,7 @@ export default function MarketplaceItemDetail() {
             <Button
               variant="primary"
               className="gap-1.5 flex-shrink-0"
-              disabled={isPreview || deploying}
-              title={isPreview ? "Sample item - nothing to install yet" : undefined}
+              disabled={deploying}
               onClick={install}
             >
               {deploying ? <Loader size={14} className="animate-spin" /> : <Zap size={14} fill="currentColor" />}
@@ -138,13 +128,6 @@ export default function MarketplaceItemDetail() {
                 : purchased ? "Download & install" : item.price != null ? "Buy & install" : "Install"}
             </Button>
           </div>
-
-          {isPreview && (
-            <p className="text-xs text-[#c084fc] bg-[#c084fc0d] border border-[#c084fc33] rounded-lg px-3 py-2">
-              This is a sample listing - nothing's been published to the marketplace yet, so there's no real canister
-              to install here.
-            </p>
-          )}
 
           <div className="p-5 rounded-xl border border-[#1e2d47] bg-[#0d1526]">
             <h2 className="text-xs font-semibold text-[#4a5568] uppercase tracking-widest mb-2">Description</h2>

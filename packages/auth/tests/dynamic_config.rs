@@ -21,7 +21,7 @@ fn runtime_config_is_available_after_empty_install_and_survives_upgrade() {
     pic.install_canister(
         id,
         AUTH_WASM.to_vec(),
-        encode_one(()).unwrap(),
+        encode_one(canister_hub_sdk::ProjectContext::default()).unwrap(),
         Some(controller()),
     );
 

@@ -37,9 +37,19 @@ pub struct Config {
     pub protocol_id: Option<Principal>,
 
     #[config(
+        label = "Payment Processor Canister",
+        description = "Payment provider package implementing the standard Payment Provider API (for example kora-payment.wasm or paystack-payment.wasm)",
+        canister_picker,
+        group = "payments",
+        group_label = "Payments"
+    )]
+    pub payment_canister: Option<Principal>,
+
+    #[config(
         label = "Storage Canister ID",
         description = "Asset-storage canister the inventory UI uploads product and service images to",
-        canister_type = "storage"
+        canister_type = "storage",
+        package_name = "assetstorage.wasm"
     )]
     pub storage_canister: Option<Principal>,
 
@@ -68,4 +78,8 @@ pub struct Config {
         group_description = "Domains that the IC HTTP gateway may route to this storefront"
     )]
     pub ic_domains: Option<String>,
+}
+
+pub fn apply_project_context(context: &canister_hub_sdk::ProjectContext) -> Result<(), String> {
+    canister_hub_sdk::ic::config::update_project_context::<Config>(context)
 }

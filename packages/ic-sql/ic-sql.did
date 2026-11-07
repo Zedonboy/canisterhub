@@ -1,3 +1,5 @@
+type ProjectCanister = record { canister_id : principal; package_name : text };
+type ProjectContext = record { project_id : text; canisters : vec ProjectCanister };
 type Access = variant { None; Read; Write; Admin };
 type CanisterMetadata = record {
   name : text;
@@ -30,6 +32,7 @@ type ConfigFieldSchema = record {
   // Optional typed filter for canister-picker fields. `None` has the
   // same meaning as `Some(CanisterType::Custom)`.
   canister_type : opt CanisterType;
+  package_name : opt text;
   // True for canister-provided display data that set_config cannot mutate.
   is_readonly : opt bool;
   default_value : opt ConfigValue;
@@ -151,7 +154,7 @@ type UniqueConstraint = record {
 };
 type LinkKind = variant { Admin; Public };
 type CanisterLink = record { label : text; url : text; kind : LinkKind };
-service : () -> {
+service : (ProjectContext) -> {
   canister_metadata : () -> (CanisterMetadata) query;
   describe_constraints : (text) -> (Result) query;
   describe_table : (text) -> (Result_1) query;
@@ -223,6 +226,7 @@ service : () -> {
   query_with_session : (text, text) -> (Result_3);
   remove_permission : (text, principal) -> (Result_2);
   set_config : (vec record { text; ConfigValue }) -> (Result_2);
+  update_project_context : (ProjectContext) -> (variant { Ok; Err : text });
   set_permission : (PermissionEntry) -> (Result_2);
   // Applies `update` to the current configuration - see `ConfigUpdate`'s doc
   // comment for its three-state-per-field semantics.

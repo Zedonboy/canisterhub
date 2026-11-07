@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 type NetworkStatus = {
   managed: boolean;
@@ -42,7 +43,21 @@ function getDevServerConfig() {
 export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: { "@": "/src" },
+    alias: [
+      // This workspace's node_modules mixes an npm-installed tree (real
+      // directories at the root) with Deno-managed packages (symlinks into
+      // node_modules/.deno), leaving two physical copies of react and
+      // react-dom on disk. Without these aliases the bundler can pull one
+      // copy for the app and the other for a library (e.g.
+      // @headlessui/react), after which hooks run against a null dispatcher
+      // and every mount crashes with "Cannot read properties of null
+      // (reading 'useId')". Pin every react* import at the root copy.
+      { find: /^react$/, replacement: fileURLToPath(new URL("./node_modules/react", import.meta.url)) },
+      { find: /^react\/(.*)$/, replacement: `${fileURLToPath(new URL("./node_modules/react", import.meta.url))}/$1` },
+      { find: /^react-dom$/, replacement: fileURLToPath(new URL("./node_modules/react-dom", import.meta.url)) },
+      { find: /^react-dom\/(.*)$/, replacement: `${fileURLToPath(new URL("./node_modules/react-dom", import.meta.url))}/$1` },
+      { find: "@", replacement: "/src" },
+    ],
   },
   ...(command === "serve" ? { server: getDevServerConfig() } : {}),
 }));

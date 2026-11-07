@@ -1,5 +1,6 @@
 {
   "tasks": {
-    "upload-catalog": "deno run -A upload_marketplace_catalog.js"
+    "upload-catalog": "deno run -A upload_marketplace_catalog.js",
+    "seed-packages": "deno run -A seed_package_infos.js"
   }
 }

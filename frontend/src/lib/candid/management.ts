@@ -1,9 +1,11 @@
 // Hand-written mirror of a handful of the IC management canister's real
 // methods (`aaaaa-aa` - the well-known, always-present management canister
-// id, not deployed source of our own): `canister_status` (read-only stats)
-// plus the real lifecycle operations a canister's own controller can
-// perform on it directly - `stop_canister`/`start_canister`/
-// `delete_canister` (see `lib/canisterOps.ts`). All of these are
+// id, not deployed source of our own): `canister_status` (read-only
+// stats), the query-only `fetch_canister_logs` log tail (see
+// `lib/canisterLogs.ts`), plus the real lifecycle operations a canister's
+// own controller can perform on it directly - `stop_canister`/
+// `start_canister`/`delete_canister` (see `lib/canisterOps.ts`). All of
+// these are
 // controller-only: they succeed when the calling identity is a controller
 // of the target, which is now genuinely true for the real signed-in user on
 // every canister the orchestrator deploys for them (`process::add_controller`
@@ -49,18 +51,40 @@ export interface CanisterStatusResult {
   settings: { controllers: Array<import("@icp-sdk/core/principal").Principal>; freezing_threshold: bigint };
 }
 
-/** Every field is genuinely `opt` on the real IC management canister -
- * `lib/deploy.ts` only ever sets `controllers`, leaving everything else
- * (compute/memory allocation, log visibility, etc.) at the IC's own
- * defaults. Verified against the real interface spec
+/** Every field is genuinely `opt` on the real IC management canister.
+ * The deploy paths set `controllers` (so the user, and the orchestrator
+ * where present, can manage the canister) and `log_visibility` (so the
+ * dashboard's own `fetch_canister_logs` tail - see `lib/canisterLogs.ts`
+ * - is permitted for exactly those controllers); everything else stays
+ * at the IC's own defaults. Verified against the real interface spec
  * (docs.internetcomputer.org/references/ic-interface-spec/management-canister)
  * at implementation time, not hand-guessed. */
 export interface CanisterSettingsArg {
   controllers: [] | [Array<import("@icp-sdk/core/principal").Principal>];
+  /** Who may read the canister's debug buffer via `fetch_canister_logs`.
+   * The deploy paths set `controllers` - the same identities that manage
+   * the canister; the variant's `public` arm remains for any caller that
+   * wants broader read access. */
+  log_visibility: [] | [{ controllers: null } | { public: null }];
+}
+
+export interface CanisterLogRecord {
+  idx: bigint;
+  /** Nanoseconds since the Unix epoch - the IC's own record timestamp. */
+  timestamp_nanos: bigint;
+  content: Uint8Array;
 }
 
 export interface ManagementService {
   canister_status: (args: { canister_id: import("@icp-sdk/core/principal").Principal }) => Promise<CanisterStatusResult>;
+  /** Read-only tail of a canister's own debug-log buffer (everything it
+   * emitted via `debug_print`/`trap`). A `query`, not an update - unlike
+   * `canister_status` it never goes through consensus, so polling it is
+   * cheap. Gated by the target's `log_visibility` setting (controllers
+   * by default - this dashboard's identity controls its own project's
+   * canisters, see this file's header), so callers must tolerate
+   * per-canister rejections. */
+  fetch_canister_logs: (args: { canister_id: import("@icp-sdk/core/principal").Principal }) => Promise<{ canister_log_records: CanisterLogRecord[] }>;
   /** Rejects if the target has any running call in flight until they
    * drain - the real IC semantics, not something this frontend needs to
    * poll for itself (the call simply doesn't resolve until stopped). */
@@ -121,10 +145,16 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     settings: Settings,
   });
   const CanisterIdArg = IDL.Record({ canister_id: IDL.Principal });
+  const CanisterLogRecord = IDL.Record({ idx: IDL.Nat64, timestamp_nanos: IDL.Nat64, content: IDL.Vec(IDL.Nat8) });
+  const FetchCanisterLogsResult = IDL.Record({ canister_log_records: IDL.Vec(CanisterLogRecord) });
 
-  // Every field genuinely `opt` on the real IC type - only `controllers` is
-  // ever actually set by this codebase (see `CanisterSettingsArg` above).
-  const CanisterSettings = IDL.Record({ controllers: IDL.Opt(IDL.Vec(IDL.Principal)) });
+  // Every field genuinely `opt` on the real IC type - this codebase sets
+  // `controllers` and `log_visibility` (see `CanisterSettingsArg` above).
+  const LogVisibility = IDL.Variant({ controllers: IDL.Null, public: IDL.Null });
+  const CanisterSettings = IDL.Record({
+    controllers: IDL.Opt(IDL.Vec(IDL.Principal)),
+    log_visibility: IDL.Opt(LogVisibility),
+  });
   const CreateCanisterArgs = IDL.Record({ settings: IDL.Opt(CanisterSettings), sender_canister_version: IDL.Opt(IDL.Nat64) });
   const CreateCanisterResult = IDL.Record({ canister_id: IDL.Principal });
   const ProvisionalCreateCanisterArgs = IDL.Record({
@@ -163,6 +193,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
 
   return IDL.Service({
     canister_status: IDL.Func([CanisterIdArg], [CanisterStatusResult], []),
+    fetch_canister_logs: IDL.Func([CanisterIdArg], [FetchCanisterLogsResult], ["query"]),
     stop_canister: IDL.Func([CanisterIdArg], [], []),
     start_canister: IDL.Func([CanisterIdArg], [], []),
     delete_canister: IDL.Func([CanisterIdArg], [], []),

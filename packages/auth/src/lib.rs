@@ -130,7 +130,7 @@ fn runtime_frontend_redirect_url() -> Option<String> {
 }
 
 #[ic_cdk::init]
-fn init() {
+fn init(_project_context: canister_hub_sdk::ProjectContext) {
     state::init_dynamic_config_store();
 }
 

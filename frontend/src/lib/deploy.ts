@@ -16,8 +16,9 @@ import { purchaseMarketplaceAccess, recordDownload } from "./marketplace";
 import { addProjectCanisters, getProject, type CanisterKind } from "./backend";
 import type { MarketplaceItem } from "../bindings/backend";
 import { runtimeValue } from "./canisterEnv";
-import { backendCanisterId } from "./actors";
 import { getModuleConfigSchema, setModuleConfig } from "./moduleConfig";
+import { findPackageInfoForRelease, packageShaHex, projectPackageCanistersByName, recordProjectPackageInstallation } from "./packageRegistry";
+import { encodeProjectContext } from "./candid/agentInit";
 
 async function managementActor(network: string): Promise<ManagementService> {
   const agent = await getAgent(network);
@@ -36,18 +37,6 @@ function slugify(s: string): string {
   return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "item";
 }
 
-function isNotificationPackage(packageSlug: string): boolean {
-  return packageSlug.toLowerCase().trim().replaceAll("-", "_") === "notification";
-}
-
-async function ensureNotificationSlotIsAvailable(projectId: string): Promise<void> {
-  const project = await getProject(projectId);
-  if (!project) throw new Error(`Project ${projectId} was not found`);
-  if (Object.values(project.canisters).some((info) => info.kind === "notification")) {
-    throw new Error("This project already has a notification canister. Share it with the new module instead of deploying another one.");
-  }
-}
-
 export interface DeployedCanister {
   name: string;
   id: string;
@@ -55,7 +44,9 @@ export interface DeployedCanister {
 
 /** Deploys one real marketplace item directly from the browser:
  * download (+ real vetKD decrypt if gated - see `lib/vetkeyDecrypt.ts`),
- * create a canister, install the code, set controllers to
+ * create a canister (with `log_visibility: controllers` so the Logs
+ * page's `fetch_canister_logs` tail works for its controllers), install
+ * the code, set controllers to
  * `[user, orchestrator]`, and record the result on the project (as the
  * project's own owner - see `lib/backend.ts::addProjectCanisters`).
  *
@@ -69,33 +60,52 @@ export interface DeployedCanister {
  * fabricated one - a known, disclosed gap, not something this function
  * silently works around. */
 export async function deployMarketplaceItem(item: MarketplaceItem, network: string, projectId: string, userPrincipal: Principal): Promise<DeployedCanister> {
-  const notification = isNotificationPackage(item.package_slug);
-  if (notification) await ensureNotificationSlotIsAvailable(projectId);
   // For a paid item this approves ICP, lets the backend pull payment with
   // ICRC-2 transfer_from, and grants the caller vetkey Read access. It is
   // idempotent, so a retry after a later deployment failure is not charged
   // again. Free items return immediately.
   await purchaseMarketplaceAccess(item);
   const wasm = await fetchMarketplaceWasm(item);
+  const packageInfo = await findPackageInfoForRelease({
+    sha: packageShaHex(item.wasm_hash),
+    title: item.package_slug,
+  });
+  const project = await getProject(projectId);
+  if (!project) throw new Error(`Project ${projectId} was not found`);
+  const initArg = encodeProjectContext({
+    projectId,
+    packageCanisters: await projectPackageCanistersByName(project),
+  });
   const actor = await managementActor(network);
 
   const { canister_id: canisterId } =
     network === "local"
-      ? await actor.provisional_create_canister_with_cycles({ amount: [], settings: [], specified_id: [], sender_canister_version: [] })
-      : await actor.create_canister({ settings: [], sender_canister_version: [] });
+      ? await actor.provisional_create_canister_with_cycles({
+          amount: [],
+          settings: [{ controllers: [], log_visibility: [{ controllers: null }] }],
+          specified_id: [],
+          sender_canister_version: [],
+        })
+      : await actor.create_canister({
+          settings: [{ controllers: [], log_visibility: [{ controllers: null }] }],
+          sender_canister_version: [],
+        });
 
   await actor.install_code({
     mode: { install: null },
     canister_id: canisterId,
     wasm_module: wasm,
-    // Valid Candid encoding of the empty argument tuple `()`.
-    arg: new Uint8Array([68, 73, 68, 76, 0, 0]),
+    arg: initArg,
     sender_canister_version: [],
   });
 
   const orchestrator = orchestratorPrincipal();
   const controllers = orchestrator ? [userPrincipal, orchestrator] : [userPrincipal];
-  await actor.update_settings({ canister_id: canisterId, settings: { controllers: [controllers] }, sender_canister_version: [] });
+  await actor.update_settings({
+    canister_id: canisterId,
+    settings: { controllers: [controllers], log_visibility: [{ controllers: null }] },
+    sender_canister_version: [],
+  });
 
   // Packages use this registry key when calling project-scoped protocol APIs.
   // It is platform-owned deployment context, not something the SME should
@@ -111,22 +121,23 @@ export async function deployMarketplaceItem(item: MarketplaceItem, network: stri
     // Packages without the dynamic-config protocol remain installable.
   }
 
-  // Project packages send owner notifications through the backend, which
-  // verifies project membership before forwarding to this canister. Trusting
-  // only that backend here keeps arbitrary project canisters from bypassing
-  // the project-scoped authorization gateway and selecting another recipient.
-  if (notification) {
-    await setModuleConfig(canisterId.toText(), network, {
-      trusted_senders: { Vector: [{ PrincipalId: backendCanisterId() }] },
-    });
-  }
-
   // A short suffix of the canister's own (globally unique) id keeps this
   // name collision-free within the project without needing to know its
   // other canister names ahead of time.
-  const name = notification ? "notification" : `${slugify(item.title)}-${canisterId.toText().slice(0, 5)}`;
-  const kind: CanisterKind = notification ? "notification" : "other";
-  await addProjectCanisters(projectId, [[name, { id: canisterId.toText(), kind }]]);
+  const name = `${slugify(item.title)}-${canisterId.toText().slice(0, 5)}`;
+  const kind: CanisterKind = "other";
+  await addProjectCanisters(projectId, [[name, {
+    id: canisterId.toText(),
+    kind,
+    packageName: packageInfo?.name ?? null,
+  }]]);
+  // Official packages have a stable package id in the release registry. Save
+  // the backend's own current version/SHA snapshot only after installation and
+  // project tracking have both succeeded. Third-party marketplace packages
+  // without a registry entry continue to install normally.
+  if (packageInfo) {
+    await recordProjectPackageInstallation(projectId, name, packageInfo.name);
+  }
   await recordDownload(item.id);
 
   return { name, id: canisterId.toText() };

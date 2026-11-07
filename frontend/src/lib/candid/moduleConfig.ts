@@ -59,6 +59,8 @@ export interface ConfigFieldSchema {
   field_type: ConfigType;
   /** Optional installed-canister filter for CanisterPicker fields. */
   canister_type: [] | [CanisterType];
+  /** Registry package name used to resolve an installed dependency. */
+  package_name: [] | [string];
   is_required: boolean;
   /** Optional for compatibility with canisters deployed before read-only
    * config fields were added. Missing means editable. */
@@ -80,10 +82,14 @@ export interface CanisterLink {
   kind: LinkKind;
 }
 
+export interface ProjectCanisterContext { canister_id: Principal; package_name: string }
+export interface ProjectContext { project_id: string; canisters: ProjectCanisterContext[] }
+
 export interface ModuleConfigService {
   get_config_schema: () => Promise<ConfigFieldSchema[]>;
   get_config: () => Promise<Array<[string, ConfigValue]>>;
   set_config: (newSettings: Array<[string, ConfigValue]>) => Promise<{ Ok: null } | { Err: string }>;
+  update_project_context: (context: ProjectContext) => Promise<{ Ok: null } | { Err: string }>;
   get_links: () => Promise<CanisterLink[]>;
 }
 
@@ -138,6 +144,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     group_description: IDL.Opt(IDL.Text),
     field_type: ConfigType,
     canister_type: IDL.Opt(CanisterType),
+    package_name: IDL.Opt(IDL.Text),
     is_required: IDL.Bool,
     is_readonly: IDL.Opt(IDL.Bool),
     default_value: IDL.Opt(ConfigValue),
@@ -146,10 +153,16 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
   const SetConfigResult = IDL.Variant({ Ok: IDL.Null, Err: IDL.Text });
   const LinkKind = IDL.Variant({ Admin: IDL.Null, Public: IDL.Null });
   const CanisterLink = IDL.Record({ label: IDL.Text, url: IDL.Text, kind: LinkKind });
+  const ProjectContext = IDL.Record({
+    project_id: IDL.Text,
+    canisters: IDL.Vec(IDL.Record({ canister_id: IDL.Principal, package_name: IDL.Text })),
+  });
+  const ResultUnit = IDL.Variant({ Ok: IDL.Null, Err: IDL.Text });
   return IDL.Service({
     get_config_schema: IDL.Func([], [IDL.Vec(ConfigFieldSchema)], ["query"]),
     get_config: IDL.Func([], [ConfigMap], ["query"]),
     set_config: IDL.Func([ConfigMap], [SetConfigResult], []),
+    update_project_context: IDL.Func([ProjectContext], [ResultUnit], []),
     get_links: IDL.Func([], [IDL.Vec(CanisterLink)], ["query"]),
   });
 };

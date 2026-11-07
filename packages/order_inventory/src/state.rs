@@ -24,6 +24,7 @@ const PAYMENTS_MEMORY_ID: MemoryId = MemoryId::new(6);
 const TRANSACTIONS_MEMORY_ID: MemoryId = MemoryId::new(7);
 const AUDIT_MEMORY_ID: MemoryId = MemoryId::new(8);
 const NEXT_AUDIT_ID_MEMORY_ID: MemoryId = MemoryId::new(9);
+const PROJECT_MEMBERS_MEMORY_ID: MemoryId = MemoryId::new(10);
 
 macro_rules! stable_cbor {
     ($type:ty) => {
@@ -52,6 +53,10 @@ stable_cbor!(Order);
 stable_cbor!(Settings);
 stable_cbor!(PaymentRecord);
 stable_cbor!(AuditEntry);
+
+#[derive(candid::CandidType, serde::Serialize, serde::Deserialize, Clone, Default)]
+struct ProjectMembers(Vec<Principal>);
+stable_cbor!(ProjectMembers);
 
 thread_local! {
     static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
@@ -83,6 +88,20 @@ thread_local! {
     static NEXT_AUDIT_ID: RefCell<StableCell<u64, Memory>> = RefCell::new(
         StableCell::init(MEMORY_MANAGER.with(|m| m.borrow().get(NEXT_AUDIT_ID_MEMORY_ID)), 1)
     );
+    static PROJECT_MEMBERS: RefCell<StableCell<ProjectMembers, Memory>> = RefCell::new(
+        StableCell::init(MEMORY_MANAGER.with(|m| m.borrow().get(PROJECT_MEMBERS_MEMORY_ID)), ProjectMembers::default())
+    );
+}
+
+pub fn set_project_members(members: Vec<Principal>) {
+    PROJECT_MEMBERS.with(|cell| {
+        cell.borrow_mut().set(ProjectMembers(members));
+    });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_project_member(principal: Principal) -> bool {
+    PROJECT_MEMBERS.with(|cell| cell.borrow().get().0.contains(&principal))
 }
 
 fn audit(order_id: Option<u64>, actor: &str, action: &str, details: String, now: u64) {
@@ -243,6 +262,7 @@ pub fn create_inventory(
         kind: input.kind,
         price_minor: input.price_minor,
         currency: input.currency,
+        payment_method: input.payment_method.unwrap_or_default(),
         image_url: input.image_url,
         stock_quantity: input.stock_quantity,
         active: true,
@@ -291,6 +311,9 @@ pub fn update_inventory(
         }
         if let Some(value) = input.currency {
             item.currency = value;
+        }
+        if let Some(value) = input.payment_method {
+            item.payment_method = value;
         }
         if let Some(value) = input.image_url {
             item.image_url = (!value.is_empty()).then_some(value);
@@ -346,11 +369,11 @@ pub fn list_inventory(active_only: bool) -> Vec<InventoryItem> {
 
 pub fn place_order(
     customer: CustomerIdentity,
+    agent_canister_id: Option<Principal>,
     input: PlaceOrder,
     actor: &str,
     now: u64,
 ) -> Result<Order, OrderError> {
-    let payment_method = input.payment_method.unwrap_or_default();
     let mut quantities = BTreeMap::<u64, u64>::new();
     for requested in input.items {
         let total = quantities.entry(requested.inventory_id).or_default();
@@ -362,6 +385,7 @@ pub fn place_order(
     let mut lines = Vec::with_capacity(quantities.len());
     let mut total_minor = 0u64;
     let mut order_currency: Option<String> = None;
+    let mut order_payment_method: Option<PaymentMethod> = None;
     for (inventory_id, quantity) in &quantities {
         let item = get_inventory(*inventory_id).ok_or_else(|| {
             OrderError::NotFound(format!("inventory item {inventory_id} not found"))
@@ -371,6 +395,15 @@ pub fn place_order(
                 "{} is not available",
                 item.name
             )));
+        }
+        match order_payment_method {
+            Some(method) if method != item.payment_method => {
+                return Err(OrderError::Conflict(
+                    "items with different vendor payment terms must be placed in separate orders".to_string(),
+                ));
+            }
+            None => order_payment_method = Some(item.payment_method),
+            _ => {}
         }
         if let Some(available) = item.stock_quantity {
             if *quantity > available {
@@ -399,12 +432,15 @@ pub fn place_order(
         lines.push(OrderLine {
             inventory_id: *inventory_id,
             name: item.name,
+            sku: item.sku.clone(),
             kind: item.kind,
             unit_price_minor: item.price_minor,
             quantity: *quantity,
             line_total_minor,
         });
     }
+
+    let payment_method = order_payment_method.unwrap_or_default();
 
     let id = take_id(&NEXT_ORDER_ID)?;
     INVENTORY.with(|items| {
@@ -435,8 +471,10 @@ pub fn place_order(
     let order = Order {
         id,
         customer,
+        agent_canister_id,
         customer_name: input.customer_name,
         customer_phone: input.customer_phone,
+        customer_email: input.customer_email,
         items: lines,
         total_minor,
         currency: currency.clone(),
@@ -448,6 +486,7 @@ pub fn place_order(
         payment_method,
         payment_status,
         payment_reference: Some(merchant_reference.clone()),
+        checkout_url: None,
         amount_paid_minor: 0,
         amount_refunded_minor: 0,
         reservation_expires_at,
@@ -481,6 +520,17 @@ pub fn place_order(
         format!("method={payment_method:?}; total_minor={total_minor}"),
         now,
     );
+    Ok(order)
+}
+
+pub fn set_checkout_url(id: u64, checkout_url: String, now: u64) -> Result<Order, OrderError> {
+    let mut order = get_order(id).ok_or_else(|| OrderError::NotFound("order not found".to_string()))?;
+    if order.payment_method != PaymentMethod::Prepaid || order.payment_status != PaymentStatus::AwaitingPayment {
+        return Err(OrderError::Conflict("checkout can only be attached to an unpaid prepaid order".to_string()));
+    }
+    order.checkout_url = Some(checkout_url);
+    order.updated_at = now;
+    ORDERS.with(|orders| orders.borrow_mut().insert(id, order.clone()));
     Ok(order)
 }
 

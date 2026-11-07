@@ -44,9 +44,6 @@ pub async fn file_and_notify(
     details: &str,
 ) -> Result<String, String> {
     let config = crate::state::get_config();
-    let Some(webhook_url) = config.admin_webhook_url.clone() else {
-        return Err("administrative escalation is not configured for this deployment - a controller must set admin_webhook_url".to_string());
-    };
 
     let now = ic_cdk::api::time();
     let id = crate::state::next_admin_request_id();
@@ -63,20 +60,36 @@ pub async fn file_and_notify(
     };
     crate::state::insert_admin_request(request.clone());
 
+    // Notify project operators through the protocol's project-scoped Web Push
+    // gateway. The ticket is persisted first; delivery is best-effort and
+    // must not prevent the customer from receiving the ticket reference.
+    crate::protocol::notify_owner(
+        &config,
+        "New support ticket",
+        &format!("Ticket #{id}: {action_type}"),
+        "/inbox#tickets",
+    )
+    .await;
+
     // Best-effort: the request is already durably recorded and the customer
     // is about to be told it was filed either way - a controller can always
     // see it via `list_admin_requests` and re-notify out of band if this
     // particular delivery attempt failed. Failing the customer's whole
     // conversation turn over a delivery hiccup would be a worse outcome
     // than a delayed notification.
-    if let Some(secret) = config.admin_webhook_secret.clone() {
-        if let Err(e) = notify_admin_webhook(&webhook_url, &secret, &request).await {
-            ic_cdk::api::debug_print(format!(
-                "agent: failed to notify admin webhook for request #{id}: {e}"
+    if let (Some(webhook_url), Some(secret)) = (
+        config.admin_webhook_url.as_deref(),
+        config.admin_webhook_secret.as_deref(),
+    ) {
+        if let Err(e) = notify_admin_webhook(webhook_url, secret, &request).await {
+            crate::log_error(format!(
+                "failed to notify admin webhook for request #{id}: {e}"
             ));
         }
     } else {
-        ic_cdk::api::debug_print(format!("agent: admin_webhook_secret is not configured - sent request #{id} unsigned is not possible, skipping notification"));
+        crate::log_info(format!(
+            "admin webhook skipped for ticket #{id}; ticket remains available in the operator inbox"
+        ));
     }
 
     Ok(format!("Your request has been filed (reference #{id}) and forwarded to our team. We'll follow up as soon as possible."))

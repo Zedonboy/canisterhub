@@ -31,11 +31,12 @@ mod whatsapp;
 // Re-exported so integration tests (`tests/agent_tests.rs`) can
 // encode/decode candid calls against real Rust types instead of hand-
 // building candid values.
-pub use config::{Config, ConfigUpdate};
+pub use config::{Config, ConfigUpdate, ProjectCanister, ProjectContext};
 pub use http::{HttpRequest, HttpResponse};
 pub use messages::{
     AdminRequest, AdminRequestStatus, AgentStats, AiCanister, AiContext, AiMethod, AuthResult,
-    Channel, ConversationState, ConversationSummary, IncomingMessage, MailMessage, MessagePayload,
+    BusinessMessage, Channel, ClientDataKind, ClientDataRequest, ClientDataValue,
+    ConversationState, ConversationSummary, IncomingMessage, MailMessage, MessagePayload,
     OutboundMessage, Role, StoredChatMessage, StoredMessage, TelegramMessage, WhatsAppMessage,
 };
 
@@ -44,6 +45,18 @@ use dynamic_config::{CanisterLink, ConfigFieldSchema, ConfigValue};
 use messages::{SessionKey, CONSOLE_SESSION};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
+
+pub(crate) fn log_info(message: impl AsRef<str>) {
+    ic_cdk::api::debug_print(format!("[agent][INFO] {}", message.as_ref()));
+}
+
+pub(crate) fn log_warn(message: impl AsRef<str>) {
+    ic_cdk::api::debug_print(format!("[agent][WARN] {}", message.as_ref()));
+}
+
+pub(crate) fn log_error(message: impl AsRef<str>) {
+    ic_cdk::api::debug_print(format!("[agent][ERROR] {}", message.as_ref()));
+}
 
 thread_local! {
     static PENDING_SESSIONS: RefCell<BTreeSet<SessionKey>> = const { RefCell::new(BTreeSet::new()) };
@@ -82,6 +95,7 @@ fn require_controller() -> Result<(), String> {
     if ic_cdk::api::is_controller(&ic_cdk::api::msg_caller()) {
         Ok(())
     } else {
+        log_warn("controller-only call rejected");
         Err("only a controller may call this method".to_string())
     }
 }
@@ -110,17 +124,24 @@ fn require_authorized(
 }
 
 #[ic_cdk::init]
-fn init(config: Option<Config>) {
-    // Marketplace deployment intentionally installs modules without an init
-    // argument. Treat that as an empty configuration so controllers can
-    // finish setup through the dynamic configuration API after installation.
-    state::set_config(config.unwrap_or_default());
+fn init(project_context: ProjectContext) {
+    let context_canisters = project_context.canisters.len();
+    let config =
+        dynamic_config::prefill_from_project_context(Config::default(), Some(&project_context));
+    let provider = config.llm_provider.as_deref().unwrap_or("managed");
+    log_info(format!(
+        "initializing provider={provider} project_configured={} context_canisters={context_canisters}",
+        config.project_id.is_some()
+    ));
+    state::set_config(config);
     assets::certify();
+    log_info("initialization complete; certified assets ready");
 }
 
 #[ic_cdk::post_upgrade]
 fn post_upgrade() {
     assets::certify();
+    log_info("post-upgrade recovery complete; certified assets refreshed");
 }
 
 // ---------------------------------------------------------------------------
@@ -136,13 +157,45 @@ async fn receive_message(msg: IncomingMessage) -> Result<(), String> {
 }
 
 async fn process_message(msg: IncomingMessage) -> Result<(), String> {
+    process_message_with_client_data(msg, None).await
+}
+
+async fn process_message_with_client_data(
+    mut msg: IncomingMessage,
+    client_data: Option<(Option<u64>, ClientDataValue)>,
+) -> Result<(), String> {
     let config = state::get_config();
     let customer = SessionKey::from(&msg);
-    let notification_preview = msg.text.clone();
+    log_info(format!(
+        "message processing started channel={:?} input_chars={} client_data={}",
+        customer.channel,
+        msg.text.chars().count(),
+        client_data.is_some()
+    ));
     // Held for the rest of this function - see `SessionGuard`'s doc comment.
     let _guard = SessionGuard::new(customer.clone())?;
+    if let Some((request_id, value)) = client_data {
+        // Native clients may share a location spontaneously. Treat it as an
+        // ordinary structured message when nothing is pending; when a request
+        // is pending, validate and consume that exact request.
+        if request_id.is_some() || state::get_client_data_request(&customer).is_some() {
+            let (_request, text) = state::consume_client_data(&customer, request_id, &value)?;
+            msg.text = text;
+        }
+    } else if state::get_client_data_request(&customer)
+        .is_some_and(|request| request.kind == ClientDataKind::Location)
+    {
+        if let Some(value) = ClientDataValue::parse_location_text(&msg.text) {
+            let (_request, text) = state::consume_client_data(&customer, None, &value)?;
+            msg.text = text;
+        }
+    } else {
+        state::consume_typed_client_data(&customer, &msg.text);
+    }
+    let notification_preview = msg.text.clone();
 
     let history = state::get_conversation(&customer).to_rig_history();
+    let history_messages = history.len();
     let reply_text = llm::run_agent_loop(&customer, &config, history, &msg.text).await;
     state::record_turn();
 
@@ -175,7 +228,16 @@ async fn process_message(msg: IncomingMessage) -> Result<(), String> {
         .await;
     }
 
-    outbound::reply_to_customer(&config, &customer, &reply_text).await
+    outbound::reply_to_customer(&config, &customer, &reply_text).await?;
+    if let Some(request) = state::get_client_data_request(&customer) {
+        outbound::send_client_data_request(&config, &customer, &request).await?;
+    }
+    log_info(format!(
+        "message processing completed channel={:?} history_messages={history_messages} reply_chars={}",
+        customer.channel,
+        reply_text.chars().count()
+    ));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +277,10 @@ fn http_request(req: HttpRequest) -> HttpResponse {
 #[ic_cdk::update]
 async fn http_request_update(req: HttpRequest) -> HttpResponse {
     let (path, _) = http::path_and_query(&req.url);
+    log_info(format!(
+        "webhook update received method={} path={path}",
+        req.method
+    ));
     match (req.method.as_str(), path) {
         ("POST", ADMIN_WEBHOOK_PATH) => handle_admin_callback(&req).await,
         ("POST", WHATSAPP_PATH) => handle_whatsapp(&req),
@@ -237,8 +303,8 @@ async fn handle_admin_callback(req: &HttpRequest) -> HttpResponse {
         };
         if let Err(e) = outbound::reply_to_customer(&state::get_config(), &customer, message).await
         {
-            ic_cdk::api::debug_print(format!(
-                "agent: failed to relay admin callback #{} to customer: {e}",
+            log_error(format!(
+                "failed to relay admin callback #{} to customer: {e}",
                 updated.id
             ));
         }
@@ -248,10 +314,12 @@ async fn handle_admin_callback(req: &HttpRequest) -> HttpResponse {
 
 fn store_and_process(payload: MessagePayload) {
     let message = state::insert_message(payload);
+    log_info(format!("inbound message stored id={}", message.id));
     if let Some(incoming) = message.payload.incoming() {
+        let client_data = message.payload.client_data().map(|value| (None, value));
         ic_cdk::futures::spawn(async move {
-            if let Err(e) = process_message(incoming).await {
-                ic_cdk::api::debug_print(format!("agent: inbound message processing failed: {e}"));
+            if let Err(e) = process_message_with_client_data(incoming, client_data).await {
+                log_error(format!("inbound message processing failed: {e}"));
             }
         });
     }
@@ -262,10 +330,15 @@ fn handle_whatsapp(req: &HttpRequest) -> HttpResponse {
         return HttpResponse::text(503, "whatsapp_app_secret is not configured");
     };
     if !whatsapp::verify_signature(&req.body, whatsapp::header_signature(req), &secret) {
+        log_warn("WhatsApp webhook rejected: invalid signature");
         return HttpResponse::text(401, "invalid signature");
     }
     match whatsapp::parse_messages(&req.body) {
         Ok(messages) => {
+            log_info(format!(
+                "WhatsApp webhook accepted messages={}",
+                messages.len()
+            ));
             for message in messages {
                 store_and_process(MessagePayload::WhatsApp(message));
             }
@@ -280,10 +353,12 @@ fn handle_telegram(req: &HttpRequest) -> HttpResponse {
         return HttpResponse::text(503, "telegram_secret_token is not configured");
     };
     if !telegram::verify_secret(req, &secret) {
+        log_warn("Telegram webhook rejected: invalid secret token");
         return HttpResponse::text(401, "invalid secret token");
     }
     match telegram::parse_update(&req.body) {
         Ok(Some(message)) => {
+            log_info("Telegram webhook accepted one message");
             store_and_process(MessagePayload::Telegram(message));
             HttpResponse::text(200, "ok")
         }
@@ -299,14 +374,75 @@ fn receive_mail(mail: MailMessage) -> Result<(), String> {
         state::get_config().mail_bridge_principal,
         "mail bridge",
     )?;
+    log_info("mail bridge message accepted");
     store_and_process(MessagePayload::Mail(mail));
     Ok(())
 }
 
 #[ic_cdk::update]
-async fn send_message(message: OutboundMessage) -> Result<(), String> {
+async fn send_message(message: BusinessMessage) -> Result<(), String> {
+    let caller = ic_cdk::api::msg_caller();
+    let config = state::get_config();
+    if caller == Principal::anonymous()
+        || (!ic_cdk::api::is_controller(&caller)
+            && config.inventory_canister_id != Some(caller)
+            && config.restaurant_canister_id != Some(caller))
+    {
+        return Err("send_message is restricted to controllers and configured inventory or restaurant packages".to_string());
+    }
+    if message.session_id.trim().is_empty() || message.session_id.len() > 512 {
+        return Err("invalid customer session".to_string());
+    }
+    validate_chat_text(&message.text)?;
+    let channel = state::resolve_channel_for_session(&message.session_id)?;
+    if channel == Channel::Web {
+        let principal = Principal::from_text(&message.session_id)
+            .map_err(|_| "web session_id must be a customer principal".to_string())?;
+        if principal == Principal::anonymous() || message.session_id == CONSOLE_SESSION {
+            return Err("invalid web customer session".to_string());
+        }
+    }
+
+    let routed_message = OutboundMessage {
+        channel,
+        session_id: message.session_id,
+        text: message.text,
+        subject: message.subject,
+    };
+    outbound::send(&config, &routed_message).await?;
+    let customer = SessionKey {
+        channel,
+        session_id: routed_message.session_id,
+    };
+    state::append_messages(
+        &customer,
+        vec![StoredChatMessage {
+            role: Role::Assistant,
+            content: routed_message.text,
+            at: ic_cdk::api::time(),
+        }],
+    );
+    log_info(format!(
+        "business package message delivered caller={caller} channel={channel:?}",
+    ));
+    Ok(())
+}
+
+/// Refreshes the project inventory identity used by the package-to-agent
+/// customer messaging boundary. The dashboard calls this after project
+/// canisters change; only a controller may replace the trusted package ID.
+#[ic_cdk::update]
+fn update_project_context(context: ProjectContext) -> Result<(), String> {
     require_controller()?;
-    outbound::send(&state::get_config(), &message).await
+    let mut config = state::get_config();
+    config.inventory_canister_id = context.canister_for_package("order_inventory.wasm");
+    config.restaurant_canister_id = context.canister_for_package("restaurant.wasm");
+    state::set_config(config);
+    log_info(format!(
+        "project context refreshed inventory_configured={}",
+        state::get_config().inventory_canister_id.is_some()
+    ));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +596,7 @@ async fn operator_reply(channel: Channel, session_id: String, text: String) -> R
             at: ic_cdk::api::time(),
         }],
     );
+    log_info(format!("operator reply delivered channel={channel:?}"));
     Ok(())
 }
 
@@ -470,6 +607,10 @@ async fn operator_reply(channel: Channel, session_id: String, text: String) -> R
 async fn console_message(text: String) -> Result<String, String> {
     require_controller()?;
     validate_chat_text(&text)?;
+    log_info(format!(
+        "owner console message accepted chars={}",
+        text.chars().count()
+    ));
     let key = SessionKey {
         channel: Channel::Web,
         session_id: CONSOLE_SESSION.to_string(),
@@ -500,6 +641,10 @@ async fn web_send(text: String, display_name: Option<String>) -> Result<(), Stri
     let caller = require_signed_in()?;
     validate_chat_text(&text)?;
     check_web_rate_limit(caller, ic_cdk::api::time())?;
+    log_info(format!(
+        "web message accepted chars={}",
+        text.chars().count()
+    ));
     let key = web_session(caller);
     if let Some(name) = display_name {
         let mut profile = state::get_customer_profile(&key);
@@ -511,6 +656,44 @@ async fn web_send(text: String, display_name: Option<String>) -> Result<(), Stri
         session_id: key.session_id,
         text,
     })
+    .await
+}
+
+/// The current web customer's pending client-side request, if the model has
+/// asked the browser to collect one. It is keyed by the caller's principal;
+/// callers cannot inspect another customer's request.
+#[ic_cdk::query]
+fn web_pending_client_data() -> Result<Option<ClientDataRequest>, String> {
+    let caller = require_signed_in()?;
+    Ok(state::get_client_data_request(&web_session(caller)))
+}
+
+/// Supplies a value collected by the web client, then runs it through the
+/// normal agent loop as the customer's next turn. The request id prevents a
+/// stale browser control from answering a newer request.
+#[ic_cdk::update]
+async fn web_submit_client_data(
+    request_id: u64,
+    value: ClientDataValue,
+    display_name: Option<String>,
+) -> Result<(), String> {
+    let caller = require_signed_in()?;
+    check_web_rate_limit(caller, ic_cdk::api::time())?;
+    log_info(format!("web client data submitted request_id={request_id}"));
+    let key = web_session(caller);
+    if let Some(name) = display_name {
+        let mut profile = state::get_customer_profile(&key);
+        profile.display_name = clean_display_name(&name);
+        state::set_customer_profile(&key, profile);
+    }
+    process_message_with_client_data(
+        IncomingMessage {
+            channel: key.channel,
+            session_id: key.session_id,
+            text: String::new(),
+        },
+        Some((Some(request_id), value)),
+    )
     .await
 }
 
@@ -534,6 +717,7 @@ fn update_config(update: ConfigUpdate) -> Result<(), String> {
     require_controller()?;
     state::set_config(state::get_config().apply(update));
     assets::certify();
+    log_info("legacy runtime configuration updated");
     Ok(())
 }
 
@@ -569,6 +753,17 @@ fn list_admin_requests(offset: u64, limit: u64) -> Result<Vec<AdminRequest>, Str
     Ok(state::list_admin_requests(offset, limit))
 }
 
+/// Mark a human-handled ticket as completed.
+#[ic_cdk::update]
+fn complete_admin_request(id: u64) -> Result<AdminRequest, String> {
+    require_controller()?;
+    state::update_admin_request(id, |request| {
+        request.status = AdminRequestStatus::Completed;
+        request.updated_at = ic_cdk::api::time();
+    })?;
+    state::get_admin_request(id).ok_or_else(|| format!("ticket #{id} was not found after update"))
+}
+
 #[ic_cdk::query]
 fn get_message(id: u64) -> Result<Option<StoredMessage>, String> {
     require_controller()?;
@@ -586,6 +781,9 @@ async fn add_canister(canister_id: Principal) -> Result<AiCanister, String> {
     require_controller()?;
     let discovered = remote_tools::discover(canister_id).await?;
     state::set_ai_canister(discovered.clone());
+    log_info(format!(
+        "AI tool canister registered canister_id={canister_id}"
+    ));
     Ok(discovered)
 }
 
@@ -594,6 +792,9 @@ fn remove_canister(canister_id: Principal) -> Result<(), String> {
     require_controller()?;
     state::remove_ai_canister(canister_id)
         .ok_or_else(|| "canister is not registered".to_string())?;
+    log_info(format!(
+        "AI tool canister removed canister_id={canister_id}"
+    ));
     Ok(())
 }
 

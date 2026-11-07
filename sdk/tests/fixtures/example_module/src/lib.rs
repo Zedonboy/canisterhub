@@ -38,7 +38,11 @@ pub struct ModuleConfig {
     pub tier: String,
     #[config(label = "Upstream Canister", canister_picker)]
     pub upstream: Option<Principal>,
-    #[config(label = "Auth Canister", canister_type = "auth")]
+    #[config(
+        label = "Auth Canister",
+        canister_type = "auth",
+        package_name = "auth.wasm"
+    )]
     pub auth_canister: Option<Principal>,
     #[config(label = "Allowed Origins")]
     pub allowed_origins: Vec<String>,

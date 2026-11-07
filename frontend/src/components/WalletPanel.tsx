@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Input";
 import { Dialog, DialogHeader, DialogContent, DialogFooter } from "@/components/ui/Dialog";
+import { Select } from "@/components/ui/Select";
 import { toast } from "@/components/Toast";
 import { useAuth } from "@/lib/auth";
 import {
@@ -136,19 +137,16 @@ function TransferDialog({ mode, tokens, network, onClose, onDone }: { mode: "sen
           <>
             <div>
               <Label htmlFor="wallet-token">Token</Label>
-              <select
+              <Select
                 id="wallet-token"
                 value={tokenId}
-                onChange={(e) => setTokenId(e.target.value)}
+                onChange={setTokenId}
                 disabled={busy}
-                className="w-full px-3 py-2 text-sm bg-[#0a0e1a] border border-[#1e2d47] rounded text-[#e2e8f0] focus:outline-none focus:border-[#00d4ff] focus:ring-1 focus:ring-[#00d4ff33] transition-colors"
-              >
-                {usableTokens.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.symbol} — {formatTokenAmount(t.balance!, t.decimals)} available
-                  </option>
-                ))}
-              </select>
+                options={usableTokens.map((t) => ({
+                  value: t.id,
+                  label: `${t.symbol} — ${formatTokenAmount(t.balance!, t.decimals)} available`,
+                }))}
+              />
             </div>
             <div>
               <Label htmlFor="wallet-target">{isSend ? "Recipient principal" : "Spender principal"}</Label>

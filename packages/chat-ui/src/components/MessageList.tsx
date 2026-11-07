@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { clsx } from "clsx";
 import type { ChatMessage, SenderRole } from "@/lib/chat";
 import { clockTime, dayLabel } from "@/lib/format";
+import { MessageContent } from "./AutoMedia";
 
 export interface BubbleLabels {
   /** Which role renders on the right-hand ("me") side. */
@@ -21,7 +22,7 @@ function Bubble({ m, mine, name }: { m: ChatMessage; mine: boolean; name: string
       <span className="text-[10px] text-c-faint mb-0.5 px-1">
         {name} · {clockTime(m.at)}
       </span>
-      <div className={clsx("px-3 py-2 rounded-lg border text-sm whitespace-pre-wrap break-words", tone)}>{m.text}</div>
+      <div className={clsx("px-3 py-2 rounded-lg border text-sm break-words [&_pre]:max-w-full", tone)}><MessageContent text={m.text} /></div>
     </div>
   );
 }

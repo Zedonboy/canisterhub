@@ -15,8 +15,10 @@ import { useAuth } from "@/lib/auth";
 import { WalletPanel } from "@/components/WalletPanel";
 import {
   formatTokenAmount, parseTokenAmount, getCyclesMintingRate, mintCyclesFromIcp,
-  CYCLES_LEDGER_CANISTER_ID, type TokenBalance,
+  getCyclesMintTransactions, CYCLES_LEDGER_CANISTER_ID, type TokenBalance,
+  type CyclesMintTransaction,
 } from "@/lib/wallet";
+import { Principal } from "@icp-sdk/core/principal";
 import { topUpCanister } from "@/lib/runtime";
 import { getAllCanisterStats, totalBurnRatePerDay, type CanisterStats } from "@/lib/canisterStats";
 import { CANISTER_KIND_LABELS, type CanisterKind } from "@/lib/backend";
@@ -191,6 +193,16 @@ function ServiceRow({
   );
 }
 
+/** The IC API boundary rejects EVERY signed call with HTTP 400 once the
+ * sign-in session delegation expires (the 400 body literally says
+ * "Invalid delegation expiry: Specified sender delegation has expired") -
+ * balances and mint history fail identically, so the page should say
+ * "sign in again" instead of looking broken. Verified against ic0.app
+ * with an intentionally expired delegation. */
+function isSessionExpiryError(message: string | undefined): boolean {
+  return !!message && (message.includes("delegation has expired") || message.includes("Invalid delegation"));
+}
+
 /** "displays Wallet Token balance...like a Tokens balance screen like
  * Metamask UI" (the user's own framing), merged with the former Billing
  * page's cycles/top-up section (the user's own instruction: "Billing and
@@ -207,8 +219,9 @@ function ServiceRow({
  * Balance card, and cycles alert box all later moved to `Analytics.tsx`
  * (the user's own instructions) - this page keeps the summary cards,
  * Usage Breakdown (now real, grouped by service with a real per-canister
- * top-up action), and Top-Up History, which remains disclosed sample data.
- * The project-wide ICP-to-cycles mint and balance/burn-rate values are real. */
+ * top-up action), and Top-Up History (real cycles mints read through the
+ * Cycles Ledger's own ICRC-1 index, not sample data). The project-wide
+ * ICP-to-cycles mint and balance/burn-rate values are real. */
 export default function WalletPage() {
   const { job } = useOutletContext<ProjectContext>();
   const { principal } = useAuth();
@@ -223,6 +236,10 @@ export default function WalletPage() {
   const [canisterStats, setCanisterStats] = useState<Record<string, CanisterStats> | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [topUpTarget, setTopUpTarget] = useState<{ id: string; name: string } | null>(null);
+  // Real Top-Up History state - cycles mints credited to the signed-in
+  // principal's default Cycles Ledger account (see the effect below).
+  const [mints, setMints] = useState<CyclesMintTransaction[] | null>(null);
+  const [mintsError, setMintsError] = useState<string | null>(null);
 
   const network = job?.network ?? "ic";
 
@@ -292,7 +309,9 @@ export default function WalletPage() {
       sub: tokens === null
         ? "Loading…"
         : cyclesToken?.error
-          ? <span className="inline-flex items-center gap-1 text-[#ffab40]"><TriangleAlert size={11} /> Balance unavailable</span>
+          ? isSessionExpiryError(cyclesToken.error)
+            ? <span className="inline-flex items-center gap-1 text-[#ffab40]"><TriangleAlert size={11} /> Session expired - sign in again</span>
+            : <span className="inline-flex items-center gap-1 text-[#ffab40]"><TriangleAlert size={11} /> Balance unavailable</span>
           : `${pct}% capacity`,
       icon: () => <CreditCard size={16} />,
       variant: cyclesRaw === null ? "gray" : pct > 50 ? "green" : pct > 20 ? "amber" : "red",
@@ -313,11 +332,32 @@ export default function WalletPage() {
     },
   ];
 
-  const invoices = [
-    { id: "INV-001", date: "2026-02-01", amount: "50 ICP", cycles: "550T", status: "paid" },
-    { id: "INV-002", date: "2026-01-01", amount: "50 ICP", cycles: "545T", status: "paid" },
-    { id: "INV-003", date: "2025-12-01", amount: "100 ICP", cycles: "1,090T", status: "paid" },
-  ];
+  // Real Top-Up History: cycles mints credited to the signed-in principal's
+  // default Cycles Ledger account, read through the ledger's own ICRC-1
+  // index (see `getCyclesMintTransactions`'s own doc comment). Reloads on
+  // the same signal as the balances above, so a mint confirmed by the
+  // dialog below appears in the list immediately.
+  useEffect(() => {
+    if (!principal) {
+      setMints(null);
+      setMintsError(null);
+      return;
+    }
+    let active = true;
+    setMintsError(null);
+    getCyclesMintTransactions(network, Principal.fromText(principal))
+      .then((result) => {
+        if (active) setMints(result);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setMints([]);
+        setMintsError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, [principal, network, walletReloadSignal]);
 
   let topUpAmountE8s: bigint | null = null;
   try {
@@ -427,19 +467,36 @@ export default function WalletPage() {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle>Top-Up History</CardTitle></CardHeader>
+            <CardHeader>
+              <CardTitle>Top-Up History</CardTitle>
+              <span className="text-[10px] text-[#4a5568]">Cycles minted into your Cycles Ledger balance</span>
+            </CardHeader>
             <CardContent className="p-0">
-              {invoices.map((inv) => (
-                <div key={inv.id} className="flex items-center justify-between px-4 py-2.5 border-b border-[#162035] last:border-0 text-xs">
+              {mintsError ? (
+                <p className="text-xs text-[#ffab40] p-4">
+                  {isSessionExpiryError(mintsError)
+                    ? "Your session has expired - sign in again to see top-up history."
+                    : `Couldn't load mint history: ${mintsError}`}
+                </p>
+              ) : mints === null ? (
+                <p className="text-xs text-[#4a5568] p-4">Loading mint history…</p>
+              ) : mints.length === 0 ? (
+                <p className="text-xs text-[#4a5568] p-4">
+                  {principal ? "No cycle mints yet for this identity." : "Sign in to see top-up history."}
+                </p>
+              ) : mints.map((mint) => (
+                <div key={mint.blockIndex.toString()} className="flex items-center justify-between px-4 py-2.5 border-b border-[#162035] last:border-0 text-xs">
                   <div>
-                    <div className="font-mono text-[#e2e8f0]">{inv.id}</div>
-                    <div className="text-[#4a5568]">{inv.date}</div>
+                    <div className="font-mono text-[#e2e8f0]">#{mint.blockIndex.toString()}</div>
+                    <div className="text-[#4a5568]">
+                      {new Date(Number(mint.timestampNanos / 1_000_000n)).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}
+                    </div>
                   </div>
                   <div className="text-right">
-                    <div className="text-[#e2e8f0]">{inv.amount}</div>
-                    <div className="text-[#4a5568] font-mono">{inv.cycles}</div>
+                    <div className="text-[#e2e8f0]">{formatTokenAmount(mint.minted, 12)}</div>
+                    <div className="text-[#4a5568] font-mono">cycles</div>
                   </div>
-                  <Badge variant="green">{inv.status}</Badge>
+                  <Badge variant="green">minted</Badge>
                 </div>
               ))}
             </CardContent>

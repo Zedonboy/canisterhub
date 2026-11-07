@@ -39,10 +39,27 @@ import type { DerEncodedPublicKey } from "@icp-sdk/core/agent";
 import { Principal } from "@icp-sdk/core/principal";
 import { resolveDelegationIdentity } from "./auth";
 
-/** 1 hour - short-lived on purpose: this is real signing authority for the
- * project's canisters, handed to an embedded module, not a whole dashboard
- * session. */
-const DELEGATION_TTL_MS = 60 * 60 * 1000;
+/** Leave a small margin so the dashboard does not mint a child delegation
+ * that is already unusable by the time the response reaches the iframe. */
+const MIN_PARENT_SESSION_REMAINING_MS = 5_000;
+
+function parentSessionExpiration(parentIdentity: import("@icp-sdk/core/identity").DelegationIdentity): Date | null {
+  const delegations = parentIdentity.getDelegation().delegations;
+  if (delegations.length === 0) return null;
+
+  // A delegation chain is only as long-lived as its earliest link. Matching
+  // that expiry lets embedded widgets stay authenticated for the full parent
+  // session without minting a child delegation that outlives its authority.
+  const expirationNs = delegations.reduce(
+    (earliest, signed) => signed.delegation.expiration < earliest ? signed.delegation.expiration : earliest,
+    delegations[0].delegation.expiration,
+  );
+  const expirationMs = Number(expirationNs / 1_000_000n);
+  if (!Number.isFinite(expirationMs) || expirationMs <= Date.now() + MIN_PARENT_SESSION_REMAINING_MS) {
+    return null;
+  }
+  return new Date(expirationMs);
+}
 
 function hexToBytes(hex: string): Uint8Array {
   if (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0) {
@@ -104,6 +121,11 @@ export function setupModuleDelegationBridge(
       reply({ type: "MODULE_DELEGATION_UNAVAILABLE", reason: "not signed in" });
       return;
     }
+    const expiration = parentSessionExpiration(parentIdentity);
+    if (!expiration) {
+      reply({ type: "MODULE_DELEGATION_UNAVAILABLE", reason: "parent session expired" });
+      return;
+    }
 
     let modulePublicKey: Ed25519PublicKey;
     try {
@@ -117,7 +139,7 @@ export function setupModuleDelegationBridge(
     // nothing that isn't one of them.
     const extra = [...new Set((await projectCanisterIds).filter((id) => id !== allowedCanisterId))];
 
-    const chain = await DelegationChain.create(parentIdentity, modulePublicKey, new Date(Date.now() + DELEGATION_TTL_MS), {
+    const chain = await DelegationChain.create(parentIdentity, modulePublicKey, expiration, {
       previous: parentIdentity.getDelegation(),
       targets: [allowedCanisterId, ...extra].map((id) => Principal.fromText(id)),
     });

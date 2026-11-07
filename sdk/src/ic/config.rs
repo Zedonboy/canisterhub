@@ -87,13 +87,18 @@
 //!   collected together; metadata only needs to be declared on one of them.
 //! - `default = <literal>` (marks the field optional; literal type must match the field)
 //! - `multiline` (`String`/`Option<String>` only -> `ConfigType::TextArea`)
-//! - `secret` (`String`/`Option<String>` only -> `ConfigType::SecretText`, masked by `get_config` for non-controllers)
+//! - `secret` (`String`/`Option<String>` only -> `ConfigType::SecretText`,
+//!   **write-only**: `get_config` returns [`MASKED_SECRET`] for it no
+//!   matter who asks - see the "Secret egress" note in "Endpoint
+//!   semantics" below)
 //! - `readonly` (shown to settings clients but rejected by `set_config`;
 //!   canister code populates it with [`set_readonly`]). Combine it with
 //!   `secret` when the value itself is sensitive.
 //! - `select(options = ["a", "b"])` (`String`/`Option<String>` only -> `ConfigType::Select`; a `default` must be one of `options`)
 //! - `canister_picker` or `canister_picker(module_type = "...")` (`Principal`/`Option<Principal>` only -> `ConfigType::CanisterPicker`)
 //! - `canister_type = "auth" | "storage" | "database" | "custom"`
+//! - `package_name = "<artifact>.wasm"` associates a Principal picker
+//!   with an installable package so project context can prefill it
 //!   (`Principal`, `Vec<Principal>`, or optional forms). This is typed
 //!   metadata for a canister picker. If omitted, consumers must treat it as
 //!   `custom`.
@@ -137,9 +142,14 @@
 //!   merge** (keys you don't mention keep their current value). After
 //!   merging, every `is_required` field must be present in the result or
 //!   the whole call is rejected - nothing is partially applied.
-//! - `get_config` **masks `SecretText` fields** (`"••••••••"`) for any
-//!   caller that isn't a controller, since a plain unauthenticated query is
-//!   exactly the channel a settings UI reads it over. Internal code always
+//! - `get_config` **masks `SecretText` fields** (`"••••••••"`) for every
+//!   caller, controllers included. Secrets are write-only: a controller
+//!   principal is exactly what a settings UI or an embedded module page
+//!   acts as, so letting controllers read the plaintext back would hand it
+//!   to any browser session (and, through the dashboard's module
+//!   delegation, to any embedded third-party page) - the "secret egress"
+//!   problem. Presence of the key still tells a settings client the secret
+//!   is set; changing it is a `set_config` write. Internal code always
 //!   sees the real value via the env mirror, which isn't caller-scoped.
 //! - `get_links` is a public query returning the webpages declared by
 //!   `#[config_links((label, url, kind), ...)]`, in declaration order. The
@@ -181,8 +191,8 @@ pub enum ConfigType {
     CanisterPicker {
         module_type_filter: Option<String>,
     },
-    /// Same wire shape as `Text`; `get_config` masks the value for any
-    /// caller that isn't a controller (see this module's doc comment).
+    /// Same wire shape as `Text`; `get_config` masks the value for every
+    /// caller (see this module's doc comment - secrets are write-only).
     SecretText,
     /// A repeatable setting whose entries all share one scalar type. The
     /// settings UI renders this as a list with per-entry Add/Remove controls.
@@ -295,6 +305,10 @@ pub struct ConfigFieldSchema {
     /// Optional typed filter for canister-picker fields. `None` has the
     /// same meaning as `Some(CanisterType::Custom)`.
     pub canister_type: Option<CanisterType>,
+    /// Optional `.wasm` artifact name for a canister dependency. Package
+    /// installers can use this to prefill the picker from the project's
+    /// already-installed canisters without matching project canister labels.
+    pub package_name: Option<String>,
     pub is_required: bool,
     /// `Some(true)` means this value is canister-provided display data and
     /// cannot be changed through `set_config`. Optional on the wire so new
@@ -380,6 +394,31 @@ thread_local! {
     static CHANGE_HOOK: RefCell<Option<fn()>> = const { RefCell::new(None) };
 }
 
+// Stored alongside config in the existing stable cell so upgrades do not
+// need to reserve another stable-memory segment. Never expose this key to
+// settings clients or the env mirror.
+const USER_CONFIGURED_KEY: &str = "__canister_hub_user_configured_keys";
+
+fn user_configured(map: &HashMap<String, ConfigValue>) -> Vec<String> {
+    match map.get(USER_CONFIGURED_KEY) {
+        Some(ConfigValue::Vector(values)) => values.iter().filter_map(|value| match value {
+            ConfigVectorValue::Text(key) => Some(key.clone()),
+            _ => None,
+        }).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn record_user_configured(map: &mut HashMap<String, ConfigValue>, keys: impl IntoIterator<Item = String>) {
+    let mut configured = user_configured(map);
+    for key in keys {
+        if !configured.contains(&key) { configured.push(key); }
+    }
+    map.insert(USER_CONFIGURED_KEY.to_string(), ConfigValue::Vector(
+        configured.into_iter().map(ConfigVectorValue::Text).collect(),
+    ));
+}
+
 const NOT_INITIALIZED: &str =
     "canister_hub_sdk: config store not initialized - call canister_hub_sdk::ic::config::init_stable_store in #[init] and #[post_upgrade]";
 
@@ -393,6 +432,17 @@ pub fn init_stable_store<T: ConfigSchema>(memory: Memory) {
     let mut merged = cell.get().0.clone();
     for (key, value) in T::defaults() {
         merged.entry(key).or_insert(value);
+    }
+    // Older versions did not persist edit provenance. Preserve any existing
+    // package-linked values as user-owned rather than risk overwriting a
+    // setting someone edited before upgrading.
+    if !merged.contains_key(USER_CONFIGURED_KEY) {
+        let existing_package_fields: Vec<String> = T::schema().into_iter()
+            .filter(|field| field.package_name.is_some() && merged.contains_key(&field.key))
+            .map(|field| field.key).collect();
+        if !existing_package_fields.is_empty() {
+            record_user_configured(&mut merged, existing_package_fields);
+        }
     }
     STORE.with(|s| {
         let mut s = s.borrow_mut();
@@ -408,7 +458,8 @@ pub fn init_stable_store<T: ConfigSchema>(memory: Memory) {
 }
 
 fn mirror_env(map: &HashMap<String, ConfigValue>) {
-    ENV.with(|e| *e.borrow_mut() = map.clone());
+    ENV.with(|e| *e.borrow_mut() = map.iter().filter(|(key, _)| key.as_str() != USER_CONFIGURED_KEY)
+        .map(|(key, value)| (key.clone(), value.clone())).collect());
 }
 
 fn get_raw() -> HashMap<String, ConfigValue> {
@@ -438,22 +489,25 @@ pub fn set_change_hook(callback: fn()) {
     CHANGE_HOOK.with(|hook| *hook.borrow_mut() = Some(callback));
 }
 
-fn caller_is_controller() -> bool {
-    ic_cdk::api::is_controller(&ic_cdk::api::msg_caller())
-}
+/// What `get_config` substitutes for a stored `SecretText` value. Secrets
+/// are write-only: this exact literal is what every caller - controller or
+/// not - sees, so settings UIs can distinguish "set" (key present, masked)
+/// from "unset" (key absent) without ever receiving the real value.
+pub const MASKED_SECRET: &str = "••••••••";
 
-/// Masks every `SecretText` field's value unless the caller is a
-/// controller - see this module's doc comment for why the masking has to
-/// happen here, not client-side.
+/// Masks every `SecretText` field's value. This deliberately applies to
+/// controllers too: controller principals are exactly the identities a
+/// settings UI or an embedded module page acts as, and the plaintext must
+/// never cross the candid boundary into a browser (see this module's doc
+/// comment - "secret egress"). Internal code still reads the real value
+/// through the env mirror, which is canister code, not a caller-scoped
+/// endpoint.
 fn mask_secrets<T: ConfigSchema>(
     mut map: HashMap<String, ConfigValue>,
 ) -> HashMap<String, ConfigValue> {
-    if caller_is_controller() {
-        return map;
-    }
     for field in T::schema() {
         if matches!(field.field_type, ConfigType::SecretText) && map.contains_key(&field.key) {
-            map.insert(field.key, ConfigValue::Text("••••••••".to_string()));
+            map.insert(field.key, ConfigValue::Text(MASKED_SECRET.to_string()));
         } else if matches!(
             field.field_type,
             ConfigType::Vector {
@@ -461,9 +515,13 @@ fn mask_secrets<T: ConfigSchema>(
             }
         ) && map.contains_key(&field.key)
         {
+            let count = match map.get(&field.key) {
+                Some(ConfigValue::Vector(values)) => values.len(),
+                _ => 0,
+            };
             map.insert(
                 field.key,
-                ConfigValue::Vector(vec![ConfigVectorValue::Text("••••••••".to_string())]),
+                ConfigValue::Vector(vec![ConfigVectorValue::Text(MASKED_SECRET.to_string()); count]),
             );
         }
     }
@@ -472,7 +530,22 @@ fn mask_secrets<T: ConfigSchema>(
 
 /// Backs the generated `get_config` query.
 pub fn get<T: ConfigSchema>() -> HashMap<String, ConfigValue> {
-    mask_secrets::<T>(get_raw())
+    let mut map = get_raw();
+    map.remove(USER_CONFIGURED_KEY);
+    mask_secrets::<T>(map)
+}
+
+/// The settings surface reads secrets back as [`MASKED_SECRET`]; a client
+/// that round-trips that placeholder into `set_config` would overwrite the
+/// real value with the mask, so `set` rejects it outright.
+fn contains_mask_placeholder(value: &ConfigValue) -> bool {
+    match value {
+        ConfigValue::Text(text) => text == MASKED_SECRET,
+        ConfigValue::Vector(values) => values.iter().any(|value| {
+            matches!(value, ConfigVectorValue::Text(text) if text == MASKED_SECRET)
+        }),
+        _ => false,
+    }
 }
 
 /// Backs the generated `set_config` update: merges `new_settings` onto the
@@ -505,6 +578,15 @@ pub fn set<T: ConfigSchema>(new_settings: HashMap<String, ConfigValue>) -> Resul
                 value.type_name()
             ));
         }
+        // Settings surfaces read secrets back as `MASKED_SECRET`; a client
+        // that round-trips that placeholder into `set_config` must never
+        // overwrite the real value with it.
+        if contains_mask_placeholder(value) {
+            return Err(format!(
+                "config key '{key}' received the masked placeholder - \
+                 leave a secret unchanged by omitting it from the update"
+            ));
+        }
         merged.insert(key.clone(), value.clone());
     }
 
@@ -514,7 +596,61 @@ pub fn set<T: ConfigSchema>(new_settings: HashMap<String, ConfigValue>) -> Resul
         }
     }
 
+    record_user_configured(&mut merged, new_settings.keys().cloned());
     persist(merged);
+    Ok(())
+}
+
+/// Writes canister-owned defaults without marking the value as user-edited.
+pub fn set_system<T: ConfigSchema>(new_settings: HashMap<String, ConfigValue>) -> Result<(), String> {
+    let schema: HashMap<String, ConfigFieldSchema> = T::schema().into_iter().map(|field| (field.key.clone(), field)).collect();
+    let mut config = get_raw();
+    for (key, value) in new_settings {
+        let field = schema.get(&key).ok_or_else(|| format!("unknown config key '{key}'"))?;
+        if !value.matches(&field.field_type) {
+            return Err(format!("config key '{key}' expects a {:?} value, got a {} value", field.field_type, value.type_name()));
+        }
+        if !user_configured(&config).contains(&key) { config.insert(key, value); }
+    }
+    persist(config);
+    Ok(())
+}
+
+/// Applies package-derived canister picker defaults from the latest project
+/// context. Fields explicitly written through `set_config` are preserved.
+pub fn update_project_context<T: ConfigSchema>(context: &crate::ProjectContext) -> Result<(), String> {
+    let mut config = get_raw();
+    let configured = user_configured(&config);
+    let mut updates = HashMap::new();
+    let mut removals = Vec::new();
+    for field in T::schema() {
+        let Some(package_name) = field.package_name.as_deref() else { continue };
+        if configured.contains(&field.key) { continue; }
+        let matches: Vec<Principal> = context.canisters.iter()
+            .filter(|canister| canister.package_name.trim().eq_ignore_ascii_case(package_name.trim()))
+            .map(|canister| canister.canister_id).collect();
+        let value = match field.field_type {
+            ConfigType::CanisterPicker { .. } => matches.first().copied().map(ConfigValue::PrincipalId),
+            ConfigType::Vector { element_type: ConfigVectorType::CanisterPicker { .. } } =>
+                Some(ConfigValue::Vector(matches.into_iter().map(ConfigVectorValue::PrincipalId).collect())),
+            _ => None,
+        };
+        if let Some(value) = value { updates.insert(field.key, value); }
+        else if !field.is_required { removals.push(field.key); }
+    }
+    if !context.project_id.trim().is_empty() {
+        let project_field = T::schema().into_iter().find(|field| field.key == "project_id");
+        if let Some(field) = project_field.filter(|field| !configured.contains(&field.key)) {
+            if matches!(field.field_type, ConfigType::Text | ConfigType::TextArea) {
+                updates.insert(field.key, ConfigValue::Text(context.project_id.clone()));
+            }
+        }
+    }
+    for (key, value) in updates {
+        config.insert(key, value);
+    }
+    for key in removals { config.remove(&key); }
+    persist(config);
     Ok(())
 }
 
@@ -564,6 +700,7 @@ pub fn unset<T: ConfigSchema>(key: &str) -> Result<(), String> {
 
     let mut config = get_raw();
     config.remove(key);
+    record_user_configured(&mut config, [key.to_string()]);
     persist(config);
     Ok(())
 }
@@ -646,6 +783,7 @@ mod tests {
                 module_type_filter: None,
             },
             canister_type: None,
+            package_name: None,
             is_required: false,
             is_readonly: None,
             default_value: None,
@@ -666,6 +804,7 @@ mod tests {
                     group_description: None,
                     field_type: ConfigType::Text,
                     canister_type: None,
+                    package_name: None,
                     is_required: false,
                     is_readonly: None,
                     default_value: Some(ConfigValue::Text("hello".to_string())),
@@ -679,6 +818,7 @@ mod tests {
                     group_description: None,
                     field_type: ConfigType::Number,
                     canister_type: None,
+                    package_name: None,
                     is_required: true,
                     is_readonly: None,
                     default_value: None,
@@ -692,6 +832,7 @@ mod tests {
                     group_description: None,
                     field_type: ConfigType::SecretText,
                     canister_type: None,
+                    package_name: None,
                     is_required: false,
                     is_readonly: None,
                     default_value: None,
@@ -705,6 +846,7 @@ mod tests {
                     group_description: None,
                     field_type: ConfigType::Text,
                     canister_type: None,
+                    package_name: None,
                     is_required: false,
                     is_readonly: Some(true),
                     default_value: None,
@@ -837,6 +979,29 @@ mod tests {
             Some(&ConfigValue::Text("hello".to_string()))
         );
         assert_eq!(get_env_number("retries"), Some(5));
+    }
+
+    #[test]
+    fn set_rejects_the_mask_placeholder_so_a_secret_is_never_overwritten_with_it() {
+        let mut initial = TestConfig::defaults();
+        initial.insert("retries".to_string(), ConfigValue::Number(1));
+        initial.insert(
+            "api_key".to_string(),
+            ConfigValue::Text("sk-live-real".to_string()),
+        );
+        seed(initial);
+
+        let err = set::<TestConfig>(HashMap::from([(
+            "api_key".to_string(),
+            ConfigValue::Text(MASKED_SECRET.to_string()),
+        )]))
+        .unwrap_err();
+        assert!(err.contains("masked placeholder"), "{err}");
+        // The stored secret survives untouched.
+        assert_eq!(
+            get_raw().get("api_key"),
+            Some(&ConfigValue::Text("sk-live-real".to_string()))
+        );
     }
 
     #[test]

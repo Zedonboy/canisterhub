@@ -8,7 +8,6 @@ import { Principal } from "@icp-sdk/core/principal";
 
 type RuntimeCanisterEnv = {
   readonly ["PUBLIC_CANISTER_ID:backend"]?: string;
-  readonly notification_id?: string;
 };
 
 let cachedCanisterId: string | null = null;
@@ -43,14 +42,14 @@ export function agentCanisterId(): string {
   return id;
 }
 
-/** The optional project-wide notification module advertised by the agent. */
-export function notificationCanisterId(): string | undefined {
-  const id = safeGetCanisterEnv<RuntimeCanisterEnv>()?.notification_id;
-  if (!id) return undefined;
+/** The protocol backend that owns project push subscriptions and delivery. */
+export function protocolBackendId(): string {
+  const id = safeGetCanisterEnv<RuntimeCanisterEnv>()?.["PUBLIC_CANISTER_ID:backend"];
+  if (!id) throw new Error("The protocol backend canister id is missing from this chat environment.");
   try {
     return Principal.fromText(id).toText();
   } catch {
-    return undefined;
+    throw new Error("The protocol backend canister id is invalid.");
   }
 }
 

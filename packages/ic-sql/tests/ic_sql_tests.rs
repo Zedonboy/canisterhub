@@ -51,7 +51,7 @@ fn setup() -> (PocketIc, Principal) {
     pic.install_canister(
         canister_id,
         IC_SQL_WASM.to_vec(),
-        encode_one(()).unwrap(),
+        encode_one(canister_hub_sdk::ProjectContext::default()).unwrap(),
         Some(caller()),
     );
     (pic, canister_id)
@@ -292,14 +292,14 @@ fn llm_context_is_readable_by_anyone() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn installs_with_empty_candid_args_like_the_marketplace_deploy_path() {
+fn installs_with_project_context_like_the_marketplace_deploy_path() {
     let pic = PocketIcBuilder::new().with_application_subnet().build();
     let canister_id = pic.create_canister_with_settings(Some(caller()), None);
     pic.add_cycles(canister_id, 10_000_000_000_000);
     pic.install_canister(
         canister_id,
         IC_SQL_WASM.to_vec(),
-        encode_one(()).unwrap(),
+        encode_one(canister_hub_sdk::ProjectContext::default()).unwrap(),
         Some(caller()),
     );
     execute(&pic, canister_id, "CREATE TABLE t (id INT)").unwrap();

@@ -10,7 +10,7 @@ import { currencyOptions } from "@/lib/currencies";
 import { generateSku } from "@/lib/sku";
 import { minorToInput, parseCount, parseMoney } from "@/lib/format";
 import { deleteItemImage, uploadItemImage } from "@/lib/itemImages";
-import type { InventoryItem, ItemKind } from "@/lib/types";
+import type { InventoryItem, ItemKind, PaymentMethod } from "@/lib/types";
 
 /** Create (no `item`) or edit. Stock on an existing item is changed with
  * the separate Adjust stock action, but "track stock" itself is editable
@@ -34,6 +34,7 @@ export function ItemForm({
   const [description, setDescription] = useState(item?.description ?? "");
   const [sku, setSku] = useState(item?.sku ?? "");
   const [currency, setCurrency] = useState(item?.currency ?? defaultCurrency);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(item?.paymentMethod ?? "CashOnDelivery");
   const currencies = useMemo(() => currencyOptions(item?.currency ?? defaultCurrency), [item?.currency, defaultCurrency]);
   const [price, setPrice] = useState(item ? minorToInput(item.priceMinor, item.currency) : "");
   const [tracked, setTracked] = useState(item ? item.stock !== null : true);
@@ -58,7 +59,7 @@ export function ItemForm({
       let uploaded: string | null = null;
       if (image.file) uploaded = await uploadItemImage(image.file);
       const imageUrl = image.file ? uploaded : image.remove ? null : (item?.imageUrl ?? null);
-      const common = { kind, name, description, sku: sku.trim() || null, priceMinor, currency: cur, imageUrl, active };
+      const common = { kind, name, description, sku: sku.trim() || null, priceMinor, currency: cur, paymentMethod, imageUrl, active };
       try {
         if (item) {
           // keep the current quantity when tracking stays on; `null` stops tracking
@@ -112,9 +113,17 @@ export function ItemForm({
             </div>
           </Field>
           <Field label="Currency">
-            <Select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-              {currencies.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}
-            </Select>
+            <Select value={currency} onChange={setCurrency} options={currencies.map((c) => ({ value: c.code, label: c.label }))} />
+          </Field>
+          <Field label="Payment terms" hint="Set by the vendor; customers cannot change this.">
+            <Select
+              value={paymentMethod}
+              onChange={(value) => setPaymentMethod(value as PaymentMethod)}
+              options={[
+                { value: "CashOnDelivery", label: "Cash on delivery" },
+                { value: "Prepaid", label: "Prepaid" },
+              ]}
+            />
           </Field>
           <Field label={kind === "Service" ? "Price" : "Selling price"}>
             <Input value={price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal" />

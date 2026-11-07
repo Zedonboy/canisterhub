@@ -7,6 +7,7 @@
 //! avoids that collision while Candid still checks their structural shape.
 
 mod error;
+mod project;
 
 #[cfg(any(feature = "client", feature = "ic"))]
 mod transport;
@@ -31,6 +32,7 @@ pub mod client;
 
 pub use candid::Principal;
 pub use error::{Error, Result};
+pub use project::{ProjectCanister, ProjectContext};
 
 #[cfg(any(feature = "client", feature = "ic"))]
 pub use auth::AuthClient;

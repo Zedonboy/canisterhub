@@ -4,8 +4,18 @@ Two small React pages for the `agent` canister, built from one Vite project:
 
 | Entry | Built file | Who | What |
 |---|---|---|---|
-| `index.html` | `dist/index.html` | the SME (dashboard iframe, like `table-browser`) | Inbox of every customer conversation across WhatsApp / Telegram / Email / Web, channel filter + search, reply-as-yourself, and a private **Agent console** to talk to the agent itself |
+| `index.html` | `dist/index.html` | the SME (dashboard iframe, like `table-browser`) | **Inbox** of every customer conversation, AI-created **Tickets** for human follow-up, channel filter + search, reply-as-yourself, and a private **Agent console** |
 | `chat.html` | `dist/chat.html` | customers | The **web channel**: an installable **PWA** chat page. The customer must sign in with Internet Identity before they can chat; their principal is their conversation |
+
+When the agent calls `request_client_data`, this page reads the caller's
+pending request. Location requests show a consent-driven browser geolocation
+button; other request types adapt the composer prompt and submit the value
+against the request id so stale controls cannot answer newer requests.
+
+Image links display inline: any http(s) URL that is the only thing on its
+line (or that ends in an image extension) renders as an embedded image with
+a link fallback, so agent replies quoting an inventory `image_url` show the
+product photo without the model having to emit image markup.
 
 Like `table-browser`, it is not deployed on its own. Its `dist/` is embedded
 into the agent wasm (`include_dir!`): the inbox is served at `/inbox`, customer
@@ -18,6 +28,11 @@ npm run build        # tsc -b && vite build
 ```
 
 `packages/build.sh` builds it before compiling the embedding canister.
+
+Tickets are the agent's persisted administrative requests. Operators can open
+the related conversation and mark a ticket handled. Filing a ticket also sends
+a best-effort project Web Push through the protocol gateway; the optional
+administrative webhook remains available for external workflows.
 
 Mock mode: `npm run dev:mock` runs both pages against in-memory data (the
 customer sign-in is faked, no II needed).

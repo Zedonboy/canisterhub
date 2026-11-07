@@ -4,6 +4,7 @@ import { Bot, Settings, ScrollText, Database, Play, Cpu, Plug, TriangleAlert, Ar
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Select } from "@/components/ui/Select";
 import { Input, Label } from "@/components/ui/Input";
 import { Dialog, DialogHeader, DialogContent, DialogFooter } from "@/components/ui/Dialog";
 import { Table, TableHead, TableBody, Th, Tr, Td } from "@/components/ui/Table";
@@ -315,11 +316,12 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label htmlFor="agent-provider">LLM provider</Label>
-                  <select id="agent-provider" value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)} className={selectClass}>
-                    {LLM_PROVIDERS.map((provider) => (
-                      <option key={provider.value} value={provider.value}>{provider.label}</option>
-                    ))}
-                  </select>
+                  <Select
+                    id="agent-provider"
+                    value={llmProvider}
+                    onChange={setLlmProvider}
+                    options={LLM_PROVIDERS.map((provider) => ({ value: provider.value, label: provider.label }))}
+                  />
                 </div>
                 <div>
                   <Label htmlFor="agent-model">Model id (optional)</Label>

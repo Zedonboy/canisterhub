@@ -5,6 +5,7 @@ import { Principal } from "@icp-sdk/core/principal";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Input, Label, Textarea } from "@/components/ui/Input";
+import { Select } from "@/components/ui/Select";
 import { Toggle } from "@/components/ui/Toggle";
 import { ToastProvider, toast } from "@/components/Toast";
 import { Footer } from "@/components/layout/Footer";
@@ -121,15 +122,13 @@ function ConfigPrompt({ pkg, plan, onSubmit }: ConfigPromptProps) {
             {"Boolean" in fieldType ? (
               <Toggle checked={Boolean(value)} onChange={(next) => setRaw((prev) => ({ ...prev, [field.key]: next }))} />
             ) : "Select" in fieldType ? (
-              <select
+              <Select
                 id={inputId}
                 value={String(value)}
-                onChange={(e) => setRaw((prev) => ({ ...prev, [field.key]: e.target.value }))}
-                className="w-full px-3 py-2 text-sm bg-[#0a0e1a] border border-[#1e2d47] rounded text-[#e2e8f0] focus:outline-none focus:border-[#00d4ff]"
-              >
-                <option value="" disabled>Select…</option>
-                {fieldType.Select.options.map((option) => <option key={option} value={option}>{option}</option>)}
-              </select>
+                onChange={(next) => setRaw((prev) => ({ ...prev, [field.key]: next }))}
+                placeholder="Select…"
+                options={fieldType.Select.options.map((option) => ({ value: option, label: option }))}
+              />
             ) : "TextArea" in fieldType ? (
               <Textarea
                 id={inputId}

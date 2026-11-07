@@ -16,7 +16,7 @@ import type { ProjectContext } from "@/components/layout/AppShell";
 import { getModuleConfigSchema, getModuleConfig, setModuleConfig, type ConfigFieldSchema, type ConfigValue } from "@/lib/moduleConfig";
 
 export default function CanisterSettings() {
-  const { job, loadError } = useOutletContext<ProjectContext>();
+  const { job, loadError, refetch } = useOutletContext<ProjectContext>();
   const { canisterId } = useParams<{ canisterId: string }>();
   const navigate = useNavigate();
 
@@ -32,7 +32,10 @@ export default function CanisterSettings() {
     if (!job || !canisterId) return;
     setLoading(true);
     setError(null);
-    Promise.all([getModuleConfigSchema(canisterId, job.network), getModuleConfig(canisterId, job.network)])
+    Promise.all([
+      getModuleConfigSchema(canisterId, job.network),
+      getModuleConfig(canisterId, job.network),
+    ])
       .then(([s, c]) => {
         setSchema(s);
         setConfig(c);
@@ -55,6 +58,13 @@ export default function CanisterSettings() {
     setConfig(refreshed);
     toast.success("Settings saved", `${canisterName}'s configuration was updated.`);
   };
+  const installedCanisters = Object.fromEntries(
+    Object.entries(job.canisters).map(([name, info]) => [name, {
+      id: info.id,
+      kind: info.kind,
+      packageName: info.packageName,
+    }]),
+  );
 
   return (
     <div className="p-4 sm:p-6 space-y-4 animate-fade-in">
@@ -90,7 +100,10 @@ export default function CanisterSettings() {
             <ConfigForm
               schema={schema}
               initialValues={config}
-              installedCanisters={job.canisters}
+              installedCanisters={installedCanisters}
+              projectId={job.id}
+              network={job.network}
+              onCanisterInstalled={() => refetch()}
               onSubmit={handleSave}
             />
           )}

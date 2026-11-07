@@ -49,9 +49,23 @@ fn setup(config: Config) -> (PocketIc, Principal) {
     pic.install_canister(
         id,
         WASM.to_vec(),
-        encode_one(config).unwrap(),
+        encode_one(canister_hub_sdk::ProjectContext::default()).unwrap(),
         Some(controller()),
     );
+    update_config(
+        &pic,
+        id,
+        controller(),
+        &ConfigUpdate {
+            admins: Some(config.admins),
+            system_prompt: Some(config.system_prompt),
+            llm_provider: Some(config.llm_provider),
+            llm_model: Some(config.llm_model),
+            llm_api_key: Some(config.llm_api_key),
+            max_tool_iterations: Some(config.max_tool_iterations),
+        },
+    )
+    .unwrap();
     (pic, id)
 }
 

@@ -3,10 +3,10 @@ import { Check, Bot } from "lucide-react";
 import { Container, SectionHeading, ButtonLink } from "./ui";
 
 const POINTS = [
-  "Tell it what your business needs, in plain English — no ticket, no spec document.",
-  "It searches the Marketplace first, so you're not paying to rebuild something that already exists.",
-  "It writes, compiles, and tests real canister code — then deploys it for real, not a demo sandbox.",
-  "You keep the source and the keys. Nothing about your business lives in a vendor's black box.",
+  "It talks to your customers on WhatsApp, Telegram, email, or a web chat embedded in your own website.",
+  "It calls the real tools your canisters expose — take an order, check stock, collect a payment — never trusting data the client sends.",
+  "Every package is AI-discoverable: the Secretary reads each canister's own context doc and knows what it can do.",
+  "Bring your own OpenAI or Anthropic key, or use managed AI with token-credit billing — your data stays in your canisters either way.",
 ];
 
 export function AgentSpotlight() {
@@ -18,7 +18,7 @@ export function AgentSpotlight() {
             align="left"
             eyebrow="AI Agents"
             title="Hire an AI Secretary, not a dev team."
-            subtitle="Most SMEs can't justify a full engineering team for every internal tool they need. CanisterHub's Secretary is the agentic layer that closes that gap — a real orchestration agent that builds and ships working software from a plain-language request."
+            subtitle="Most SMEs can't justify a full engineering team for every tool they need. CanisterHub's Secretary is the agentic layer that closes that gap — it builds and deploys canisters from a plain-language request, then keeps running the day-to-day: answering customers, taking orders, and chasing payments."
           />
           <ul className="space-y-3">
             {POINTS.map((point) => (
@@ -33,19 +33,17 @@ export function AgentSpotlight() {
 
         <div className="rounded-xl border border-[#1e2d47] bg-[#0a0e1a] p-5 space-y-3">
           <div className="flex items-center gap-2 text-xs text-[#4a5568] pb-3 border-b border-[#1e2d47]">
-            <Bot size={13} className="text-[#00d4ff]" /> Secretary · live session
+            <Bot size={13} className="text-[#00d4ff]" /> Secretary · WhatsApp
           </div>
           <ChatBubble from="you">
-            I run a small logistics company. I need something that tracks delivery status and lets customers look it
-            up by order number.
+            Do you still have the jollof platter available for pickup around 6pm?
           </ChatBubble>
           <ChatBubble from="agent">
-            Found a close match in the Marketplace: <span className="text-[#00d4ff]">order-tracker</span>. Deploying
-            it and wiring it to a new database canister now.
+            Yes — 14 left on today's menu. Want me to reserve one for pickup at 6:00 PM? It comes to ₦4,500.
           </ChatBubble>
-          <ChatBubble from="agent" status="done">
-            Deployed. Your customers can now check status at your tracker's own canister URL — want me to add SMS
-            notifications next?
+          <ChatBubble from="agent" status="✓ order placed · pay here: checkout.kora.com/…">
+            Done — your order is in the kitchen board. Here's your secure payment link; your receipt comes right back
+            to this chat once it clears.
           </ChatBubble>
         </div>
       </Container>
@@ -53,7 +51,7 @@ export function AgentSpotlight() {
   );
 }
 
-function ChatBubble({ from, status, children }: { from: "you" | "agent"; status?: "done"; children: ReactNode }) {
+function ChatBubble({ from, status, children }: { from: "you" | "agent"; status?: string; children: ReactNode }) {
   return (
     <div className={`flex ${from === "you" ? "justify-end" : "justify-start"}`}>
       <div
@@ -62,7 +60,7 @@ function ChatBubble({ from, status, children }: { from: "you" | "agent"; status?
         }`}
       >
         {children}
-        {status === "done" && <div className="mt-1.5 text-[#00e676] text-[11px] font-medium">✓ deployed</div>}
+        {status && <div className="mt-1.5 text-[#00e676] text-[11px] font-medium">✓ {status}</div>}
       </div>
     </div>
   );

@@ -21,9 +21,10 @@ export function Hero() {
         </h1>
 
         <p className="text-lg text-[#8892a4] max-w-2xl leading-relaxed">
-          CanisterHub is the compute platform for small and growing businesses: host your website, database, and
-          AI agents in tamper-proof canisters on the Internet Computer — no servers to patch, no DevOps hire, no
-          surprise cloud bill at the end of the month.
+          CanisterHub is the compute platform for small and growing businesses: launch real business software —
+          online ordering, payments, customer chat, databases — as tamper-proof canisters on the Internet Computer.
+          Every package ships with its own admin panel, and an AI Secretary runs it all over WhatsApp, Telegram, or
+          email. No servers to patch, no DevOps hire, no surprise cloud bill.
         </p>
 
         <ButtonLink variant="primary" size="lg" className="gap-2">

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "./format";
+import { reportDelegationFailure } from "./delegationRecovery";
 
 /** Re-runs `fetcher` every `intervalMs` (paused while the tab is hidden) and
  * whenever `deps` change. Results from a superseded run are dropped, so a
@@ -20,7 +21,12 @@ export function usePolling<T>(fetcher: () => Promise<T>, intervalMs: number, dep
       setData(next);
       setError(null);
     } catch (e) {
-      if (mine === generation.current) setError(errorText(e));
+      if (mine === generation.current) {
+        const delegationExpired = reportDelegationFailure(e);
+        setError(delegationExpired
+          ? "Your secure dashboard session expired. Reconnect to continue."
+          : errorText(e));
+      }
     } finally {
       if (mine === generation.current) setLoading(false);
     }

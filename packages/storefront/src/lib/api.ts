@@ -7,6 +7,7 @@ import { mock } from "./mock";
 const MOCK = import.meta.env.VITE_MOCK === "1";
 
 export type Kind = "Product" | "Service";
+export type PaymentMethod = "Prepaid" | "CashOnDelivery";
 export type OrderStatus = "AwaitingPayment" | "Pending" | "Confirmed" | "Preparing" | "Ready" | "OutForDelivery" | "Completed" | "Cancelled" | "Expired";
 
 export interface Item {
@@ -21,6 +22,7 @@ export interface Item {
   stock: number | null;
   sku: string | null;
   createdAt: number;
+  paymentMethod: PaymentMethod;
 }
 
 export interface Order {
@@ -35,6 +37,7 @@ export interface Order {
   customerName: string | null;
   customerPhone: string | null;
   note: string | null;
+  checkoutUrl: string | null;
 }
 
 export interface Business {
@@ -46,6 +49,7 @@ export interface CheckoutInput {
   lines: { id: number; quantity: number }[];
   name: string;
   phone: string;
+  email: string;
   address: string;
   instructions: string;
   note: string;
@@ -61,6 +65,7 @@ function toItem(i: InventoryItem): Item {
     id: Number(i.id), name: i.name, description: i.description, kind: "Product" in i.kind ? "Product" : "Service",
     priceMinor: i.price_minor, currency: i.currency, imageUrl: opt(i.image_url), stock: stock === null ? null : Number(stock),
     sku: opt(i.sku), createdAt: ms(i.created_at),
+    paymentMethod: "Prepaid" in i.payment_method ? "Prepaid" : "CashOnDelivery",
   };
 }
 
@@ -74,6 +79,7 @@ function toOrder(o: RawOrder): Order {
     })),
     address: o.delivery_location.address, instructions: opt(o.delivery_location.instructions),
     customerName: opt(o.customer_name), customerPhone: opt(o.customer_phone), note: opt(o.note),
+    checkoutUrl: opt(o.checkout_url),
   };
 }
 
@@ -102,9 +108,9 @@ export async function placeOrder(input: CheckoutInput): Promise<Order> {
         items: input.lines.map((l) => ({ inventory_id: BigInt(l.id), quantity: BigInt(l.quantity) })),
         customer_name: optText(input.name),
         customer_phone: optText(input.phone),
+        customer_email: optText(input.email),
         delivery_location: { address: input.address.trim(), instructions: optText(input.instructions), latitude: [], longitude: [] },
         note: optText(input.note),
-        payment_method: [{ CashOnDelivery: null }],
       }),
     ),
   );

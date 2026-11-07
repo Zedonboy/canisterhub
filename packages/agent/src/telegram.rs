@@ -29,7 +29,22 @@ pub fn parse_update(body: &[u8]) -> Result<Option<TelegramMessage>, String> {
         from_user_id: msg["from"]["id"].as_i64(),
         from_username: msg["from"]["username"].as_str().map(str::to_string),
         text: msg["text"].as_str().map(str::to_string),
+        latitude: msg["location"]["latitude"].as_f64(),
+        longitude: msg["location"]["longitude"].as_f64(),
         date: msg["date"].as_i64(),
         raw: root.to_string(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_shared_location() {
+        let body = br#"{"update_id":1,"message":{"message_id":2,"chat":{"id":3},"location":{"latitude":6.5244,"longitude":3.3792}}}"#;
+        let message = parse_update(body).unwrap().unwrap();
+        assert_eq!(message.latitude, Some(6.5244));
+        assert_eq!(message.longitude, Some(3.3792));
+    }
 }

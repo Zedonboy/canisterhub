@@ -13,14 +13,14 @@ output_dir="$workspace_dir/bin"
 cd "$workspace_dir"
 
 packages=(
-  admin_agent
   agent
-  app_api
   assetstorage
   auth
   ic-kv
   ic-sql
-  notification
+  kora-payment
+  paystack-payment
+  restaurant
   order_inventory
 )
 
@@ -32,7 +32,7 @@ fi
 # The canisters below embed their browser UIs' `dist/` directories into their
 # own wasm at *compile* time, so every UI must exist before the Cargo build.
 # There is no deploy-time asset upload step for these modules.
-for ui in table-browser inventory-browser storefront chat-ui; do
+for ui in table-browser inventory-browser storefront chat-ui payment-ui restaurant-ui; do
   ui_dir="$workspace_dir/$ui"
   if [[ -d "$ui_dir" ]]; then
     echo "Building $ui..."
@@ -57,6 +57,13 @@ cargo build \
   --release
 
 mkdir -p "$output_dir"
+
+# These packages are no longer part of the installable package catalog. Clear
+# artifacts from older builds so they cannot be accidentally uploaded.
+rm -f "$output_dir/admin_agent.wasm" "$output_dir/admin_agent.did" \
+  "$output_dir/app_api.wasm" "$output_dir/app_api.did" \
+  "$output_dir/connector.wasm" "$output_dir/connector.did" \
+  "$output_dir/notification.wasm" "$output_dir/notification.did"
 
 for package_name in "${packages[@]}"; do
   artifact_name="${package_name//-/_}.wasm"

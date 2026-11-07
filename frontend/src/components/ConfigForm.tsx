@@ -6,10 +6,14 @@
 
 import { useEffect, useState } from "react";
 import { Principal } from "@icp-sdk/core/principal";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, PackagePlus } from "lucide-react";
 import { Input, Label, Textarea } from "@/components/ui/Input";
 import { Toggle } from "@/components/ui/Toggle";
 import { Button } from "@/components/ui/Button";
+import { Select } from "@/components/ui/Select";
+import { Combobox } from "@/components/ui/Combobox";
+import { InstallCanisterDialog } from "@/components/InstallCanisterDialog";
+import type { DeployedCanister } from "@/lib/deploy";
 import type { ConfigFieldSchema, ConfigType, ConfigValue, ConfigVectorType, ConfigVectorValue } from "@/lib/moduleConfig";
 
 /** What each field edits as - a plain string for every text-like/numeric
@@ -19,12 +23,24 @@ import type { ConfigFieldSchema, ConfigType, ConfigValue, ConfigVectorType, Conf
 type RawScalarValue = string | boolean;
 type RawValue = RawScalarValue | RawScalarValue[];
 type ScalarType = ConfigVectorType | Exclude<ConfigType, { Vector: unknown }>;
-type InstalledCanisters = Record<string, { id: string; kind: string }>;
+type InstalledCanisters = Record<string, { id: string; kind: string; packageName?: string | null }>;
 
 interface CanisterOption {
   name: string;
   id: string;
   kind: string;
+  packageName?: string | null;
+}
+
+/** What `get_config` returns for a stored `SecretText` - the canister
+ * masks secrets for every caller (write-only "secret egress" rule), so
+ * this is all any settings UI ever holds. An untouched masked field must
+ * never be submitted back: `set_config` rejects the literal as a guard
+ * against round-tripping it over the real secret. */
+const MASKED_SECRET = "••••••••";
+
+function isSecretType(fieldType: ConfigType | ConfigVectorType): boolean {
+  return "SecretText" in fieldType;
 }
 
 function isTextLike(fieldType: ScalarType): boolean {
@@ -135,10 +151,6 @@ function isReadonly(schema: ConfigFieldSchema): boolean {
   return schema.is_readonly[0] ?? false;
 }
 
-function normalizedCanisterLabel(value: string): string {
-  return value.toLowerCase().replace(/[\s_-]+/g, "");
-}
-
 function canisterPickerType(fieldType: ConfigType): Extract<ConfigVectorType, { CanisterPicker: unknown }> | null {
   if ("CanisterPicker" in fieldType) return fieldType;
   if ("Vector" in fieldType && "CanisterPicker" in fieldType.Vector.element_type) {
@@ -154,41 +166,28 @@ function canisterOptionsForField(
   const picker = canisterPickerType(schema.field_type);
   if (!picker) return [];
 
-  const moduleFilter = picker.CanisterPicker.module_type_filter[0];
-  const expectedType = schema.canister_type?.[0]
-    ? Object.keys(schema.canister_type[0])[0]
-    : "Custom";
-
+  // Type and package metadata describe the intended/default dependency and
+  // can drive package installation suggestions. They must not hide choices:
+  // users can intentionally point a setting at any canister in the project.
   return Object.entries(installedCanisters)
     .map(([name, canister]) => ({ name, ...canister }))
-    .filter(({ name, kind }) => {
-      const normalizedName = normalizedCanisterLabel(name);
-      const normalizedKind = normalizedCanisterLabel(kind);
-      const matchesType = expectedType === "Auth"
-        ? normalizedKind === "auth"
-        : expectedType === "Database"
-          ? normalizedKind === "database"
-          : expectedType === "Storage"
-            ? normalizedKind === "static" || normalizedName.includes("storage")
-            : true;
-      const normalizedFilter = moduleFilter ? normalizedCanisterLabel(moduleFilter) : "";
-      const matchesModule = !normalizedFilter
-        || normalizedName.includes(normalizedFilter)
-        || normalizedKind === normalizedFilter;
-      return matchesType && matchesModule;
-    })
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function CanisterOptions({ id, options }: { id: string; options: CanisterOption[] }) {
-  return (
-    <datalist id={id}>
-      {options.flatMap((option) => [
-        <option key={`name:${option.name}`} value={option.name} label={`${option.id} · ${option.kind}`} />,
-        <option key={`id:${option.name}:${option.id}`} value={option.id} label={`${option.name} · ${option.kind}`} />,
-      ])}
-    </datalist>
-  );
+/** Picker entries as combobox items - the option's value is the canister's
+ * name (saves resolve name -> principal via `resolveCanisterId`), with the
+ * ID & kind shown as the row's hint. */
+function canisterItems(options: CanisterOption[]) {
+  return options.map((option) => ({
+    value: option.name,
+    label: option.name,
+    hint: `${option.id} · ${option.kind}`,
+  }));
+}
+
+function canisterPickerPlaceholder(fieldType: ConfigType): string {
+  const filter = canisterPickerType(fieldType)?.CanisterPicker.module_type_filter[0];
+  return filter ? `${filter} name or canister ID` : "Canister name or principal ID";
 }
 
 function selectOptionLabel(option: string): string {
@@ -272,21 +271,13 @@ function Field({ schema, value, error, canisterOptions, onChange }: FieldProps) 
       ) : "Boolean" in fieldType ? (
         <Toggle checked={Boolean(value)} onChange={(v) => onChange(v)} />
       ) : "Select" in fieldType ? (
-        <select
+        <Select
           id={inputId}
           value={String(value)}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full px-3 py-2 text-sm bg-[#0a0e1a] border border-[#1e2d47] rounded text-[#e2e8f0] focus:outline-none focus:border-[#00d4ff] focus:ring-1 focus:ring-[#00d4ff33] transition-colors"
-        >
-          <option value="" disabled>
-            Select…
-          </option>
-          {fieldType.Select.options.map((option) => (
-            <option key={option} value={option}>
-              {selectOptionLabel(option)}
-            </option>
-          ))}
-        </select>
+          onChange={(next) => onChange(next)}
+          placeholder="Select…"
+          options={fieldType.Select.options.map((option) => ({ value: option, label: selectOptionLabel(option) }))}
+        />
       ) : "TextArea" in fieldType ? (
         <Textarea
           id={inputId}
@@ -297,25 +288,20 @@ function Field({ schema, value, error, canisterOptions, onChange }: FieldProps) 
           onChange={(e) => onChange(e.target.value)}
         />
       ) : "CanisterPicker" in fieldType ? (
-        <>
-          <Input
-            id={inputId}
-            type="text"
-            list={`${inputId}-canisters`}
-            placeholder={fieldType.CanisterPicker.module_type_filter[0]
-              ? `${fieldType.CanisterPicker.module_type_filter[0]} name or canister ID`
-              : "Canister name or principal ID"}
-            value={String(value)}
-            onChange={(e) => onChange(e.target.value)}
-          />
-          <CanisterOptions id={`${inputId}-canisters`} options={canisterOptions} />
-        </>
+        <Combobox
+          id={inputId}
+          value={String(value)}
+          onChange={(next) => onChange(next)}
+          placeholder={canisterPickerPlaceholder(fieldType)}
+          options={canisterItems(canisterOptions)}
+        />
       ) : (
         <Input
           id={inputId}
           type={"SecretText" in fieldType ? "password" : "Number" in fieldType || "Float" in fieldType ? "number" : "text"}
           step={"Float" in fieldType ? "any" : undefined}
           value={String(value)}
+          placeholder={"SecretText" in fieldType && String(value) === MASKED_SECRET ? "Set - enter a new value to replace it" : undefined}
           onChange={(e) => onChange(e.target.value)}
         />
       )}
@@ -355,22 +341,27 @@ function VectorField({ inputId, fieldType, value, canisterOptions, onChange }: V
             {"Boolean" in fieldType ? (
               <Toggle checked={Boolean(item)} onChange={(next) => replace(index, next)} />
             ) : "Select" in fieldType ? (
-              <select
+              <Select
                 id={`${inputId}-${index}`}
                 value={String(item)}
-                onChange={(e) => replace(index, e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-[#0a0e1a] border border-[#1e2d47] rounded text-[#e2e8f0] focus:outline-none focus:border-[#00d4ff]"
-              >
-                {fieldType.Select.options.map((option) => <option key={option} value={option}>{selectOptionLabel(option)}</option>)}
-              </select>
+                onChange={(next) => replace(index, next)}
+                options={fieldType.Select.options.map((option) => ({ value: option, label: selectOptionLabel(option) }))}
+              />
+            ) : "CanisterPicker" in fieldType ? (
+              <Combobox
+                id={`${inputId}-${index}`}
+                value={String(item)}
+                onChange={(next) => replace(index, next)}
+                placeholder="Canister name or principal ID"
+                options={canisterItems(canisterOptions)}
+              />
             ) : (
               <Input
                 id={`${inputId}-${index}`}
                 type={"SecretText" in fieldType ? "password" : "Number" in fieldType || "Float" in fieldType ? "number" : "text"}
                 step={"Float" in fieldType ? "any" : undefined}
-                list={"CanisterPicker" in fieldType ? `${inputId}-canisters` : undefined}
-                placeholder={"CanisterPicker" in fieldType ? "Canister name or principal ID" : undefined}
                 value={String(item)}
+                placeholder={"SecretText" in fieldType && String(item) === MASKED_SECRET ? "Set - enter a new value to replace it" : undefined}
                 onChange={(e) => replace(index, e.target.value)}
               />
             )}
@@ -380,7 +371,6 @@ function VectorField({ inputId, fieldType, value, canisterOptions, onChange }: V
           </Button>
         </div>
       ))}
-      {"CanisterPicker" in fieldType && <CanisterOptions id={`${inputId}-canisters`} options={canisterOptions} />}
       <Button type="button" variant="ghost" size="sm" onClick={() => onChange([...value, emptyVectorItem(fieldType)])}>
         + Add item
       </Button>
@@ -393,6 +383,9 @@ export interface ConfigFormProps {
   initialValues: Record<string, ConfigValue>;
   installedCanisters?: InstalledCanisters;
   onSubmit: (changed: Record<string, ConfigValue>) => Promise<void>;
+  projectId?: string;
+  network?: string;
+  onCanisterInstalled?: (canister: DeployedCanister) => void;
 }
 
 interface EditableFieldProps {
@@ -401,6 +394,7 @@ interface EditableFieldProps {
   installedCanisters: InstalledCanisters;
   onSubmit: ConfigFormProps["onSubmit"];
   onRawChange?: (value: RawValue) => void;
+  onInstallPackage?: (packageName: string, onInstalled: (canisterId: string) => void) => void;
 }
 
 interface FieldGroup {
@@ -475,13 +469,18 @@ function FoldableGroup({ group, children }: { group: FieldGroup; children: React
   );
 }
 
-function EditableField({ schema, initialValue, installedCanisters, onSubmit, onRawChange }: EditableFieldProps) {
+function EditableField({ schema, initialValue, installedCanisters, onSubmit, onRawChange, onInstallPackage }: EditableFieldProps) {
   const [value, setValue] = useState<RawValue>(() => configValueToRaw(schema.field_type, initialValue));
   const [dirty, setDirty] = useState(false);
   const [fieldError, setFieldError] = useState<string>();
   const [submitError, setSubmitError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [saved, setSaved] = useState(false);
+  const requiredPackageName = schema.package_name[0];
+  const packageAlreadyInstalled = requiredPackageName
+    ? Object.values(installedCanisters).some((canister) => canister.packageName?.toLowerCase() === requiredPackageName.toLowerCase())
+    : true;
+  const showInstallPackage = Boolean(requiredPackageName && canisterPickerType(schema.field_type) && !packageAlreadyInstalled);
 
   const change = (next: RawValue) => {
     setValue(next);
@@ -519,6 +518,12 @@ function EditableField({ schema, initialValue, installedCanisters, onSubmit, onR
       await onSubmit({ [schema.key]: converted });
       setDirty(false);
       setSaved(true);
+      // Secrets are write-only on the canister side: never keep the
+      // freshly-submitted plaintext in the input - replace it with the
+      // mask, which is what any reload would show anyway.
+      if (isSecretType(schema.field_type)) {
+        setValue(Array.isArray(value) ? value.map(() => MASKED_SECRET) : MASKED_SECRET);
+      }
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -535,6 +540,23 @@ function EditableField({ schema, initialValue, installedCanisters, onSubmit, onR
         canisterOptions={canisterOptionsForField(schema, installedCanisters)}
         onChange={change}
       />
+      {showInstallPackage && requiredPackageName && (
+        <div className="mt-2 flex items-center justify-between gap-3 rounded border border-[#1e2d47] bg-[#0a0e1a66] px-3 py-2">
+          <p className="text-[10px] text-[#8892a4]">This setting needs <span className="font-mono text-[#e2e8f0]">{requiredPackageName}</span>.</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => onInstallPackage?.(requiredPackageName, (canisterId) => {
+              if ("Vector" in schema.field_type && Array.isArray(value)) change([...value, canisterId]);
+              else change(canisterId);
+            })}
+          >
+            <PackagePlus size={12} /> Install package
+          </Button>
+        </div>
+      )}
       {submitError && <p className="mt-2 text-[10px] text-[#ff5252]">{submitError}</p>}
       <div className="mt-3 flex items-center gap-2">
         <Button type="submit" variant="primary" size="sm" disabled={!dirty || submitting}>
@@ -547,12 +569,16 @@ function EditableField({ schema, initialValue, installedCanisters, onSubmit, onR
   );
 }
 
-export function ConfigForm({ schema, initialValues, installedCanisters = {}, onSubmit }: ConfigFormProps) {
+export function ConfigForm({ schema, initialValues, installedCanisters = {}, onSubmit, projectId, network, onCanisterInstalled }: ConfigFormProps) {
   const initialProvider = (() => {
     const value = initialValues.llm_provider;
     return value && "Text" in value ? normalizeProvider(value.Text) : "";
   })();
   const [llmProvider, setLlmProvider] = useState(initialProvider);
+  const [installTarget, setInstallTarget] = useState<{
+    packageName: string;
+    onInstalled: (canisterId: string) => void;
+  } | null>(null);
   useEffect(() => setLlmProvider(initialProvider), [initialProvider]);
 
   const editableSchema = schema.filter((field) => !isReadonly(field));
@@ -600,6 +626,7 @@ export function ConfigForm({ schema, initialValues, installedCanisters = {}, onS
                       initialValue={displayedInitialValue}
                       installedCanisters={installedCanisters}
                       onSubmit={onSubmit}
+                      onInstallPackage={(packageName, onInstalled) => setInstallTarget({ packageName, onInstalled })}
                       onRawChange={field.key === "llm_provider"
                         ? (value) => setLlmProvider(Array.isArray(value) ? "" : String(value))
                         : undefined}
@@ -642,6 +669,21 @@ export function ConfigForm({ schema, initialValues, installedCanisters = {}, onS
           )}
         </section>
       </div>
+      {projectId && network && (
+        <InstallCanisterDialog
+          open={installTarget !== null}
+          onClose={() => setInstallTarget(null)}
+          jobId={projectId}
+          network={network}
+          onDeployed={(canister) => {
+            if (!canister) return;
+            installTarget?.onInstalled(canister.id);
+            onCanisterInstalled?.(canister);
+          }}
+          requiredPackageName={installTarget?.packageName}
+          navigateToOrchestrate={false}
+        />
+      )}
     </div>
   );
 }

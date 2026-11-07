@@ -10,7 +10,7 @@
 // - see `backend/src/lib.rs`'s own doc comment on why), not silently dropped.
 
 import { Principal } from "@icp-sdk/core/principal";
-import { getBackendActor } from "./actors";
+import { getBackendActor, getModuleConfigActor } from "./actors";
 import {
   CanisterKind as RawCanisterKind,
   ProjectState as RawProjectState,
@@ -39,6 +39,9 @@ export const CANISTER_KIND_LABELS: Record<CanisterKind, string> = {
 export interface CanisterInfo {
   id: string;
   kind: CanisterKind;
+  /** Stable `.wasm` package name, when this canister came from the
+   * package registry. Null for imported/runtime/legacy canisters. */
+  packageName: string | null;
 }
 
 export interface Project {
@@ -106,7 +109,11 @@ function adaptProject(raw: RawProject): Project {
     canisters: Object.fromEntries(raw.canisters.map(([name, info]) => {
       const kind = adaptKind(info.kind);
       const legacyNotification = kind === "other" && name.toLowerCase() === "notification";
-      return [name, { id: info.id.toText(), kind: legacyNotification ? "notification" : kind }];
+      return [name, {
+        id: info.id.toText(),
+        kind: legacyNotification ? "notification" : kind,
+        packageName: info.package_name ?? null,
+      }];
     })),
     llm_context: raw.llm_context ?? null,
     final_message: raw.final_message ?? null,
@@ -133,6 +140,25 @@ export async function getProject(id: string): Promise<Project | null> {
   return raw === null ? null : adaptProject(raw);
 }
 
+export interface ProjectNotificationPreferences {
+  push_enabled: boolean;
+}
+
+/** Reads the authenticated owner's saved project-wide push preference. */
+export async function getProjectNotificationPreferences(id: string): Promise<ProjectNotificationPreferences> {
+  const actor = await getBackendActor();
+  const result = await actor.get_project_notification_preferences(id);
+  if ("Err" in result) throw new Error(result.Err);
+  return result.Ok;
+}
+
+/** Saves the authenticated owner's project-wide push preference. */
+export async function setProjectNotificationPreferences(id: string, enabled: boolean): Promise<void> {
+  const actor = await getBackendActor();
+  const result = await actor.set_project_notification_preferences(id, enabled);
+  if ("Err" in result) throw new Error(result.Err);
+}
+
 /** Creates a new project directly on `backend`, as the real signed-in user -
  * the caller becomes its owner (see `backend::create_project`'s own doc
  * comment). The orchestrator has no part in this at all any more (see the
@@ -153,9 +179,46 @@ export async function createProject(request: string, network: string): Promise<s
  * as the project's own owner. Mirrors `removeProjectCanister`'s shape. */
 export async function addProjectCanisters(id: string, canisters: Array<[string, CanisterInfo]>): Promise<void> {
   const actor = await getBackendActor();
-  const raw: Array<[string, { id: Principal; kind: RawCanisterKind }]> = canisters.map(([name, info]) => [name, { id: Principal.fromText(info.id), kind: encodeKind(info.kind) }]);
+  const raw: Array<[string, { id: Principal; kind: RawCanisterKind; package_name?: string }]> = canisters.map(([name, info]) => [name, {
+    id: Principal.fromText(info.id),
+    kind: encodeKind(info.kind),
+    ...(info.packageName ? { package_name: info.packageName } : {}),
+  }]);
   const result = await actor.add_project_canisters(id, raw);
   if ("Err" in result) throw new Error(result.Err);
+  await refreshProjectCanisterConfigs(id);
+}
+
+/** Broadcast the authoritative project canister list to every tracked
+ * canister. Modules that implement the SDK dynamic-config surface refresh
+ * package-derived defaults and preserve values users set in their settings. */
+export async function refreshProjectCanisterConfigs(id: string): Promise<void> {
+  const project = await getProject(id);
+  if (!project) return;
+  const context = {
+    project_id: project.id,
+    canisters: Object.values(project.canisters)
+      .filter((canister): canister is CanisterInfo & { packageName: string } => Boolean(canister.packageName))
+      .map((canister) => ({ canister_id: Principal.fromText(canister.id), package_name: canister.packageName })),
+  };
+  const calls = Object.values(project.canisters).map(async (canister) => {
+    const module = await getModuleConfigActor(canister.id, project.network);
+    const result = await module.update_project_context(context);
+    if ("Err" in result) throw new Error(result.Err);
+  });
+  const results = await Promise.allSettled(calls);
+  results.forEach((result, index) => {
+    if (result.status === "rejected") {
+      console.debug("Project context refresh skipped/failed for canister", Object.values(project.canisters)[index].id, result.reason);
+    }
+  });
+}
+
+/** Resolves a project dependency by the package registry's stable identity.
+ * Package names and canister names are presentation details and must not be
+ * used for wiring. */
+export function findProjectCanisterByPackage(project: Project, packageName: string): CanisterInfo | null {
+  return Object.values(project.canisters).find((canister) => canister.packageName === packageName) ?? null;
 }
 
 /** Renames a project - the Settings page's General tab. Owner-gated. */
@@ -186,4 +249,5 @@ export async function removeProjectCanister(id: string, name: string): Promise<v
   const actor = await getBackendActor();
   const result = await actor.remove_project_canister(id, name);
   if ("Err" in result) throw new Error(result.Err);
+  await refreshProjectCanisterConfigs(id);
 }

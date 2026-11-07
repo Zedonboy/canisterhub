@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { checkSubmission, inputType, isFormColumn, submitResponse } from '@/lib/forms/fields';
 import type { FormDefinition, FormValues } from '@/lib/forms/types';
@@ -36,7 +37,7 @@ export function FormRenderer({ form, columns, preview = false, writable = true }
 		{fields.map(({ field, column }) => { const id = `form-field-${field.id}`; const value = values[field.id] ?? ''; const error = errors[field.id]; const options = column.data_type === 'enum' ? column.settings.options ?? [] : [];
 			return <div key={field.id} className="grid gap-1.5"><label htmlFor={id} className="text-sm font-medium">{field.label}{field.required && <span className="text-red-600"> *</span>}</label>{field.help && <p className="text-xs text-muted-foreground">{field.help}</p>}
 				{column.data_type === 'boolean' ? <div className="flex items-center gap-2"><Checkbox id={id} checked={value === 'true'} onCheckedChange={(checked) => setValue(field.id, checked === true ? 'true' : 'false')} /><span className="text-sm">Yes</span></div>
-				: options.length ? <select id={id} value={value} onChange={(e) => setValue(field.id, e.target.value)} className="h-9 rounded-md border bg-background px-3 text-sm"><option value="">Choose…</option>{options.map((o) => <option key={o.value}>{o.value}</option>)}</select>
+				: options.length ? <Select value={value} onValueChange={(v) => setValue(field.id, v)}><SelectTrigger id={id} className="w-full"><SelectValue placeholder="Choose…"/></SelectTrigger><SelectContent>{options.map((o) => <SelectItem key={o.value} value={o.value}>{o.value}</SelectItem>)}</SelectContent></Select>
 				: column.data_type === 'markdown' ? <Textarea id={id} value={value} placeholder={field.placeholder} onChange={(e) => setValue(field.id, e.target.value)} />
 				: <Input id={id} type={inputType(column)} step={['number','currency'].includes(column.data_type) ? 'any' : undefined} value={value} placeholder={field.placeholder} onChange={(e) => setValue(field.id, e.target.value)} />}
 				{error && <p className="text-xs text-red-700">{error}</p>}</div>;

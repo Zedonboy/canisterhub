@@ -3,6 +3,13 @@
 `agent` is the single messaging and AI module. It receives WhatsApp and
 Telegram webhooks, mail from `mail_bridge`, runs the configured LLM/tool loop,
 stores conversations/messages, and sends replies through the same channel.
+
+The built-in `request_client_data` tool lets the model pause a conversation
+and ask the current client for `location`, `text`, `email`, `phone`, `number`,
+or `date`. Location requests render as native share-location controls in
+WhatsApp and Telegram, a browser geolocation button in the web chat, and a
+plain reply request over email. Pending requests are stored by authenticated
+conversation and never accept a customer or channel chosen by the model.
 The former standalone `connector` package is no longer a workspace member.
 
 The agent owns its data. Conversations, customer profiles, inbound messages,
@@ -30,7 +37,9 @@ integrations, and `connected_canisters`. Adding a connected canister discovers
 its `ai_*` methods; removing it removes those tools from subsequent LLM turns.
 Secret fields are write-only and never returned by `get_config`. Browser push
 is routed through the CanisterHub protocol, so the agent no longer needs or
-exposes a notification-canister principal.
+exposes a notification-canister principal. Project context also identifies
+the installed restaurant package as an authorized sender for verified order
+receipts.
 The agent canister ID and the WhatsApp, Telegram, administrative callback, and
 mail ingress endpoints remain read-only. The older controller-only
 `get_runtime_config`/`update_config` methods remain available for compatibility.
@@ -46,6 +55,10 @@ The SME owner chooses one of two access models in the dashboard:
 - **Own API key** — Claude/Anthropic, DeepSeek, or OpenAI. The key remains in
   this SME-controlled canister and the agent calls that provider directly via
   a non-replicated HTTPS outcall.
+
+Assistant responses default to at most 120 generated tokens per completion.
+The SME can change this at runtime with the **Maximum Tokens per Message**
+dynamic setting.
 
 The protocol principal defaults to the value compiled in `src/protocol.rs`, so
 the SME does not have to configure it; dynamic config exposes that default for

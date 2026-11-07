@@ -23,8 +23,9 @@ import type { ConfigFieldSchema, ConfigType, ConfigValue, ConfigVectorType, Conf
 import { addProjectCanisters, getProject, type CanisterInfo } from "./backend";
 import { getMarketplaceItem, listMarketplaceItems, recordDownload } from "./marketplace";
 import { runtimeValue } from "./canisterEnv";
-import { backendCanisterId } from "./actors";
 import { MarketplaceItemType } from "../bindings/backend";
+import { findPackageInfoForRelease, projectPackageCanistersByName, recordProjectPackageInstallation } from "./packageRegistry";
+import { encodeProjectContext } from "./candid/agentInit";
 
 const MAX_PACKAGES = 32;
 
@@ -33,10 +34,6 @@ export interface TemplatePackage {
   url: string;
   required: boolean;
   depends_on: string[];
-  /** Optional install (init) argument as base64 of the already-encoded
-   * Candid bytes (`DIDL…`). Omitted means the empty tuple `()`. Candid
-   * text may later be accepted alongside this; for now bytes only. */
-  init_arg_base64?: string;
   /** Question shown next to an optional package's checkbox, e.g. "Add an
    * online storefront?". Falls back to the package name. */
   prompt?: string;
@@ -75,25 +72,6 @@ export interface ProjectTemplate {
 
 function isTemplateType(itemType: MarketplaceItemType): boolean {
   return itemType === MarketplaceItemType.Template;
-}
-
-const EMPTY_INIT_ARG = new Uint8Array([68, 73, 68, 76, 0, 0]);
-
-/** Decodes a package's `init_arg_base64`, or `()` when it has none. Checks
- * for the Candid `DIDL` magic so a mistyped value fails when the manifest
- * loads, not after the canister is already created. */
-function decodeInitArg(pkgName: string, encoded: string | undefined): Uint8Array {
-  if (encoded === undefined) return EMPTY_INIT_ARG;
-  let bytes: Uint8Array;
-  try {
-    bytes = Uint8Array.from(atob(encoded.replace(/\s+/g, "")), (c) => c.charCodeAt(0));
-  } catch {
-    throw new Error(`package \`${pkgName}\` has an invalid init_arg_base64 (not valid base64)`);
-  }
-  if (bytes.length < 6 || bytes[0] !== 68 || bytes[1] !== 73 || bytes[2] !== 68 || bytes[3] !== 76) {
-    throw new Error(`package \`${pkgName}\` init_arg_base64 is not Candid-encoded (must start with DIDL)`);
-  }
-  return bytes;
 }
 
 function isSafeSlug(value: string): boolean {
@@ -136,10 +114,6 @@ function validateManifest(value: ProjectTemplate): void {
     if (!isSafeSlug(pkg.name)) throw new Error(`package \`${pkg.name}\` has an invalid name`);
     if (names.has(pkg.name)) throw new Error(`duplicate package name \`${pkg.name}\``);
     names.add(pkg.name);
-    if (pkg.init_arg_base64 !== undefined && typeof pkg.init_arg_base64 !== "string") {
-      throw new Error(`package \`${pkg.name}\` init_arg_base64 must be a string`);
-    }
-    decodeInitArg(pkg.name, pkg.init_arg_base64);
     if (pkg.prompt !== undefined && (typeof pkg.prompt !== "string" || pkg.prompt.length > 200)) {
       throw new Error(`package \`${pkg.name}\` prompt must be a string of at most 200 characters`);
     }
@@ -288,44 +262,57 @@ export interface InstalledPackage {
  * controllers to `[user, orchestrator]`, and records it on the project -
  * the package-level equivalent of `deployMarketplaceItem`. */
 export async function installTemplatePackage(pkg: TemplatePackage, network: string, userPrincipal: Principal, projectId: string): Promise<InstalledPackage> {
-  const isNotification = pkg.name.toLowerCase().replaceAll("-", "_") === "notification";
-  if (isNotification) {
-    const project = await getProject(projectId);
-    if (!project) throw new Error(`Project ${projectId} was not found`);
-    if (Object.values(project.canisters).some((info) => info.kind === "notification")) {
-      throw new Error("This project already has a notification canister. Share it with the template modules instead of deploying another one.");
-    }
-  }
+  const normalizedPackageName = pkg.name.toLowerCase().replaceAll("-", "_");
   const wasmResponse = await fetch(pkg.url);
   if (!wasmResponse.ok) throw new Error(`Could not download package \`${pkg.name}\`: HTTP ${wasmResponse.status}`);
   const wasm = new Uint8Array(await wasmResponse.arrayBuffer());
+  const packageInfo = await findPackageInfoForRelease({ url: pkg.url, title: pkg.name });
+  const project = await getProject(projectId);
+  if (!project) throw new Error(`Project ${projectId} was not found`);
+  const initArg = encodeProjectContext({
+    projectId,
+    packageCanisters: await projectPackageCanistersByName(project),
+  });
   const actor = await managementActor(network);
 
   const { canister_id: canisterId } =
     network === "local"
-      ? await actor.provisional_create_canister_with_cycles({ amount: [], settings: [], specified_id: [], sender_canister_version: [] })
-      : await actor.create_canister({ settings: [], sender_canister_version: [] });
+      ? await actor.provisional_create_canister_with_cycles({
+          amount: [],
+          settings: [{ controllers: [], log_visibility: [{ controllers: null }] }],
+          specified_id: [],
+          sender_canister_version: [],
+        })
+      : await actor.create_canister({
+          settings: [{ controllers: [], log_visibility: [{ controllers: null }] }],
+          sender_canister_version: [],
+        });
 
   await actor.install_code({
     mode: { install: null },
     canister_id: canisterId,
     wasm_module: wasm,
-    arg: decodeInitArg(pkg.name, pkg.init_arg_base64),
+    arg: initArg,
     sender_canister_version: [],
   });
 
   const orchestrator = orchestratorPrincipal();
   const controllers = orchestrator ? [userPrincipal, orchestrator] : [userPrincipal];
-  await actor.update_settings({ canister_id: canisterId, settings: { controllers: [controllers] }, sender_canister_version: [] });
+  await actor.update_settings({
+    canister_id: canisterId,
+    settings: { controllers: [controllers], log_visibility: [{ controllers: null }] },
+    sender_canister_version: [],
+  });
 
-  if (isNotification) {
-    await setModuleConfig(canisterId.toText(), network, {
-      trusted_senders: { Vector: [{ PrincipalId: backendCanisterId() }] },
-    });
-  }
-
-  const info: CanisterInfo = { id: canisterId.toText(), kind: isNotification ? "notification" : "other" };
+  const info: CanisterInfo = {
+    id: canisterId.toText(),
+    kind: "other",
+    packageName: packageInfo?.name ?? null,
+  };
   await addProjectCanisters(projectId, [[pkg.name, info]]);
+  if (packageInfo) {
+    await recordProjectPackageInstallation(projectId, pkg.name, packageInfo.name);
+  }
 
   return { name: pkg.name, canisterId: canisterId.toText() };
 }

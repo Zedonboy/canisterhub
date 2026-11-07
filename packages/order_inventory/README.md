@@ -5,7 +5,13 @@ An upgrade-safe, single-business canister for products, services, stock, and cus
 The same canister serves its certified inventory admin UI at `/admin/` and
 its certified public storefront at `/` (with `/shop` as an alias).
 
-Controllers are the SME administrators. Before connecting an agent, trust its canister principal and optionally grant specific channel sessions staff privileges:
+Fresh marketplace installs receive one `ProjectContext`. The canister
+uses it to prefill `project_id` and the `assetstorage.wasm` canister picker,
+and automatically trusts an `agent.wasm` canister already in the project.
+
+Controllers are the SME administrators. When installing outside CanisterHub,
+trust the agent principal manually and optionally grant specific channel
+sessions staff privileges:
 
 ```sh
 icp canister call order_inventory set_trusted_agent '(principal "<agent-id>", true)'
@@ -13,7 +19,7 @@ icp canister call order_inventory set_staff '(record { channel = variant { Whats
 icp canister call agent add_canister '(principal "<order-inventory-id>")'
 ```
 
-Customer AI methods use `AiContext` supplied by the calling agent, so customers cannot select another customer's identity in JSON. Staff-only AI methods additionally require the conversation identity to be explicitly registered by a controller.
+Customer AI methods use `AiContext` supplied by the calling agent, so customers cannot select another customer's identity in JSON. AI-created orders retain the authenticated agent canister ID and conversation session ID. Once a payment is recorded, inventory sends the receipt to that saved agent with only the session ID; the agent resolves its channel and routes the message. Web-channel receipts are appended to conversation history for the client to poll. Staff-only AI methods additionally require the conversation identity to be explicitly registered by a controller.
 
 Money is stored as integer minor units (for example, 2500 means 25.00 in a two-decimal currency). Stock is reserved atomically when an order is placed and restored if it is cancelled or an unpaid reservation expires. Products and services may leave `stock_quantity` unset to disable stock tracking.
 

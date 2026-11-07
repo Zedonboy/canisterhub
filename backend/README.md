@@ -90,10 +90,10 @@ delegations or private keys directly:
 
 ## Web Push
 
-Web Push is not a backend responsibility. Install the project-owned
-`packages/notification` Marketplace module; its README documents VAPID setup,
-browser subscriptions, trusted senders, and delivery. Legacy `push_*` Candid
-methods remain only as upgrade-compatible stubs and return a migration error.
+Web Push subscriptions and delivery are owned by the protocol backend. Project
+owners enable browser notifications from Settings; authorized project modules
+send notifications through `send_project_notification`, which verifies project
+membership and delivers to the owner's saved browser subscriptions.
 
 ## Managed AI access
 

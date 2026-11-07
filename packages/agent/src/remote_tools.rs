@@ -85,6 +85,7 @@ pub struct RemoteToolError(String);
 
 pub struct RemoteCanisterTool {
     pub customer: SessionKey,
+    pub project_id: Option<String>,
     pub canisters: Vec<AiCanister>,
 }
 
@@ -160,7 +161,8 @@ impl Tool for RemoteCanisterTool {
             )));
         }
         let context = AiContext {
-            agent: ic_cdk::api::canister_self(),
+            project_id: self.project_id.clone().unwrap_or_default(),
+            agent_canister_id: ic_cdk::api::canister_self(),
             channel: self.customer.channel,
             session_id: self.customer.session_id.clone(),
         };

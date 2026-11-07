@@ -2,10 +2,13 @@ mod assets;
 mod config;
 mod http;
 #[cfg(target_arch = "wasm32")]
+mod payment;
+#[cfg(target_arch = "wasm32")]
 mod protocol;
 mod state;
 mod types;
 
+pub use canister_hub_sdk::{ProjectCanister, ProjectContext};
 pub use types::*;
 
 use candid::Principal;
@@ -33,6 +36,7 @@ fn controller_only() -> Result<(), OrderError> {
 fn payment_processor_only() -> Result<Principal, OrderError> {
     let caller = ic_cdk::api::msg_caller();
     if ic_cdk::api::is_controller(&caller)
+        || canister_hub_sdk::ic::config::get_env_principal("payment_canister") == Some(caller)
         || state::settings()
             .trusted_payment_processors
             .contains(&caller)
@@ -52,28 +56,74 @@ fn controller_actor() -> String {
 fn agent_actor(context: &AiContext) -> String {
     format!(
         "agent:{}:{:?}:{}",
-        context.agent, context.channel, context.session_id
+        context.agent_canister_id, context.channel, context.session_id
     )
 }
 
-fn authenticate_agent(context: &AiContext) -> Result<CustomerIdentity, String> {
+async fn authenticate_project(project_id: &str) -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
-    if caller == Principal::anonymous() || caller != context.agent {
-        return Err("AiContext.agent must match the authenticated canister caller".to_string());
+    ic_cdk::api::debug_print(format!("order_inventory: AI request project authorization started caller={caller} project_id={project_id}"));
+    if project_id.trim().is_empty()
+        || canister_hub_sdk::ic::config::get_env_text("project_id").as_deref() != Some(project_id)
+    {
+        ic_cdk::api::debug_print(format!("order_inventory: project authorization rejected caller={caller} reason=project_id_mismatch"));
+        return Err(
+            "project_id does not match this inventory package's configured project".to_string(),
+        );
     }
-    let settings = state::settings();
-    if !settings.trusted_agents.contains(&caller) {
-        return Err("calling agent is not trusted by this business".to_string());
+    #[cfg(target_arch = "wasm32")]
+    let is_project_member = {
+        let protocol_id = canister_hub_sdk::ic::config::get_env_principal("protocol_id")
+            .ok_or_else(|| {
+                "protocol_id is not configured for project membership verification".to_string()
+            })?;
+        protocol::verify_project_package_membership(project_id.to_string(), caller, protocol_id)
+            .await?
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let is_project_member = state::is_project_member(caller);
+    if !is_project_member {
+        ic_cdk::api::debug_print(format!("order_inventory: project authorization rejected caller={caller} reason=caller_not_project_package"));
+        return Err("calling canister is not a package in this project".to_string());
+    }
+    ic_cdk::api::debug_print(format!(
+        "order_inventory: project authorization accepted caller={caller} project_id={project_id}"
+    ));
+    Ok(())
+}
+
+async fn authenticate_agent(context: &AiContext) -> Result<CustomerIdentity, String> {
+    authenticate_project(&context.project_id).await?;
+    let caller = ic_cdk::api::msg_caller();
+    ic_cdk::api::debug_print(format!(
+        "order_inventory: authenticating AI agent caller={caller}"
+    ));
+    if caller == Principal::anonymous() || caller != context.agent_canister_id {
+        ic_cdk::api::debug_print(format!(
+            "order_inventory: agent authentication rejected caller={caller} reason=context_agent_mismatch"
+        ));
+        return Err("AiContext.agent_canister_id must match the authenticated canister caller".to_string());
     }
     validate_identity(&CustomerIdentity::from(context)).map_err(error_text)?;
+    ic_cdk::api::debug_print(format!(
+        "order_inventory: agent authentication accepted caller={caller} via project membership"
+    ));
     Ok(CustomerIdentity::from(context))
 }
 
-fn authenticate_staff(context: &AiContext) -> Result<CustomerIdentity, String> {
-    let identity = authenticate_agent(context)?;
+async fn authenticate_staff(context: &AiContext) -> Result<CustomerIdentity, String> {
+    let identity = authenticate_agent(context).await?;
     if !state::settings().staff.contains(&identity) {
+        ic_cdk::api::debug_print(format!(
+            "order_inventory: staff authorization rejected caller={} reason=session_not_staff",
+            ic_cdk::api::msg_caller()
+        ));
         return Err("this conversation is not authorized as SME staff".to_string());
     }
+    ic_cdk::api::debug_print(format!(
+        "order_inventory: staff authorization accepted caller={}",
+        ic_cdk::api::msg_caller()
+    ));
     Ok(identity)
 }
 
@@ -237,21 +287,81 @@ fn update_inventory_inner(
     state::update_inventory(id, input, actor, ic_cdk::api::time())
 }
 
-fn place_order_inner(
+async fn place_order_inner(
     customer: CustomerIdentity,
+    agent_canister_id: Option<Principal>,
     input: PlaceOrder,
     actor: &str,
 ) -> Result<Order, OrderError> {
     validate_place_order(&input)?;
-    let order = state::place_order(customer, input, actor, ic_cdk::api::time())?;
+    let needs_payment = input.items.iter()
+        .filter_map(|request| state::get_inventory(request.inventory_id))
+        .any(|item| item.payment_method == PaymentMethod::Prepaid);
+    if needs_payment {
+        if input.customer_email.as_deref().is_none_or(|email| email.trim().is_empty()) {
+            return Err(OrderError::InvalidInput("customer_email is required for prepaid checkout".to_string()));
+        }
+        if canister_hub_sdk::ic::config::get_env_principal("payment_canister").is_none() {
+            return Err(OrderError::Conflict("a payment processor package must be configured before placing prepaid orders".to_string()));
+        }
+    }
+    let order = state::place_order(customer.clone(), agent_canister_id, input, actor, ic_cdk::api::time())?;
+    let order = if order.payment_method == PaymentMethod::Prepaid {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let payment_canister = canister_hub_sdk::ic::config::get_env_principal("payment_canister")
+                .ok_or_else(|| OrderError::Conflict("payment processor package is not configured".to_string()))?;
+            let charge = payment::create_charge(payment_canister, payment::CreateChargeRequest {
+                order_id: order.id,
+                inventory_canister: ic_cdk::api::canister_self(),
+                merchant_reference: order.payment_reference.clone().unwrap_or_default(),
+                amount_minor: order.total_minor,
+                currency: order.currency.clone(),
+                customer_email: order.customer_email.clone().unwrap_or_default(),
+                customer_name: order.customer_name.clone(),
+            }).await;
+            match charge {
+                Ok(charge) => state::set_checkout_url(order.id, charge.checkout_url, ic_cdk::api::time())?,
+                Err(error) => {
+                    let _ = state::cancel_customer_order(order.id, &customer, "system:payment_checkout_failed", ic_cdk::api::time());
+                    return Err(OrderError::Internal(format!("payment checkout could not be created: {error}")));
+                }
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = state::cancel_customer_order(order.id, &customer, "system:payment_unavailable", ic_cdk::api::time());
+            return Err(OrderError::Internal("payment checkout is only available in the canister runtime".to_string()));
+        }
+    } else { order };
     #[cfg(target_arch = "wasm32")]
     protocol::notify_new_order(&order);
     Ok(order)
 }
 
 #[ic_cdk::init]
-fn init() {
+fn init(project_context: ProjectContext) {
     state::init_dynamic_config_store();
+    config::apply_project_context(&project_context)
+        .expect("failed to initialize inventory project context");
+    state::set_project_members(
+        project_context
+            .canisters
+            .iter()
+            .map(|canister| canister.canister_id)
+            .collect(),
+    );
+    ic_cdk::api::debug_print(format!(
+        "order_inventory: initialized project context project_id={} package_count={}",
+        project_context.project_id,
+        project_context.canisters.len()
+    ));
+    if let Some(agent) = project_context.canister_for_package("agent.wasm") {
+        state::set_trusted_agent(agent, true);
+    }
+    if let Some(processor) = canister_hub_sdk::ic::config::get_env_principal("payment_canister") {
+        state::set_payment_processor(processor, true);
+    }
     assets::certify();
 }
 
@@ -405,18 +515,53 @@ fn validate_payment_text(value: &str, label: &str) -> Result<(), OrderError> {
     validate_text(value, label, MAX_PAYMENT_TEXT_BYTES, true)
 }
 
+#[cfg(target_arch = "wasm32")]
+async fn deliver_payment_receipt(
+    agent: Principal,
+    order: &Order,
+    payment: &PaymentRecord,
+) -> Result<(), String> {
+    protocol::send_payment_receipt(agent, order, payment).await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn deliver_payment_receipt(
+    _agent: Principal,
+    _order: &Order,
+    _payment: &PaymentRecord,
+) -> Result<(), String> {
+    Err("payment receipt delivery is only available in the canister runtime".to_string())
+}
+
 #[ic_cdk::update]
-fn record_payment(input: RecordPayment) -> Result<Order, OrderError> {
+async fn record_payment(input: RecordPayment) -> Result<Order, OrderError> {
     let processor = payment_processor_only()?;
     validate_payment_text(&input.provider, "payment provider")?;
     validate_payment_text(&input.transaction_id, "payment transaction id")?;
     validate_payment_text(&input.merchant_reference, "merchant payment reference")?;
     validate_currency(&input.currency)?;
-    state::record_payment(
+    let was_paid = state::get_payment(input.order_id)
+        .is_some_and(|payment| payment.status == PaymentStatus::Paid);
+    let order = state::record_payment(
         input,
         &format!("payment_processor:{processor}"),
         ic_cdk::api::time(),
-    )
+    )?;
+    if !was_paid {
+        if let Some(agent) = order.agent_canister_id {
+            let payment = state::get_payment(order.id);
+            if let Some(payment) = payment {
+                if let Err(error) = deliver_payment_receipt(agent, &order, &payment).await {
+                    ic_cdk::api::debug_print(format!("order_inventory: agent send_message receipt delivery failed order_id={} error={error}", order.id));
+                }
+            } else {
+                ic_cdk::api::debug_print(format!("order_inventory: paid order has no payment receipt record order_id={}", order.id));
+            }
+        } else {
+            ic_cdk::api::debug_print(format!("order_inventory: payment receipt has no originating agent order_id={}", order.id));
+        }
+    }
+    Ok(order)
 }
 
 #[ic_cdk::update]
@@ -463,25 +608,39 @@ fn expire_unpaid_orders(limit: u64) -> Result<u64, OrderError> {
 }
 
 #[ic_cdk::update]
-fn ai_list_inventory(context: AiContext, parameters: String) -> Result<String, String> {
-    authenticate_agent(&context)?;
+async fn ai_list_inventory(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_list_inventory invoked".to_string());
+    authenticate_agent(&context).await?;
     let _: EmptyParameters = parse_json(&parameters)?;
     json(&state::list_inventory(true))
 }
 
 #[ic_cdk::update]
-fn ai_place_order(context: AiContext, parameters: String) -> Result<String, String> {
-    let customer = authenticate_agent(&context)?;
+async fn ai_place_order(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_place_order invoked".to_string());
+    let customer = authenticate_agent(&context).await?;
     let input: PlaceOrder = parse_json(&parameters)?;
-    let order = place_order_inner(customer, input, &agent_actor(&context)).map_err(error_text)?;
+    let order = place_order_inner(customer, Some(context.agent_canister_id), input, &agent_actor(&context)).await.map_err(error_text)?;
     json(&order)
 }
 
 #[ic_cdk::update]
-fn ai_list_my_orders(context: AiContext, parameters: String) -> Result<String, String> {
-    let customer = authenticate_agent(&context)?;
+async fn ai_list_my_orders(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_list_my_orders invoked".to_string());
+    let customer = authenticate_agent(&context).await?;
     let _: EmptyParameters = parse_json(&parameters)?;
     json(&state::list_customer_orders(&customer))
+}
+
+#[ic_cdk::update]
+async fn ai_get_my_order(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_get_my_order invoked".to_string());
+    let customer = authenticate_agent(&context).await?;
+    let input: OrderIdParameters = parse_json(&parameters)?;
+    let order = state::get_order(input.order_id)
+        .filter(|order| order.customer == customer)
+        .ok_or_else(|| "order was not found for the current customer".to_string())?;
+    json(&order)
 }
 
 // ---------------------------------------------------------------------------
@@ -517,7 +676,7 @@ fn web_actor(customer: &CustomerIdentity) -> String {
 }
 
 #[ic_cdk::update]
-fn place_order(input: PlaceOrder) -> Result<Order, OrderError> {
+async fn place_order(input: PlaceOrder) -> Result<Order, OrderError> {
     let customer = web_customer()?;
     let open = state::list_customer_orders(&customer)
         .iter()
@@ -534,7 +693,7 @@ fn place_order(input: PlaceOrder) -> Result<Order, OrderError> {
         )));
     }
     let actor = web_actor(&customer);
-    place_order_inner(customer, input, &actor)
+    place_order_inner(customer, None, input, &actor).await
 }
 
 /// The caller's own orders, newest first.
@@ -559,8 +718,9 @@ struct OrderIdParameters {
 }
 
 #[ic_cdk::update]
-fn ai_cancel_my_order(context: AiContext, parameters: String) -> Result<String, String> {
-    let customer = authenticate_agent(&context)?;
+async fn ai_cancel_my_order(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_cancel_my_order invoked".to_string());
+    let customer = authenticate_agent(&context).await?;
     let input: OrderIdParameters = parse_json(&parameters)?;
     let order = state::cancel_customer_order(
         input.order_id,
@@ -573,17 +733,36 @@ fn ai_cancel_my_order(context: AiContext, parameters: String) -> Result<String, 
 }
 
 #[ic_cdk::update]
-fn ai_add_inventory(context: AiContext, parameters: String) -> Result<String, String> {
-    authenticate_staff(&context)?;
+async fn ai_add_inventory(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_add_inventory invoked".to_string());
+    authenticate_staff(&context).await?;
     let input: CreateInventoryItem = parse_json(&parameters)?;
     let item = create_inventory_inner(input, &agent_actor(&context)).map_err(error_text)?;
     json(&item)
 }
 
 #[ic_cdk::update]
-fn ai_list_all_inventory(context: AiContext, parameters: String) -> Result<String, String> {
-    authenticate_staff(&context)?;
+async fn ai_list_all_inventory(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_list_all_inventory invoked".to_string());
+    authenticate_staff(&context).await?;
     let _: EmptyParameters = parse_json(&parameters)?;
+    json(&state::list_inventory(false))
+}
+
+#[ic_cdk::update]
+async fn ai_list_my_inventory(context: AiContext, parameters: String) -> Result<String, String> {
+    let caller = ic_cdk::api::msg_caller();
+    ic_cdk::api::debug_print(format!(
+        "order_inventory: ai_list_my_inventory invoked caller={caller}"
+    ));
+    // This surface intentionally requires the calling agent canister itself
+    // to be a controller, in addition to the normal project and staff checks.
+    controller_only().map_err(error_text)?;
+    authenticate_staff(&context).await?;
+    let _: EmptyParameters = parse_json(&parameters)?;
+    ic_cdk::api::debug_print(format!(
+        "order_inventory: ai_list_my_inventory authorized controller caller={caller}"
+    ));
     json(&state::list_inventory(false))
 }
 
@@ -594,8 +773,9 @@ struct UpdateInventoryParameters {
 }
 
 #[ic_cdk::update]
-fn ai_update_inventory(context: AiContext, parameters: String) -> Result<String, String> {
-    authenticate_staff(&context)?;
+async fn ai_update_inventory(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_update_inventory invoked".to_string());
+    authenticate_staff(&context).await?;
     let input: UpdateInventoryParameters = parse_json(&parameters)?;
     let item = update_inventory_inner(input.id, input.update, &agent_actor(&context))
         .map_err(error_text)?;
@@ -608,8 +788,9 @@ struct ListOrdersParameters {
 }
 
 #[ic_cdk::update]
-fn ai_list_orders(context: AiContext, parameters: String) -> Result<String, String> {
-    authenticate_staff(&context)?;
+async fn ai_list_orders(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_list_orders invoked".to_string());
+    authenticate_staff(&context).await?;
     let input: ListOrdersParameters = parse_json(&parameters)?;
     json(&state::list_orders(input.status))
 }
@@ -621,8 +802,9 @@ struct UpdateOrderStatusParameters {
 }
 
 #[ic_cdk::update]
-fn ai_update_order_status(context: AiContext, parameters: String) -> Result<String, String> {
-    authenticate_staff(&context)?;
+async fn ai_update_order_status(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_update_order_status invoked".to_string());
+    authenticate_staff(&context).await?;
     let input: UpdateOrderStatusParameters = parse_json(&parameters)?;
     let order = state::update_order_status(
         input.order_id,
@@ -635,8 +817,9 @@ fn ai_update_order_status(context: AiContext, parameters: String) -> Result<Stri
 }
 
 #[ic_cdk::update]
-fn ai_list_order_audit(context: AiContext, parameters: String) -> Result<String, String> {
-    authenticate_staff(&context)?;
+async fn ai_list_order_audit(context: AiContext, parameters: String) -> Result<String, String> {
+    ic_cdk::api::debug_print("order_inventory: ai_list_order_audit invoked".to_string());
+    authenticate_staff(&context).await?;
     let input: OrderIdParameters = parse_json(&parameters)?;
     json(&state::list_audit(Some(input.order_id), 0, 200))
 }
@@ -659,9 +842,9 @@ mod tests {
             }],
             customer_name: None,
             customer_phone: None,
+            customer_email: None,
             delivery_location: location,
             note: None,
-            payment_method: None,
         }
     }
 
@@ -710,5 +893,19 @@ mod tests {
             instructions: None,
         }))
         .is_err());
+    }
+
+    /// Regenerate `order_inventory.did` from the exported candid. `export_candid!`
+    /// emits a private `__export_service` at the crate root, reachable from this
+    /// inline (cfg-test) module. Run with `cargo test -p order_inventory export_did`
+    /// after changing any endpoint or shared type.
+    #[test]
+    fn export_did() {
+        let did = super::__export_service();
+        std::fs::write(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/order_inventory.did"),
+            did,
+        )
+        .expect("write order_inventory.did");
     }
 }

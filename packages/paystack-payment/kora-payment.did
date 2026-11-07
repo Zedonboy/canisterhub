@@ -1,0 +1,146 @@
+type CanisterLink = record { url : text; kind : LinkKind; label : text };
+type CanisterMetadata = record {
+  name : text;
+  description : text;
+  version : text;
+  canister_type : opt CanisterType;
+};
+type CanisterType = variant { Storage; Auth; Database; Custom };
+type Charge = record {
+  status : text;
+  provider : text;
+  reference : text;
+  checkout_url : text;
+};
+type ConfigFieldSchema = record {
+  key : text;
+  // `Some(true)` means this value is canister-provided display data and
+  // cannot be changed through `set_config`. Optional on the wire so new
+  // settings clients remain compatible with older module canisters.
+  is_readonly : opt bool;
+  is_required : bool;
+  field_type : ConfigType;
+  group_description : opt text;
+  description : text;
+  label : text;
+  // Optional presentation metadata. These are optional on the wire so a
+  // new dashboard can still decode schemas from older module canisters.
+  group : opt text;
+  group_label : opt text;
+  // Optional typed filter for canister-picker fields. `None` has the
+  // same meaning as `Some(CanisterType::Custom)`.
+  canister_type : opt CanisterType;
+  // Optional `.wasm` artifact name for a canister dependency. Package
+  // installers can use this to prefill the picker from the project's
+  // already-installed canisters without matching project canister labels.
+  package_name : opt text;
+  default_value : opt ConfigValue;
+};
+type ConfigType = variant {
+  // Same stored value as `Text`, presented by settings clients as a
+  // multiline text area.
+  TextArea;
+  Text;
+  CanisterPicker : record { module_type_filter : opt text };
+  Boolean;
+  Float;
+  // Same wire shape as `Text`; `get_config` masks the value for any
+  // caller that isn't a controller (see this module's doc comment).
+  SecretText;
+  Select : record { options : vec text };
+  // A repeatable setting whose entries all share one scalar type. The
+  // settings UI renders this as a list with per-entry Add/Remove controls.
+  Vector : record { element_type : ConfigVectorType };
+  Number;
+};
+type ConfigValue = variant {
+  Text : text;
+  Boolean : bool;
+  Float : float64;
+  Vector : vec ConfigVectorValue;
+  PrincipalId : principal;
+  Number : int64;
+};
+type ConfigVectorType = variant {
+  Text;
+  CanisterPicker : record { module_type_filter : opt text };
+  Boolean;
+  Float;
+  SecretText;
+  Select : record { options : vec text };
+  Number;
+};
+type ConfigVectorValue = variant {
+  Text : text;
+  Boolean : bool;
+  Float : float64;
+  PrincipalId : principal;
+  Number : int64;
+};
+type CreateChargeRequest = record {
+  amount_minor : nat64;
+  inventory_canister : principal;
+  currency : text;
+  merchant_reference : text;
+  order_id : nat64;
+  customer_email : text;
+  customer_name : opt text;
+};
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
+// How a dashboard should present one webpage exposed by a module.
+type LinkKind = variant {
+  // A public-facing page opened as an ordinary external link.
+  Public;
+  // An authenticated internal page suitable for the dashboard iframe.
+  Admin;
+};
+type ProjectCanister = record { canister_id : principal; package_name : text };
+type ProjectContext = record {
+  canisters : vec ProjectCanister;
+  project_id : text;
+};
+type Result = variant { Ok : Charge; Err : text };
+type Result_1 = variant { Ok : vec Transaction; Err : text };
+type Result_2 = variant { Ok; Err : text };
+// One row of the transaction log the embedded `payment-ui` shows - a
+// stored charge plus the verification outcome. Deliberately a separate
+// Candid view from `ChargeRecord`: the stored shape is internal, this one
+// is the stable UI contract.
+type Transaction = record {
+  amount_minor : nat64;
+  transaction_id : text;
+  status : text;
+  reference : text;
+  created_at : nat64;
+  owner_notified : bool;
+  currency : text;
+  merchant_reference : text;
+  order_id : nat64;
+  checkout_url : text;
+};
+service : (ProjectContext) -> {
+  canister_metadata : () -> (CanisterMetadata) query;
+  create_charge : (CreateChargeRequest) -> (Result);
+  get_config : () -> (vec record { text; ConfigValue }) query;
+  get_config_schema : () -> (vec ConfigFieldSchema) query;
+  get_links : () -> (vec CanisterLink) query;
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  http_request_update : (HttpRequest) -> (HttpResponse);
+  // The full transaction log, newest first. Controller-only: amounts and
+  // customer references are merchant-private, unlike `create_charge` (which
+  // any of the merchant's own canisters may call).
+  list_transactions : () -> (Result_1) query;
+  set_config : (vec record { text; ConfigValue }) -> (Result_2);
+  update_project_context : (ProjectContext) -> (variant { Ok; Err : text });
+}

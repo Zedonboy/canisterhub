@@ -83,9 +83,10 @@ for the fuller version): the model only knows what it should do from the
 system prompt and the tool descriptions. For an internal admin assistant,
 that usually means: state what staff role this is for, remind it to confirm
 specifics (order id, amount, which customer) before acting if a request is
-ambiguous rather than guessing, and ask it to summarize what it did after
+ambiguous rather than guessing, ask it to summarize what it did after
 each action so the human reading the chat has a plain-language record
-alongside the structured one in `list_action_log`.
+alongside the structured one in `list_action_log`, and tell it to reply in
+Markdown - the staff chat renders it (`**bold**`, lists, tables).
 
 ## Adapting this template for a specific business
 

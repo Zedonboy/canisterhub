@@ -1,0 +1,268 @@
+type AiChannel = variant { Web; Email; WhatsApp; Telegram };
+type AiContext = record {
+  session_id : text;
+  agent_canister_id : principal;
+  project_id : text;
+  channel : AiChannel;
+};
+type CanisterLink = record { url : text; kind : LinkKind; label : text };
+type CanisterMetadata = record {
+  name : text;
+  description : text;
+  version : text;
+  canister_type : opt CanisterType;
+};
+type CanisterType = variant { Storage; Auth; Database; Custom };
+type ConfigFieldSchema = record {
+  key : text;
+  // `Some(true)` means this value is canister-provided display data and
+  // cannot be changed through `set_config`. Optional on the wire so new
+  // settings clients remain compatible with older module canisters.
+  is_readonly : opt bool;
+  is_required : bool;
+  field_type : ConfigType;
+  group_description : opt text;
+  description : text;
+  label : text;
+  // Optional presentation metadata. These are optional on the wire so a
+  // new dashboard can still decode schemas from older module canisters.
+  group : opt text;
+  group_label : opt text;
+  // Optional typed filter for canister-picker fields. `None` has the
+  // same meaning as `Some(CanisterType::Custom)`.
+  canister_type : opt CanisterType;
+  // Optional `.wasm` artifact name for a canister dependency. Package
+  // installers can use this to prefill the picker from the project's
+  // already-installed canisters without matching project canister labels.
+  package_name : opt text;
+  default_value : opt ConfigValue;
+};
+type ConfigType = variant {
+  // Same stored value as `Text`, presented by settings clients as a
+  // multiline text area.
+  TextArea;
+  Text;
+  CanisterPicker : record { module_type_filter : opt text };
+  Boolean;
+  Float;
+  // Same wire shape as `Text`; `get_config` masks the value for every
+  // caller (see this module's doc comment - secrets are write-only).
+  SecretText;
+  Select : record { options : vec text };
+  // A repeatable setting whose entries all share one scalar type. The
+  // settings UI renders this as a list with per-entry Add/Remove controls.
+  Vector : record { element_type : ConfigVectorType };
+  Number;
+};
+type ConfigValue = variant {
+  Text : text;
+  Boolean : bool;
+  Float : float64;
+  Vector : vec ConfigVectorValue;
+  PrincipalId : principal;
+  Number : int64;
+};
+type ConfigVectorType = variant {
+  Text;
+  CanisterPicker : record { module_type_filter : opt text };
+  Boolean;
+  Float;
+  SecretText;
+  Select : record { options : vec text };
+  Number;
+};
+type ConfigVectorValue = variant {
+  Text : text;
+  Boolean : bool;
+  Float : float64;
+  PrincipalId : principal;
+  Number : int64;
+};
+type CreateMenuItem = record {
+  name : text;
+  description : text;
+  payment_method : PaymentMethod;
+  available : bool;
+  price_per_portion_minor : nat64;
+  currency : text;
+  plate_price_minor : nat64;
+  image_url : opt text;
+};
+type CustomerIdentity = record { session_id : text; channel : AiChannel };
+type FulfillmentMethod = variant { Delivery; Takeaway; DineIn };
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
+};
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  upgrade : opt bool;
+  status_code : nat16;
+};
+// How a dashboard should present one webpage exposed by a module.
+type LinkKind = variant {
+  // A public-facing page opened as an ordinary external link.
+  Public;
+  // An authenticated internal page suitable for the dashboard iframe.
+  Admin;
+};
+type MenuItem = record {
+  id : nat64;
+  updated_at : nat64;
+  name : text;
+  description : text;
+  created_at : nat64;
+  payment_method : PaymentMethod;
+  available : bool;
+  price_per_portion_minor : nat64;
+  currency : text;
+  plate_price_minor : nat64;
+  image_url : opt text;
+};
+type PaymentApiError = variant {
+  Internal : text;
+  InvalidInput : text;
+  NotFound : text;
+  Unauthorized : text;
+  Conflict : text;
+};
+type PaymentMethod = variant { Prepaid; CashOnDelivery };
+type PlaceRestaurantOrder = record {
+  items : vec RestaurantOrderRequestLine;
+  fulfillment : FulfillmentMethod;
+  delivery_address : opt text;
+  table_label : opt text;
+  customer_name : opt text;
+  customer_phone : opt text;
+  customer_email : opt text;
+  note : opt text;
+};
+// One canister already installed in the project, identified by the stable
+// Wasm artifact filename assigned by the package registry.
+type ProjectCanister = record { canister_id : principal; package_name : text };
+// Platform-owned context supplied when a package is installed.
+type ProjectContext = record {
+  canisters : vec ProjectCanister;
+  project_id : text;
+};
+type RecordPayment = record {
+  amount_minor : nat64;
+  transaction_id : text;
+  provider : text;
+  currency : text;
+  merchant_reference : text;
+  order_id : nat64;
+};
+type RecordPaymentFailure = record {
+  provider : text;
+  reference : text;
+  order_id : nat64;
+  reason : text;
+};
+type RecordPaymentFailureResult = record { order_id : nat64 };
+type RecordPaymentResult = record { id : nat64 };
+type RestaurantOrder = record {
+  id : nat64;
+  status : RestaurantOrderStatus;
+  updated_at : nat64;
+  customer_phone : opt text;
+  customer : CustomerIdentity;
+  note : opt text;
+  created_at : nat64;
+  payment_status : RestaurantPaymentStatus;
+  payment_method : PaymentMethod;
+  agent_canister_id : principal;
+  total_minor : nat64;
+  currency : text;
+  delivery_address : opt text;
+  merchant_reference : text;
+  fulfillment : FulfillmentMethod;
+  items : vec RestaurantOrderLine;
+  customer_email : opt text;
+  customer_name : opt text;
+  table_label : opt text;
+  checkout_url : opt text;
+};
+type RestaurantOrderLine = record {
+  plates : nat64;
+  name : text;
+  line_total_minor : nat64;
+  price_per_portion_minor : nat64;
+  portions : nat64;
+  menu_item_id : nat64;
+  plate_price_minor : nat64;
+};
+type RestaurantOrderRequestLine = record { menu_item_id : nat64; portions : nat64 };
+type RestaurantOrderStatus = variant {
+  AwaitingPayment;
+  Ready;
+  Served;
+  Preparing;
+  Cancelled;
+  OutForDelivery;
+  Completed;
+  Pending;
+};
+type RestaurantPaymentStatus = variant {
+  Failed;
+  Paid;
+  AwaitingPayment;
+  CashOnDeliveryCollected;
+  CashOnDeliveryPending;
+};
+type Result = variant { Ok : text; Err : text };
+type Result_1 = variant { Ok : MenuItem; Err : text };
+type Result_2 = variant { Ok : RestaurantOrder; Err : text };
+type Result_3 = variant { Ok : vec RestaurantOrder; Err : text };
+type Result_5 = variant { Ok : RecordPaymentResult; Err : PaymentApiError };
+type Result_6 = variant {
+  Ok : RecordPaymentFailureResult;
+  Err : PaymentApiError;
+};
+type Result_7 = variant { Ok; Err : text };
+type Result_8 = variant { Ok : vec MenuItem; Err : text };
+type UpdateMenuItem = record {
+  name : opt text;
+  description : opt text;
+  payment_method : opt PaymentMethod;
+  available : opt bool;
+  price_per_portion_minor : opt nat64;
+  currency : opt text;
+  plate_price_minor : opt nat64;
+  image_url : opt text;
+};
+service : (ProjectContext) -> {
+  ai_cancel_my_order : (AiContext, text) -> (Result);
+  ai_get_my_order : (AiContext, text) -> (Result);
+  ai_list_menu : (AiContext, text) -> (Result);
+  ai_list_my_orders : (AiContext, text) -> (Result);
+  ai_place_order : (AiContext, text) -> (Result);
+  canister_metadata : () -> (CanisterMetadata) query;
+  // Controller-facing menu management for the embedded `restaurant-ui` admin
+  // (see `assets.rs`).
+  create_menu_item : (CreateMenuItem) -> (Result_1);
+  get_config : () -> (vec record { text; ConfigValue }) query;
+  get_config_schema : () -> (vec ConfigFieldSchema) query;
+  get_links : () -> (vec CanisterLink) query;
+  get_order : (nat64) -> (Result_2) query;
+  // Serves the embedded restaurant admin UI under `/admin/` (see
+  // `assets.rs`). Data calls still go through Candid from the browser's
+  // authenticated identity.
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  list_all_menu : () -> (Result_8) query;
+  list_menu : () -> (vec MenuItem) query;
+  list_orders : (opt RestaurantOrderStatus) -> (Result_3) query;
+  llm_context : () -> (text) query;
+  record_cash_collection : (nat64, text) -> (Result_2);
+  record_payment : (RecordPayment) -> (Result_5);
+  record_payment_failure : (RecordPaymentFailure) -> (Result_6);
+  set_config : (vec record { text; ConfigValue }) -> (Result_7);
+  update_menu_item : (nat64, UpdateMenuItem) -> (Result_1);
+  update_order_status : (nat64, RestaurantOrderStatus) -> (Result_2);
+  update_project_context : (ProjectContext) -> (Result_7);
+  web_get_order : (text, nat64) -> (opt RestaurantOrder) query;
+  web_place_order : (text, PlaceRestaurantOrder) -> (Result_2);
+}

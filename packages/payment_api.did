@@ -1,0 +1,22 @@
+// Canonical interface implemented by every regional payment provider package.
+// Inventory calls create_charge; verified callbacks use inventory's existing
+// trusted record_payment API.
+type CreateChargeRequest = record {
+  order_id : nat64;
+  inventory_canister : principal;
+  merchant_reference : text;
+  amount_minor : nat64;
+  currency : text;
+  customer_email : text;
+  customer_name : opt text;
+};
+type Charge = record {
+  provider : text;
+  reference : text;
+  checkout_url : text;
+  status : text;
+};
+type ResultCharge = variant { Ok : Charge; Err : text };
+service : {
+  create_charge : (CreateChargeRequest) -> (ResultCharge);
+};

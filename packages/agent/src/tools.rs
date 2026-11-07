@@ -49,7 +49,7 @@
 //! Extend [`RequestAdminActionTool`]'s handling on the receiving end of the
 //! webhook instead (see `admin.rs`'s doc comment).
 //!
-use crate::messages::SessionKey;
+use crate::messages::{ClientDataKind, SessionKey, CONSOLE_SESSION};
 use ic_rig::{Tool, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -63,6 +63,85 @@ pub struct ActionError(pub String);
 impl From<String> for ActionError {
     fn from(s: String) -> Self {
         ActionError(s)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Client-side data collection. This tool never lets the model select a
+// customer or channel: both come from the authenticated SessionKey. It only
+// describes what the current client should collect on the next interaction.
+// ---------------------------------------------------------------------------
+
+pub struct RequestClientDataTool {
+    pub customer: SessionKey,
+}
+
+#[derive(Deserialize)]
+pub struct RequestClientDataArgs {
+    data_type: String,
+    prompt: String,
+}
+
+impl Tool for RequestClientDataTool {
+    const NAME: &'static str = "request_client_data";
+    type Error = ActionError;
+    type Args = RequestClientDataArgs;
+    type Output = String;
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Ask the current customer's client to collect one specific value. Use this when the next step genuinely requires information the customer has not supplied, especially device location. The current WhatsApp, Telegram, web, or email client is selected automatically; never ask which channel to use. After calling this tool, briefly tell the customer why the information is needed and wait for their response."
+                .to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "data_type": {
+                        "type": "string",
+                        "enum": ["location", "text", "email", "phone", "number", "date"],
+                        "description": "The kind of information to collect. Use location for latitude and longitude."
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "A short, friendly explanation shown by the client beside its input or permission control."
+                    }
+                },
+                "required": ["data_type", "prompt"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: RequestClientDataArgs) -> Result<String, ActionError> {
+        if self.customer.session_id == CONSOLE_SESSION {
+            return Err(ActionError(
+                "client data can only be requested in a customer conversation".to_string(),
+            ));
+        }
+        let kind = match args.data_type.trim().to_ascii_lowercase().as_str() {
+            "location" => ClientDataKind::Location,
+            "text" => ClientDataKind::Text,
+            "email" => ClientDataKind::Email,
+            "phone" => ClientDataKind::Phone,
+            "number" => ClientDataKind::Number,
+            "date" => ClientDataKind::Date,
+            _ => return Err(ActionError("unsupported client data type".to_string())),
+        };
+        let prompt = args.prompt.trim();
+        if prompt.is_empty() {
+            return Err(ActionError("prompt must not be empty".to_string()));
+        }
+        if prompt.chars().count() > 500 {
+            return Err(ActionError(
+                "prompt must be 500 characters or fewer".to_string(),
+            ));
+        }
+        let request =
+            crate::state::create_client_data_request(&self.customer, kind, prompt.to_string());
+        Ok(format!(
+            "The {} client request is ready (request id {}). Wait for the customer to respond.",
+            kind.label(),
+            request.id
+        ))
     }
 }
 
@@ -105,7 +184,7 @@ impl Tool for GetProfileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Get the current customer's own profile (username and display name). Takes no parameters - it always returns the profile of whoever is having this conversation.".to_string(),
+            description: "Get the current customer's profile (username and display name). This is the customer's profile, not the assistant's identity or profile. Takes no parameters and always returns only the person having this conversation.".to_string(),
             parameters: json!({ "type": "object", "properties": {}, "required": [] }),
         }
     }
@@ -137,7 +216,7 @@ impl Tool for UpdateUsernameTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Change the current customer's own username to a new value they've asked for. Only affects the customer having this conversation.".to_string(),
+            description: "Change only the current customer's username, and only when they explicitly ask. This never changes the assistant's name, identity, profile, settings, or any other customer's data.".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -249,6 +328,10 @@ mod tests {
             }
             .definition(),
             RequestAdminActionTool { customer }.definition(),
+            RequestClientDataTool {
+                customer: key("probe"),
+            }
+            .definition(),
         ];
         for def in defs {
             let Some(properties) = def.parameters.get("properties").and_then(|p| p.as_object())

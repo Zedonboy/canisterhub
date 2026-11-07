@@ -139,8 +139,22 @@ export default function CanisterViewData() {
         )}
         {loaded && !error && pageUrl && (
           // `key` remounts the frame per page so one page's state (and its
-          // delegation bridge) never carries over into the next.
-          <iframe key={pageUrl} ref={iframeRef} src={pageUrl} title={page?.label ?? "Canister page"} className="w-full h-full border-0" />
+          // delegation bridge) never carries over into the next. The
+          // sandbox deliberately keeps `allow-same-origin`: the embedded
+          // module's origin must stay real for the delegation handshake's
+          // origin check (and for its own session storage). What the
+          // sandbox still blocks is the dangerous stuff a self-declared
+          // module page could otherwise do to the dashboard: top-window
+          // navigation (phishing redirects), native dialogs, downloads,
+          // and plugins.
+          <iframe
+            key={pageUrl}
+            ref={iframeRef}
+            src={pageUrl}
+            title={page?.label ?? "Canister page"}
+            sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+            className="w-full h-full border-0"
+          />
         )}
       </div>
     </div>

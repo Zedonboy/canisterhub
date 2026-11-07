@@ -41,12 +41,15 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod managed_ai;
+mod package_registry;
 mod project_notifications;
+mod web_push;
 pub use managed_ai::{
     ManagedAiChoice, ManagedAiCompletionRequest, ManagedAiCompletionResponse,
     ManagedAiConfigUpdate, ManagedAiMessage, ManagedAiRequest, ManagedAiResponse, ManagedAiRole,
     ManagedAiService, ManagedAiStatus, ManagedAiUsage, TokenCreditBalance, TokenUsage,
 };
+pub use package_registry::{InstalledPackage, PackageInfo, PackageInfoInput};
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
@@ -59,6 +62,9 @@ const REPO_OWNERS_MEM_ID: MemoryId = MemoryId::new(5);
 const KEY_NAME_OWNERS_MEM_ID: MemoryId = MemoryId::new(6);
 const JWT_SIGNING_KEY_MEM_ID: MemoryId = MemoryId::new(7);
 const PROJECTS_MEM_ID: MemoryId = MemoryId::new(8);
+const PACKAGE_INFOS_MEM_ID: MemoryId = MemoryId::new(16);
+const PROJECT_PACKAGE_INSTALLS_MEM_ID: MemoryId = MemoryId::new(17);
+const PROJECT_NOTIFICATION_PREFERENCES_MEM_ID: MemoryId = MemoryId::new(18);
 // This file's MemoryId numbering has an open, unresolved question about
 // whether it still matches what's actually encoded in any already-deployed
 // canister's stable memory (see the `list_my_projects`/`Project` decode
@@ -295,16 +301,14 @@ impl Storable for MarketplaceItem {
 // so the dashboard can go call it directly for anything else.
 // ---------------------------------------------------------------------------
 
-/// Which building block a tracked canister actually is. Most generic
-/// marketplace deploys record `Other`; the project-wide notification module
-/// is classified explicitly so the one-per-project invariant can be enforced.
+/// Which building block a tracked canister actually is. `Notification` is
+/// retained for decoding older project records; Web Push now lives in backend.
 #[derive(Clone, Copy, Debug, CandidType, Serialize, Deserialize, PartialEq, Eq)]
 pub enum CanisterKind {
     Connector,
     Agent,
     AdminAgent,
-    /// The single project-wide Web Push service. Every module that needs
-    /// notifications shares this canister instead of deploying its own.
+    /// Legacy project-owned Web Push canister kind.
     Notification,
     Auth,
     Database,
@@ -318,10 +322,12 @@ pub enum CanisterKind {
 pub struct CanisterInfo {
     pub id: Principal,
     pub kind: CanisterKind,
-}
-
-fn is_notification_canister(name: &str, info: &CanisterInfo) -> bool {
-    info.kind == CanisterKind::Notification || name.eq_ignore_ascii_case("notification")
+    /// Stable `.wasm` artifact name. `None` covers imported,
+    /// runtime-created, and legacy canisters that were not installed from the
+    /// package registry. This belongs on the canonical project record so an
+    /// installer can resolve package dependencies before initializing a new
+    /// canister without joining against release-history records.
+    pub package_name: Option<String>,
 }
 
 /// A project's own lifecycle - `AwaitingAnswer`/`Succeeded`/`Failed` only
@@ -383,9 +389,66 @@ impl Storable for Project {
     }
 }
 
-// Wire-compatible migration shims for clients generated before Web Push
-// moved into the project-owned `notification` module. These types and the
-// methods below deliberately contain no notification state or behavior.
+#[cfg(test)]
+mod project_storage_compatibility_tests {
+    use super::*;
+
+    #[derive(CandidType, Deserialize)]
+    struct LegacyCanisterInfo {
+        id: Principal,
+        kind: CanisterKind,
+    }
+
+    #[derive(CandidType, Deserialize)]
+    struct LegacyProject {
+        id: String,
+        request: String,
+        network: String,
+        owner: Principal,
+        state: ProjectState,
+        pending_question: Option<String>,
+        project_name: Option<String>,
+        canisters: BTreeMap<String, LegacyCanisterInfo>,
+        llm_context: Option<String>,
+        final_message: Option<String>,
+        error: Option<String>,
+        created_at: u64,
+        updated_at: u64,
+    }
+
+    #[test]
+    fn project_decodes_canisters_written_before_package_names() {
+        let canister = Principal::from_slice(&[42; 10]);
+        let legacy = LegacyProject {
+            id: "legacy".to_string(),
+            request: "test".to_string(),
+            network: "local".to_string(),
+            owner: Principal::from_slice(&[1; 10]),
+            state: ProjectState::Running,
+            pending_question: None,
+            project_name: None,
+            canisters: BTreeMap::from([(
+                "agent".to_string(),
+                LegacyCanisterInfo {
+                    id: canister,
+                    kind: CanisterKind::Agent,
+                },
+            )]),
+            llm_context: None,
+            final_message: None,
+            error: None,
+            created_at: 1,
+            updated_at: 1,
+        };
+
+        let bytes = candid::encode_one(legacy).unwrap();
+        let decoded: Project = candid::decode_one(&bytes).unwrap();
+        assert_eq!(decoded.canisters["agent"].id, canister);
+        assert_eq!(decoded.canisters["agent"].package_name, None);
+    }
+}
+
+// Wire types used by the protocol backend's Web Push API and project gateway.
 #[derive(Clone, Debug, CandidType, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PushSubscription {
     pub endpoint: String,
@@ -406,6 +469,19 @@ pub struct PushDelivery {
     pub status: Option<u16>,
     pub error: Option<String>,
     pub subscription_removed: bool,
+}
+
+/// Project owner's saved preferences for project Web Push delivery. Missing
+/// entries retain the historical enabled behavior for existing projects.
+#[derive(Clone, Copy, Debug, CandidType, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectNotificationPreferences {
+    pub push_enabled: bool,
+}
+
+pub(crate) fn project_push_notifications_enabled(project_id: &str) -> bool {
+    PROJECT_NOTIFICATION_PREFERENCES.with(|preferences| {
+        preferences.borrow().get(&project_id.to_string()).unwrap_or(true)
+    })
 }
 
 thread_local! {
@@ -466,6 +542,25 @@ thread_local! {
     /// comment.
     static PROJECTS: RefCell<StableBTreeMap<String, Project, Memory>> = RefCell::new(
         StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(PROJECTS_MEM_ID)))
+    );
+
+    /// Controller-curated installable package releases, keyed by their stable
+    /// package id (for example `agent` or `order_inventory`).
+    static PACKAGE_INFOS: RefCell<StableBTreeMap<String, PackageInfo, Memory>> = RefCell::new(
+        StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(PACKAGE_INFOS_MEM_ID)))
+    );
+
+    /// Immutable-at-install snapshots tying a project canister to the package
+    /// release whose bytes were installed. A later catalog SHA therefore does
+    /// not rewrite history; it becomes an update signal in the dashboard.
+    static PROJECT_PACKAGE_INSTALLS: RefCell<StableBTreeMap<String, InstalledPackage, Memory>> = RefCell::new(
+        StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(PROJECT_PACKAGE_INSTALLS_MEM_ID)))
+    );
+
+    /// Owner-controlled project Web Push preference. New projects default to
+    /// enabled so adding this setting does not mute existing subscriptions.
+    static PROJECT_NOTIFICATION_PREFERENCES: RefCell<StableBTreeMap<String, bool, Memory>> = RefCell::new(
+        StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(PROJECT_NOTIFICATION_PREFERENCES_MEM_ID)))
     );
 
     /// Certified HTTP assets for the marketing landing page (see "Landing
@@ -895,10 +990,7 @@ fn register_repo_publisher(git_repo_url: String, publisher: Principal) -> Result
 }
 
 fn notification_module_moved<T>() -> Result<T, String> {
-    Err(
-        "Web Push moved to the project-owned notification module; install and call that module"
-            .to_string(),
-    )
+    Err("use push_ensure_vapid for browser setup and send_project_notification for project delivery".to_string())
 }
 
 #[update]
@@ -913,22 +1005,28 @@ fn push_import_vapid(_private_key: String, _subject: String) -> Result<Vec<u8>, 
 
 #[query]
 fn push_vapid_public_key() -> Result<Vec<u8>, String> {
-    notification_module_moved()
+    web_push::public_key()
 }
 
 #[update]
 fn push_subscribe(_subscription: PushSubscription) -> Result<(), String> {
-    notification_module_moved()
+    web_push::subscribe(require_authenticated_caller("subscribe to push notifications")?, _subscription)
 }
 
 #[update]
 fn push_unsubscribe(_endpoint: String) -> Result<(), String> {
-    notification_module_moved()
+    web_push::unsubscribe(require_authenticated_caller("unsubscribe from push notifications")?, &_endpoint)
 }
 
 #[query]
 fn push_list_subscriptions() -> Result<Vec<PushSubscription>, String> {
-    notification_module_moved()
+    Ok(web_push::list(&require_authenticated_caller("list push subscriptions")?))
+}
+
+#[update]
+async fn push_ensure_vapid() -> Result<Vec<u8>, String> {
+    require_authenticated_caller("enable push notifications")?;
+    web_push::ensure_vapid().await
 }
 
 #[update]
@@ -1808,7 +1906,7 @@ fn update_project_state(
         project.state = state;
         project.pending_question = pending_question;
         project.updated_at = ic_cdk::api::time();
-        projects.insert(id, project);
+        projects.insert(id.clone(), project);
         Ok(())
     })
 }
@@ -1836,6 +1934,49 @@ fn set_project_name(id: String, project_name: String) -> Result<(), String> {
     })
 }
 
+/// Reads the authenticated owner's saved project notification preference.
+#[query]
+fn get_project_notification_preferences(
+    id: String,
+) -> Result<ProjectNotificationPreferences, String> {
+    let caller = require_authenticated_caller("read project notification settings")?;
+    ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
+    let is_owner = PROJECTS
+        .with(|projects| projects.borrow().get(&id))
+        .is_some_and(|project| project.owner == caller);
+    if !is_owner {
+        return Err(format!("no project with id {id}"));
+    }
+    Ok(ProjectNotificationPreferences {
+        push_enabled: PROJECT_NOTIFICATION_PREFERENCES.with(|preferences| {
+            preferences
+                .borrow()
+                .get(&id)
+                .unwrap_or(true)
+        }),
+    })
+}
+
+/// Saves the authenticated owner's project-wide Web Push preference.
+#[update]
+fn set_project_notification_preferences(id: String, push_enabled: bool) -> Result<(), String> {
+    let caller = require_authenticated_caller("change project notification settings")?;
+    ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
+    let is_owner = PROJECTS.with(|projects| {
+        projects
+            .borrow()
+            .get(&id)
+            .is_some_and(|project| project.owner == caller)
+    });
+    if !is_owner {
+        return Err(format!("no project with id {id}"));
+    }
+    PROJECT_NOTIFICATION_PREFERENCES.with(|preferences| {
+        preferences.borrow_mut().insert(id, push_enabled);
+    });
+    Ok(())
+}
+
 /// Merges newly deployed canister ids into a project's running set.
 /// Additive, never replacing: called at every point a canister id becomes
 /// known (e.g. right after the frontend's own direct `install_code` call
@@ -1858,6 +1999,19 @@ fn add_project_canisters(id: String, canisters: Vec<(String, CanisterInfo)>) -> 
             return Err("canister name must not be empty".to_string());
         }
     }
+    for (_, info) in &canisters {
+        if let Some(package_name) = &info.package_name {
+            let known = PACKAGE_INFOS.with(|packages| {
+                packages
+                    .borrow()
+                    .iter()
+                    .any(|entry| entry.value().name == *package_name)
+            });
+            if !known {
+                return Err(format!("unknown package name '{package_name}'"));
+            }
+        }
+    }
     PROJECTS.with(|p| {
         let mut projects = p.borrow_mut();
         let mut project = projects
@@ -1865,37 +2019,15 @@ fn add_project_canisters(id: String, canisters: Vec<(String, CanisterInfo)>) -> 
             .filter(|project| project.owner == caller)
             .ok_or_else(|| format!("no project with id {id}"))?;
 
-        // Notification is project infrastructure, not a per-feature
-        // dependency. Enforce this here so concurrent and non-browser
-        // callers cannot register two distinct instances.
-        let existing_notification = project
-            .canisters
-            .iter()
-            .find(|(name, info)| is_notification_canister(name, info));
-        let requested_notifications = canisters
-            .iter()
-            .filter(|(name, info)| is_notification_canister(name, info))
-            .collect::<Vec<_>>();
-        if requested_notifications.len() > 1 {
-            return Err("a project may have only one notification canister".to_string());
-        }
-        if let (Some((existing_name, existing)), Some((requested_name, requested))) = (
-            existing_notification,
-            requested_notifications.first().copied(),
-        ) {
-            if existing_name != requested_name || existing != requested {
-                return Err(format!(
-                    "project already has notification canister '{}' ({})",
-                    existing_name, existing.id
-                ));
-            }
-        }
-
-        // Exact retries are idempotent, but a conflicting value must not
-        // silently replace an existing project entry.
+        // Retries may enrich a legacy `{id, kind}` entry with its package name,
+        // but may never change the canister identity, kind, or an already
+        // assigned package. Omitting package_name on a later retry preserves it.
         for (name, info) in &canisters {
             if let Some(existing) = project.canisters.get(name) {
-                if existing != info {
+                let package_conflicts = existing.package_name.is_some()
+                    && info.package_name.is_some()
+                    && existing.package_name != info.package_name;
+                if existing.id != info.id || existing.kind != info.kind || package_conflicts {
                     return Err(format!(
                         "project already tracks a different canister as '{name}'"
                     ));
@@ -1913,7 +2045,14 @@ fn add_project_canisters(id: String, canisters: Vec<(String, CanisterInfo)>) -> 
                 "a project may track at most {MAX_PROJECT_CANISTERS} canisters"
             ));
         }
-        project.canisters.extend(canisters);
+        for (name, mut info) in canisters {
+            if let Some(existing) = project.canisters.get(&name) {
+                if info.package_name.is_none() {
+                    info.package_name.clone_from(&existing.package_name);
+                }
+            }
+            project.canisters.insert(name, info);
+        }
         project.updated_at = ic_cdk::api::time();
         projects.insert(id, project);
         Ok(())
@@ -1990,17 +2129,21 @@ fn remove_project_canister(id: String, name: String) -> Result<(), String> {
     let caller = require_authenticated_caller("remove a project canister")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     ensure_text_size("canister name", &name, MAX_CANISTER_NAME_BYTES)?;
-    PROJECTS.with(|p| {
+    let removed = PROJECTS.with(|p| {
         let mut projects = p.borrow_mut();
         let mut project = projects
             .get(&id)
             .filter(|project| project.owner == caller)
             .ok_or_else(|| format!("no project with id {id}"))?;
-        project.canisters.remove(&name);
+        let removed = project.canisters.remove(&name);
         project.updated_at = ic_cdk::api::time();
-        projects.insert(id, project);
-        Ok(())
-    })
+        projects.insert(id.clone(), project);
+        Ok::<Option<CanisterInfo>, String>(removed)
+    })?;
+    if let Some(info) = removed {
+        package_registry::remove_project_canister_install(&id, info.id);
+    }
+    Ok(())
 }
 
 /// Permanently deletes a project's own record - the Settings page's "Delete
@@ -2031,7 +2174,9 @@ fn delete_project(id: String) -> Result<(), String> {
         }
         projects.remove(&id);
         Ok(())
-    })
+    })?;
+    package_registry::remove_project_installs(&id);
+    Ok(())
 }
 
 /// Fetches one project by id - but only for its own owner (see `Project::owner`'s
@@ -2047,6 +2192,40 @@ fn get_project(id: String) -> Option<Project> {
     PROJECTS
         .with(|p| p.borrow().get(&id))
         .filter(|project| project.owner == caller)
+        .map(hydrate_project_package_names)
+}
+
+/// Verifies project membership for a package-to-package authorization check.
+/// The calling canister and the requested package must both be present in the
+/// backend's current project record, so callers cannot use this as an oracle
+/// for projects they do not belong to.
+#[update]
+fn verify_project_package_membership(
+    project_id: String,
+    package_id: Principal,
+) -> Result<bool, String> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Err("anonymous callers cannot verify project package membership".to_string());
+    }
+    ensure_text_size("project id", &project_id, MAX_PROJECT_ID_BYTES)?;
+    let is_member = PROJECTS.with(|projects| {
+        projects.borrow().get(&project_id).is_some_and(|project| {
+            let contains = |id| project.canisters.values().any(|info| info.id == id);
+            contains(caller) && contains(package_id)
+        })
+    });
+    Ok(is_member)
+}
+
+fn hydrate_project_package_names(mut project: Project) -> Project {
+    for canister in project.canisters.values_mut() {
+        if canister.package_name.is_none() {
+            canister.package_name =
+                package_registry::project_canister_package_name(&project.id, canister.id);
+        }
+    }
+    project
 }
 
 /// Every project the caller owns, newest first - mirrors
@@ -2063,6 +2242,7 @@ fn list_my_projects() -> Vec<Project> {
             .iter()
             .map(|entry| entry.value())
             .filter(|project| project.owner == caller)
+            .map(hydrate_project_package_names)
             .collect()
     });
     projects.sort_by(|a, b| b.created_at.cmp(&a.created_at));

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { BellRing } from "lucide-react";
 import { Button } from "@/components/Button";
-import { notificationCanisterId } from "@/lib/canisterId";
 import { enablePush, isPushSupported } from "@/lib/push";
 import { errorText } from "@/lib/format";
 
@@ -16,12 +15,10 @@ function alreadySeen(principal: string): boolean {
   }
 }
 
-/** Shown once per signed-in customer (per browser) when the serving agent
- * advertises a notification canister in the `ic_env` cookie: explains why
- * notifications matter for the chat, since replies from the team can arrive
- * while the page is closed. Without the cookie value nothing is shown. */
+/** Shown once per signed-in customer (per browser) to offer backend-owned
+ * push notifications for replies that arrive after they leave the chat. */
 export function NotificationNotice({ principal }: { principal: string }) {
-  const [open, setOpen] = useState(() => (MOCK || !!notificationCanisterId()) && !alreadySeen(principal));
+  const [open, setOpen] = useState(() => !alreadySeen(principal));
   const ref = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -5,8 +5,9 @@
 
 use crate::config::Config;
 use crate::messages::{
-    AdminRequest, AgentStats, AiCanister, Channel, ConversationState, ConversationSummary,
-    SessionKey, StoredChatMessage, StoredMessage, CONSOLE_SESSION,
+    AdminRequest, AgentStats, AiCanister, Channel, ClientDataKind, ClientDataRequest,
+    ClientDataValue, ConversationState, ConversationSummary, SessionKey, StoredChatMessage,
+    StoredMessage, CONSOLE_SESSION,
 };
 use crate::tools::CustomerProfile;
 use candid::Principal;
@@ -38,6 +39,8 @@ const AGENT_STATS_MEM_ID: MemoryId = MemoryId::new(5);
 const MESSAGES_MEM_ID: MemoryId = MemoryId::new(6);
 const MESSAGE_ID_COUNTER_MEM_ID: MemoryId = MemoryId::new(7);
 const AI_CANISTERS_MEM_ID: MemoryId = MemoryId::new(8);
+const CLIENT_DATA_REQUESTS_MEM_ID: MemoryId = MemoryId::new(9);
+const CLIENT_DATA_REQUEST_ID_COUNTER_MEM_ID: MemoryId = MemoryId::new(10);
 
 impl Storable for Config {
     const BOUND: Bound = Bound::Unbounded;
@@ -173,6 +176,7 @@ macro_rules! impl_cbor_storable {
 
 impl_cbor_storable!(StoredMessage, "StoredMessage");
 impl_cbor_storable!(AiCanister, "AiCanister");
+impl_cbor_storable!(ClientDataRequest, "ClientDataRequest");
 
 /// Wraps `SessionKey` so `StableBTreeMap` can use its hand-rolled
 /// `encode`/`decode` (above) instead of requiring `serde` derives on a
@@ -229,6 +233,77 @@ thread_local! {
     static AI_CANISTERS: RefCell<StableBTreeMap<Vec<u8>, AiCanister, Memory>> = RefCell::new(
         StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(AI_CANISTERS_MEM_ID)))
     );
+    static CLIENT_DATA_REQUESTS: RefCell<StableBTreeMap<SessionKeyStorable, ClientDataRequest, Memory>> = RefCell::new(
+        StableBTreeMap::init(MEMORY_MANAGER.with(|m| m.borrow().get(CLIENT_DATA_REQUESTS_MEM_ID)))
+    );
+    static CLIENT_DATA_REQUEST_ID_COUNTER: RefCell<StableCell<u64, Memory>> = RefCell::new(
+        StableCell::init(MEMORY_MANAGER.with(|m| m.borrow().get(CLIENT_DATA_REQUEST_ID_COUNTER_MEM_ID)), 0)
+    );
+}
+
+pub fn create_client_data_request(
+    key: &SessionKey,
+    kind: ClientDataKind,
+    prompt: String,
+) -> ClientDataRequest {
+    let id = CLIENT_DATA_REQUEST_ID_COUNTER.with(|counter| {
+        let mut counter = counter.borrow_mut();
+        let id = *counter.get();
+        counter.set(id.saturating_add(1));
+        id
+    });
+    let request = ClientDataRequest {
+        id,
+        kind,
+        prompt,
+        created_at: ic_cdk::api::time(),
+    };
+    CLIENT_DATA_REQUESTS.with(|requests| {
+        requests
+            .borrow_mut()
+            .insert(SessionKeyStorable(key.clone()), request.clone())
+    });
+    request
+}
+
+pub fn get_client_data_request(key: &SessionKey) -> Option<ClientDataRequest> {
+    CLIENT_DATA_REQUESTS.with(|requests| requests.borrow().get(&SessionKeyStorable(key.clone())))
+}
+
+pub fn consume_client_data(
+    key: &SessionKey,
+    request_id: Option<u64>,
+    value: &ClientDataValue,
+) -> Result<(ClientDataRequest, String), String> {
+    let request = get_client_data_request(key)
+        .ok_or_else(|| "there is no pending client data request".to_string())?;
+    if request_id.is_some_and(|id| id != request.id) {
+        return Err("this client data request is no longer active".to_string());
+    }
+    value.validate_for(request.kind)?;
+    CLIENT_DATA_REQUESTS.with(|requests| {
+        requests
+            .borrow_mut()
+            .remove(&SessionKeyStorable(key.clone()))
+    });
+    let text = value.as_prompt_text(request.kind);
+    Ok((request, text))
+}
+
+/// A normal typed reply completes any non-location request. Location remains
+/// pending until the channel supplies actual coordinates, avoiding accidental
+/// acceptance of an unrelated message as a location.
+pub fn consume_typed_client_data(key: &SessionKey, text: &str) -> Option<ClientDataRequest> {
+    let request = get_client_data_request(key)?;
+    if request.kind == ClientDataKind::Location || text.trim().is_empty() {
+        return None;
+    }
+    CLIENT_DATA_REQUESTS.with(|requests| {
+        requests
+            .borrow_mut()
+            .remove(&SessionKeyStorable(key.clone()))
+    });
+    Some(request)
 }
 
 pub fn insert_message(payload: crate::messages::MessagePayload) -> StoredMessage {
@@ -315,6 +390,32 @@ pub fn get_conversation(key: &SessionKey) -> ConversationState {
             .get(&SessionKeyStorable(key.clone()))
             .unwrap_or_default()
     })
+}
+
+/// Resolves a session ID to its channel for trusted business-package
+/// messages. Session IDs are only channel-unique by convention, so fail
+/// closed if stored conversations contain the same ID on multiple channels.
+pub fn resolve_channel_for_session(session_id: &str) -> Result<Channel, String> {
+    let mut resolved = None;
+    CONVERSATIONS
+        .with(|conversations| {
+            for entry in conversations.borrow().iter() {
+                let key = entry.key().0.clone();
+                if key.session_id != session_id
+                    || (key.channel == Channel::Web && key.session_id == CONSOLE_SESSION)
+                {
+                    continue;
+                }
+                match resolved {
+                    Some(channel) if channel != key.channel => return Err(()),
+                    Some(_) => {}
+                    None => resolved = Some(key.channel),
+                }
+            }
+            Ok(())
+        })
+        .map_err(|()| "session id matches more than one channel".to_string())?;
+    resolved.ok_or_else(|| "session id is not associated with a conversation".to_string())
 }
 
 /// Appends one finished turn (a `User` message and its final `Assistant`

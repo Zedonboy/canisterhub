@@ -21,6 +21,14 @@ import {
 import { IcpLedgerCanister, SubAccount } from "@icp-sdk/canisters/ledger/icp";
 import { getAgent } from "./agent";
 import { idlFactory as icrc1IdlFactory, type Icrc1Service, type TransferError, type ApproveError } from "./candid/icrc1";
+import {
+  idlFactory as cyclesLedgerIdlFactory,
+  type CyclesLedgerService,
+} from "./candid/cyclesLedger";
+import {
+  idlFactory as icrc1IndexIdlFactory,
+  type Icrc1IndexService,
+} from "./candid/icrc1Index";
 
 /** The IC's canonical ledger ids. The managed local network exposes these
  * system canisters at the same ids, so callers query them on both networks.
@@ -232,6 +240,86 @@ export async function mintCyclesFromIcp(network: string, amountE8s: bigint): Pro
         "If the payment was not refunded, click Confirm Top-Up again to retry notification without another ICP transfer."
     );
   }
+}
+
+export interface CyclesMintTransaction {
+  /** Cycles Ledger block containing the mint. */
+  blockIndex: bigint;
+  /** Raw cycles credited (10^-12 of the displayed "cycles" unit). */
+  minted: bigint;
+  /** Ledger timestamp of the mint, in nanoseconds since the epoch. */
+  timestampNanos: bigint;
+}
+
+// One page of account transactions from the index, and how far back the
+// walk has reached. Bounds keep a busy account's history walk finite.
+const INDEX_PAGE_SIZE = 50n;
+const MAX_INDEX_PAGES = 10;
+const MAX_COLLECTED_MINTS = 50;
+
+/** The real Top-Up History source: cycles *mints* credited to the
+ * principal's default Cycles Ledger account, read from the ledger's own
+ * ICRC-1 index canister (discovered per-network through the ledger's
+ * `icrc106_get_index_principal`, so nothing mainnet-only is hardcoded).
+ * A mint appears both for CMC `notify_mint_cycles` top-ups (this page's
+ * own dialog) and for direct cycles `deposit` calls - both are credits
+ * into the balance, which is what "top up" means here. Transfers and
+ * approvals are walked past but not collected, and burn-type withdrawals
+ * (per-canister top-ups from `topUpCanister`) intentionally do not appear
+ * - they move cycles out of this balance. Returns newest first. */
+export async function getCyclesMintTransactions(network: string, owner: Principal): Promise<CyclesMintTransaction[]> {
+  const agent = await getAgent(network);
+  const ledger = Actor.createActor<CyclesLedgerService>(cyclesLedgerIdlFactory, {
+    agent,
+    canisterId: Principal.fromText(CYCLES_LEDGER_CANISTER_ID),
+  });
+  const indexPrincipal = await ledger.icrc106_get_index_principal();
+  if ("Err" in indexPrincipal) {
+    const error = indexPrincipal.Err;
+    throw new Error(
+      "IndexPrincipalNotSet" in error
+        ? "the Cycles Ledger has no index canister configured"
+        : `Cycles Ledger index lookup failed: ${error.GenericError.description}`
+    );
+  }
+  const index = Actor.createActor<Icrc1IndexService>(icrc1IndexIdlFactory, {
+    agent,
+    canisterId: indexPrincipal.Ok,
+  });
+  const account = { owner, subaccount: [] as [] | [Uint8Array] };
+  const seen = new Set<string>();
+  const mints: CyclesMintTransaction[] = [];
+  let start: [] | [bigint] = [];
+  for (let page = 0; page < MAX_INDEX_PAGES; page++) {
+    const result = await index.get_account_transactions({ account, start, max_results: INDEX_PAGE_SIZE });
+    if ("Err" in result) {
+      throw new Error(`Cycles Ledger index query failed: ${result.Err.message}`);
+    }
+    const response = result.Ok;
+    let pageHadNew = false;
+    for (const tx of response.transactions) {
+      const key = tx.id.toString();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pageHadNew = true;
+      const [mint] = tx.transaction.mint;
+      if (!mint) continue;
+      mints.push({
+        blockIndex: tx.id,
+        minted: mint.amount,
+        timestampNanos: tx.transaction.timestamp,
+      });
+    }
+    if (mints.length >= MAX_COLLECTED_MINTS) break;
+    if (response.transactions.length < Number(INDEX_PAGE_SIZE)) break;
+    const [oldest] = response.oldest_tx_id;
+    if (oldest === undefined) break;
+    // `start` is documented exclusive; the duplicate-page guard just keeps
+    // the walk finite should an index ever return the boundary block too.
+    if (!pageHadNew && page > 0) break;
+    start = [oldest];
+  }
+  return mints;
 }
 
 export interface TokenBalance {

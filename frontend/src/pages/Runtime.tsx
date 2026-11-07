@@ -1,9 +1,10 @@
 import { useRef, useState, type ReactNode } from "react";
 import { useOutletContext, useNavigate } from "react-router-dom";
 import { Principal } from "@icp-sdk/core/principal";
-import { Cpu, Upload, RefreshCw, GitBranch, Trash2, Loader2, Sparkles, ExternalLink, Link2, ChevronDown } from "lucide-react";
+import { Cpu, Upload, RefreshCw, GitBranch, Trash2, Loader2, Sparkles, ExternalLink, Link2 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { Select } from "@/components/ui/Select";
 import { toast } from "@/components/Toast";
 import { clsx } from "clsx";
 import type { ProjectContext } from "@/components/layout/AppShell";
@@ -73,26 +74,6 @@ function SegmentedTabs<T extends string>({
           {opt.label}
         </button>
       ))}
-    </div>
-  );
-}
-
-/** A native `<select>`, restyled to drop the browser's own default control
- * chrome (`appearance-none`) and replace it with one consistent-looking
- * dropdown arrow, matching every other dark input on this page instead of
- * whatever the OS/browser renders by default. Still a real `<select>` -
- * full keyboard/native-picker behavior, just skinned. */
-function StyledSelect({ value, onChange, children }: { value: string; onChange: (value: string) => void; children: ReactNode }) {
-  return (
-    <div className="relative">
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full appearance-none px-3 py-2 pr-9 bg-[#0a0e1a] border border-[#1e2d47] rounded-lg text-sm text-[#e2e8f0] outline-none focus:border-[#00d4ff55] cursor-pointer"
-      >
-        {children}
-      </select>
-      <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#4a5568]" />
     </div>
   );
 }
@@ -342,7 +323,7 @@ function DeployOrUpdateCard({
     }
     setBusy(true);
     try {
-      await upgradeWasmRuntime(selected.id, wasm, job.network, updateMode);
+      await upgradeWasmRuntime(selected.id, wasm, job.network, updateMode, job.id);
       toast.success(
         updateMode === "reinstall" ? "Reinstalled" : "Upgraded",
         updateMode === "reinstall" ? `${selectedName} is running the new wasm - its previous state was wiped.` : `${selectedName} is running the new wasm.`
@@ -385,12 +366,14 @@ function DeployOrUpdateCard({
           <label className="block">
             <span className="text-[11px] text-[#8892a4]">Target canister</span>
             <div className="mt-1">
-              <StyledSelect value={selectedName} onChange={setSelectedName}>
-                <option value="">New canister</option>
-                {canisterEntries.map(([name, info]) => (
-                  <option key={name} value={name}>{name} ({info.kind})</option>
-                ))}
-              </StyledSelect>
+              <Select
+                value={selectedName}
+                onChange={setSelectedName}
+                options={[
+                  { value: "", label: "New canister" },
+                  ...canisterEntries.map(([name, info]) => ({ value: name, label: `${name} (${info.kind})` })),
+                ]}
+              />
             </div>
           </label>
 

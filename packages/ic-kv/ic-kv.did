@@ -1,3 +1,5 @@
+type ProjectCanister = record { canister_id : principal; package_name : text };
+type ProjectContext = record { project_id : text; canisters : vec ProjectCanister };
 type Value = variant {
   Null;
   Text : text;
@@ -6,7 +8,7 @@ type Value = variant {
   Float : float64;
   Integer : int64;
 };
-service : {
+service : (ProjectContext) -> {
   // Empties the store, returning how many entries it held.
   clear : () -> (nat64);
   // Removes `key`, returning the value it held (`null` if it didn't exist).

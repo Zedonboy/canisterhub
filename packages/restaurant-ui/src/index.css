@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+/* Same theme tokens as `frontend/src/index.css` / `packages/table-browser`. */
+@theme {
+  --font-mono: "JetBrains Mono", "IBM Plex Mono", ui-monospace, monospace;
+  --font-ui: "DM Sans", "Geist", system-ui, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: #0a0e1a;
+  color: #e2e8f0;
+  font-family: "DM Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  height: 100%;
+}
+
+#root { height: 100dvh; display: flex; flex-direction: column; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0a0e1a; }
+::-webkit-scrollbar-thumb { background: #1e2d47; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #00d4ff44; }
+
+::selection { background: #00d4ff33; color: #e2e8f0; }
+
+a { color: inherit; text-decoration: none; }
+
+button { cursor: pointer; }

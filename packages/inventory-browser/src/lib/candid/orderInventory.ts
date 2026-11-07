@@ -31,7 +31,7 @@ export type PaymentStatus =
   | { CashOnDeliveryCollected: null }
   | { Expired: null };
 
-export type AiChannel = { WhatsApp: null } | { Telegram: null } | { Email: null };
+export type AiChannel = { WhatsApp: null } | { Telegram: null } | { Email: null } | { Web: null };
 
 export type OrderError =
   | { Internal: string }
@@ -53,6 +53,7 @@ export interface InventoryItem {
   currency: string;
   image_url: [] | [string];
   stock_quantity: [] | [bigint];
+  payment_method: PaymentMethod;
 }
 
 export interface CreateInventoryItem {
@@ -64,6 +65,7 @@ export interface CreateInventoryItem {
   currency: string;
   image_url: [] | [string];
   stock_quantity: [] | [bigint];
+  payment_method: [] | [PaymentMethod];
 }
 
 export interface UpdateInventoryItem {
@@ -78,11 +80,13 @@ export interface UpdateInventoryItem {
   image_url: [] | [string];
   stock_quantity: [] | [bigint];
   track_stock: [] | [boolean];
+  payment_method: [] | [PaymentMethod];
 }
 
 export interface OrderLine {
   kind: InventoryKind;
   name: string;
+  sku: [] | [string];
   line_total_minor: bigint;
   quantity: bigint;
   inventory_id: bigint;
@@ -101,7 +105,9 @@ export interface Order {
   status: OrderStatus;
   updated_at: bigint;
   customer_phone: [] | [string];
+  customer_email: [] | [string];
   customer: { session_id: string; channel: AiChannel };
+  agent_canister_id: [] | [Principal];
   note: [] | [string];
   created_at: bigint;
   total_minor: bigint;
@@ -112,6 +118,7 @@ export interface Order {
   payment_method: PaymentMethod;
   payment_status: PaymentStatus;
   payment_reference: [] | [string];
+  checkout_url: [] | [string];
   amount_paid_minor: bigint;
   amount_refunded_minor: bigint;
   reservation_expires_at: [] | [bigint];
@@ -191,7 +198,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     PartiallyRefunded: IDL.Null,
     Expired: IDL.Null,
   });
-  const AiChannel = IDL.Variant({ Email: IDL.Null, WhatsApp: IDL.Null, Telegram: IDL.Null });
+  const AiChannel = IDL.Variant({ Email: IDL.Null, WhatsApp: IDL.Null, Telegram: IDL.Null, Web: IDL.Null });
   const OrderError = IDL.Variant({
     Internal: IDL.Text,
     InvalidInput: IDL.Text,
@@ -213,6 +220,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     currency: IDL.Text,
     image_url: IDL.Opt(IDL.Text),
     stock_quantity: IDL.Opt(IDL.Nat64),
+    payment_method: PaymentMethod,
   });
   const CreateInventoryItem = IDL.Record({
     sku: IDL.Opt(IDL.Text),
@@ -223,6 +231,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     currency: IDL.Text,
     image_url: IDL.Opt(IDL.Text),
     stock_quantity: IDL.Opt(IDL.Nat64),
+    payment_method: IDL.Opt(PaymentMethod),
   });
   const UpdateInventoryItem = IDL.Record({
     sku: IDL.Opt(IDL.Text),
@@ -235,10 +244,12 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     image_url: IDL.Opt(IDL.Text),
     stock_quantity: IDL.Opt(IDL.Nat64),
     track_stock: IDL.Opt(IDL.Bool),
+    payment_method: IDL.Opt(PaymentMethod),
   });
   const OrderLine = IDL.Record({
     kind: InventoryKind,
     name: IDL.Text,
+    sku: IDL.Opt(IDL.Text),
     line_total_minor: IDL.Nat64,
     quantity: IDL.Nat64,
     inventory_id: IDL.Nat64,
@@ -257,6 +268,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     updated_at: IDL.Nat64,
     customer_phone: IDL.Opt(IDL.Text),
     customer: CustomerIdentity,
+    agent_canister_id: IDL.Opt(IDL.Principal),
     note: IDL.Opt(IDL.Text),
     created_at: IDL.Nat64,
     total_minor: IDL.Nat64,
@@ -266,7 +278,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     delivery_location: DeliveryLocation,
     payment_method: PaymentMethod,
     payment_status: PaymentStatus,
-    payment_reference: IDL.Opt(IDL.Text),
+    payment_reference: IDL.Opt(IDL.Text), checkout_url: IDL.Opt(IDL.Text), customer_email: IDL.Opt(IDL.Text),
     amount_paid_minor: IDL.Nat64,
     amount_refunded_minor: IDL.Nat64,
     reservation_expires_at: IDL.Opt(IDL.Nat64),

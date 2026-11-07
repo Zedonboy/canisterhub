@@ -2,8 +2,8 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { clsx } from "clsx";
 import {
-  LayoutDashboard, Shield, HardDrive, BarChart2,
-  Bot, Settings, ScrollText, CreditCard, Search, ChevronRight,
+  LayoutDashboard, Shield, HardDrive, /* BarChart2, */
+  /* Bot, */ Settings, ScrollText, CreditCard, Search, ChevronRight,
   Sparkles, Store
 } from "lucide-react";
 import { Dialog } from "@/components/ui/Dialog";
@@ -35,10 +35,11 @@ export function CommandPalette({ projectId }: CommandPaletteProps) {
     { id: "overview",  label: "Project Overview", description: "Health summary",           icon: <LayoutDashboard size={14} />, action: () => navigate(`/project/${pid}/overview`),    category: "Navigate" },
     { id: "auth",      label: "Auth Canister",    description: "Manage users & providers", icon: <Shield size={14} />,         action: () => navigate(`/project/${pid}/auth`),         category: "Navigate" },
     { id: "storage",   label: "Storage Canister", description: "Files & buckets",          icon: <HardDrive size={14} />,      action: () => navigate(`/project/${pid}/storage`),      category: "Navigate" },
-    { id: "analytics", label: "Analytics",        description: "Events & funnels",         icon: <BarChart2 size={14} />,      action: () => navigate(`/project/${pid}/analytics`),    category: "Navigate" },
-    { id: "agents",    label: "AI Agents",        description: "Deploy & manage agents",   icon: <Bot size={14} />,            action: () => navigate(`/project/${pid}/agents`),       category: "Navigate" },
+    // Disabled for production launch
+    // { id: "analytics", label: "Analytics",        description: "Events & funnels",         icon: <BarChart2 size={14} />,      action: () => navigate(`/project/${pid}/analytics`),    category: "Navigate" },
+    // { id: "agents",    label: "AI Agents",        description: "Deploy & manage agents",   icon: <Bot size={14} />,            action: () => navigate(`/project/${pid}/agents`),       category: "Navigate" },
     { id: "settings",  label: "Settings",         description: "API keys & config",        icon: <Settings size={14} />,       action: () => navigate(`/project/${pid}/settings`),     category: "Navigate" },
-    { id: "logs",      label: "Logs",             description: "Unified log viewer",       icon: <ScrollText size={14} />,     action: () => navigate(`/project/${pid}/analytics?tab=logs`), category: "Navigate" },
+    { id: "logs",      label: "Logs",             description: "Unified log viewer",       icon: <ScrollText size={14} />,     action: () => navigate(`/project/${pid}/logs`),       category: "Navigate" },
     { id: "wallet",    label: "Wallet & Billing", description: "Token balances & cycles",  icon: <CreditCard size={14} />,     action: () => navigate(`/project/${pid}/wallet`),       category: "Navigate" },
     // Disabled for production launch (no funds for AI/marketplace yet)
     // { id: "orchestrate", label: "Secretary",      description: "Command your infra with AI", icon: <Sparkles size={14} />,     action: () => navigate(`/project/${pid}/orchestrate`),  category: "Navigate" },

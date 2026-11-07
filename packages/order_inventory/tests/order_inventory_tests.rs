@@ -2,8 +2,9 @@ use candid::{encode_one, Principal};
 use canister_hub_sdk::ic::config::{ConfigFieldSchema, ConfigType, ConfigValue};
 use order_inventory::{
     AiChannel, AiContext, AuditEntry, CreateInventoryItem, CustomerIdentity, InventoryItem,
-    InventoryKind, Order, OrderStatus, PaymentMethod, PaymentStatus, RecordCashCollection,
-    RecordPayment, RecordPaymentFailure, RecordRefund, Settings, UpdateInventoryItem,
+    InventoryKind, Order, OrderStatus, PaymentMethod, PaymentStatus, ProjectCanister,
+    ProjectContext, RecordCashCollection, RecordPayment, RecordPaymentFailure, RecordRefund,
+    Settings, UpdateInventoryItem,
 };
 use pocket_ic::{query_candid, query_candid_as, update_candid_as, PocketIc, PocketIcBuilder};
 use std::collections::HashMap;
@@ -26,7 +27,14 @@ fn setup() -> (PocketIc, Principal, Principal) {
     pic.install_canister(
         canister,
         WASM.to_vec(),
-        encode_one(()).unwrap(),
+        encode_one(ProjectContext {
+            project_id: "shop-project".to_string(),
+            canisters: vec![ProjectCanister {
+                canister_id: agent,
+                package_name: "agent.wasm".to_string(),
+            }],
+        })
+        .unwrap(),
         Some(admin),
     );
     let (trusted,): (Result<(), order_inventory::OrderError>,) =
@@ -35,9 +43,52 @@ fn setup() -> (PocketIc, Principal, Principal) {
     (pic, canister, agent)
 }
 
+#[test]
+fn project_context_prefills_project_dependencies() {
+    let admin = principal(1);
+    let agent = principal(2);
+    let storage = principal(3);
+    let pic = PocketIcBuilder::new().with_application_subnet().build();
+    let canister = pic.create_canister_with_settings(Some(admin), None);
+    pic.install_canister(
+        canister,
+        WASM.to_vec(),
+        encode_one(ProjectContext {
+            project_id: "shop-project".to_string(),
+            canisters: vec![
+                ProjectCanister {
+                    canister_id: agent,
+                    package_name: "agent.wasm".to_string(),
+                },
+                ProjectCanister {
+                    canister_id: storage,
+                    package_name: "assetstorage.wasm".to_string(),
+                },
+            ],
+        })
+        .unwrap(),
+        Some(admin),
+    );
+
+    let (config,): (HashMap<String, ConfigValue>,) =
+        query_candid_as(&pic, canister, admin, "get_config", ()).unwrap();
+    assert_eq!(
+        config.get("project_id"),
+        Some(&ConfigValue::Text("shop-project".to_string()))
+    );
+    assert_eq!(
+        config.get("storage_canister"),
+        Some(&ConfigValue::PrincipalId(storage))
+    );
+    let (settings,): (Result<Settings, order_inventory::OrderError>,) =
+        query_candid_as(&pic, canister, admin, "get_settings", ()).unwrap();
+    assert!(settings.unwrap().trusted_agents.contains(&agent));
+}
+
 fn context(agent: Principal, session_id: &str) -> AiContext {
     AiContext {
-        agent,
+        project_id: "shop-project".to_string(),
+        agent_canister_id: agent,
         channel: AiChannel::WhatsApp,
         session_id: session_id.to_string(),
     }
@@ -51,12 +102,34 @@ fn add_stock(pic: &PocketIc, canister: Principal) -> InventoryItem {
         kind: InventoryKind::Product,
         price_minor: 2_500,
         currency: "NGN".to_string(),
+        payment_method: None,
         image_url: None,
         stock_quantity: Some(5),
     };
     let (result,): (Result<InventoryItem, order_inventory::OrderError>,) =
         update_candid_as(pic, canister, principal(1), "create_inventory", (input,)).unwrap();
     result.unwrap()
+}
+
+fn set_item_payment_method(
+    pic: &PocketIc,
+    canister: Principal,
+    item: &InventoryItem,
+    method: PaymentMethod,
+) {
+    let update = UpdateInventoryItem {
+        payment_method: Some(method),
+        ..Default::default()
+    };
+    let (result,): (Result<InventoryItem, order_inventory::OrderError>,) = update_candid_as(
+        pic,
+        canister,
+        principal(1),
+        "update_inventory",
+        (item.id, update),
+    )
+    .unwrap();
+    result.unwrap();
 }
 
 #[test]
@@ -121,10 +194,10 @@ fn customer_can_order_with_address_without_gps_and_stock_is_reserved() {
 fn prepaid_order_requires_exact_processor_verified_payment_before_fulfillment() {
     let (pic, canister, agent) = setup();
     let item = add_stock(&pic, canister);
+    set_item_payment_method(&pic, canister, &item, PaymentMethod::Prepaid);
     let parameters = serde_json::json!({
         "items": [{ "inventory_id": item.id, "quantity": 1 }],
         "delivery_location": { "address": "1 Payment Lane" },
-        "payment_method": "Prepaid"
     })
     .to_string();
     let (placed,): (Result<String, String>,) = update_candid_as(
@@ -244,6 +317,7 @@ fn prepaid_order_requires_exact_processor_verified_payment_before_fulfillment() 
 fn unpaid_prepaid_reservation_expires_and_restores_stock() {
     let (pic, canister, agent) = setup();
     let item = add_stock(&pic, canister);
+    set_item_payment_method(&pic, canister, &item, PaymentMethod::Prepaid);
     let (ttl,): (Result<(), order_inventory::OrderError>,) = update_candid_as(
         &pic,
         canister,
@@ -256,7 +330,6 @@ fn unpaid_prepaid_reservation_expires_and_restores_stock() {
     let parameters = serde_json::json!({
         "items": [{ "inventory_id": item.id, "quantity": 3 }],
         "delivery_location": { "address": "4 Expiry Close" },
-        "payment_method": "Prepaid"
     })
     .to_string();
     let (placed,): (Result<String, String>,) = update_candid_as(
@@ -296,7 +369,6 @@ fn cash_on_delivery_must_be_collected_before_completion() {
     let parameters = serde_json::json!({
         "items": [{ "inventory_id": item.id, "quantity": 1 }],
         "delivery_location": { "address": "2 Delivery Road" },
-        "payment_method": "CashOnDelivery"
     })
     .to_string();
     let (placed,): (Result<String, String>,) = update_candid_as(
@@ -368,10 +440,10 @@ fn cash_on_delivery_must_be_collected_before_completion() {
 fn cancelling_a_paid_order_releases_stock_and_requires_a_traceable_refund() {
     let (pic, canister, agent) = setup();
     let item = add_stock(&pic, canister);
+    set_item_payment_method(&pic, canister, &item, PaymentMethod::Prepaid);
     let parameters = serde_json::json!({
         "items": [{ "inventory_id": item.id, "quantity": 2 }],
         "delivery_location": { "address": "3 Refund Street" },
-        "payment_method": "Prepaid"
     })
     .to_string();
     let (placed,): (Result<String, String>,) = update_candid_as(
@@ -881,6 +953,7 @@ fn storefront_order(item_id: u64, quantity: u64) -> order_inventory::PlaceOrder 
         }],
         customer_name: Some("Amaka".to_string()),
         customer_phone: Some("+2348031234567".to_string()),
+        customer_email: Some("amaka@example.com".to_string()),
         delivery_location: order_inventory::DeliveryLocation {
             address: "14 Allen Avenue, Ikeja".to_string(),
             latitude: None,
@@ -888,7 +961,6 @@ fn storefront_order(item_id: u64, quantity: u64) -> order_inventory::PlaceOrder 
             instructions: None,
         },
         note: None,
-        payment_method: None,
     }
 }
 
@@ -1025,6 +1097,7 @@ fn storefront_customer_cannot_oversell_or_hoard_stock_with_open_orders() {
             kind: InventoryKind::Product,
             price_minor: 1_000,
             currency: "NGN".to_string(),
+            payment_method: None,
             image_url: None,
             stock_quantity: Some(50),
         };

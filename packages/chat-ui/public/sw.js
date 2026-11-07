@@ -54,8 +54,7 @@ self.addEventListener("fetch", (e) => {
   );
 });
 
-// Web Push: the notification canister sends the payload as JSON
-// `{ title, body, url }` (see packages/notification).
+// Web Push: the protocol backend sends the payload as JSON `{ title, body, url }`.
 self.addEventListener("push", (e) => {
   let data = {};
   try {

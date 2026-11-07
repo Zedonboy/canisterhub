@@ -23,6 +23,9 @@ const MAX_NAME_BYTES: usize = 200;
 const MAX_PAYLOAD_BYTES: usize = 8 * 1024;
 pub(crate) const MAX_HTTP_BODY_BYTES: usize = 10 * 1024;
 
+#[ic_cdk::init]
+fn init(_project_context: canister_hub_sdk::ProjectContext) {}
+
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Health {
     pub status: String,

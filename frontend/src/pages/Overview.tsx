@@ -1,7 +1,7 @@
 import { CopyLinkButton } from "@/components/CopyLinkButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext, useNavigate, Link } from "react-router-dom";
-import { ExternalLink, Database as DatabaseIcon, Sparkles, MoreVertical, Play, Square, Trash2, Rocket, Store, Bot, ListChecks, Settings as SettingsIcon, ChevronUp, ChevronDown, Search, Package, AppWindow, Globe } from "lucide-react";
+import { ExternalLink, Database as DatabaseIcon, Sparkles, MoreVertical, Play, Square, Trash2, Rocket, Store, Bot, ListChecks, Settings as SettingsIcon, ChevronUp, ChevronDown, Search, Package, AppWindow, Globe, RefreshCw } from "lucide-react";
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -10,7 +10,7 @@ import { StatusDot } from "@/components/StatusDot";
 import { CanisterID } from "@/components/CanisterID";
 import { InstallCanisterDialog } from "@/components/InstallCanisterDialog";
 import { toast } from "@/components/Toast";
-import { formatCycles, formatBytes, MOCK_MARKETPLACE_ITEMS } from "@/lib/mock-data";
+import { formatCycles, formatBytes } from "@/lib/mock-data";
 import type { ServiceStatus } from "@/lib/mock-data";
 import type { ProjectContext } from "@/components/layout/AppShell";
 import { removeProjectCanister, type Project, type ProjectState, type CanisterKind, type CanisterInfo } from "@/lib/backend";
@@ -19,6 +19,8 @@ import type { CanisterLink } from "@/lib/moduleConfig";
 import { stopCanister, startCanister, deleteCanister } from "@/lib/canisterOps";
 import type { CanisterType } from "@/lib/candid/canisterMetadata";
 import { formatMarketplacePrice, listMarketplaceItems, purchasedMarketplaceItemIds, type MarketplaceItem } from "@/lib/marketplace";
+import { fetchVerifiedPackageWasm, listPackageInfos, listProjectPackageInstallations, recordProjectPackageInstallation, type InstalledPackage, type PackageInfo } from "@/lib/packageRegistry";
+import { upgradeWasmRuntime } from "@/lib/runtime";
 
 function metadataTypeLabel(type: CanisterType | null | undefined): string | null {
   if (!type) return null;
@@ -269,6 +271,10 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
   const [stats, setStats] = useState<Record<string, CanisterStats> | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [packageInfos, setPackageInfos] = useState<Record<string, PackageInfo>>({});
+  const [packageInstalls, setPackageInstalls] = useState<Record<string, InstalledPackage>>({});
+  const [packageError, setPackageError] = useState<string | null>(null);
+  const [upgrading, setUpgrading] = useState<string | null>(null);
 
   const loadStats = useCallback(() => {
     if (Object.keys(job.canisters).length === 0) return;
@@ -282,6 +288,46 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
     loadStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job.id, canisters.length]);
+
+  const loadPackageVersions = useCallback(() => {
+    Promise.all([listPackageInfos(), listProjectPackageInstallations(job.id)])
+      .then(([packages, installs]) => {
+        setPackageInfos(Object.fromEntries(packages.map((pkg) => [pkg.name, pkg])));
+        setPackageInstalls(Object.fromEntries(installs.map((install) => [install.canister_id.toText(), install])));
+        setPackageError(null);
+      })
+      .catch((error) => setPackageError(error instanceof Error ? error.message : String(error)));
+  }, [job.id]);
+
+  useEffect(() => {
+    loadPackageVersions();
+  }, [loadPackageVersions, canisters.length]);
+
+  const runPackageUpdate = async (
+    name: string,
+    info: CanisterInfo,
+    installed: InstalledPackage,
+    latest: PackageInfo,
+  ) => {
+    const confirmed = window.confirm(
+      `Upgrade ${name} from v${installed.version} to v${latest.version}? The package will be downloaded, verified, and installed in upgrade mode.`,
+    );
+    if (!confirmed) return;
+
+    setUpgrading(info.id);
+    try {
+      const wasm = await fetchVerifiedPackageWasm(latest);
+      await upgradeWasmRuntime(info.id, wasm, job.network, "upgrade", job.id);
+      const saved = await recordProjectPackageInstallation(job.id, name, latest.name);
+      setPackageInstalls((current) => ({ ...current, [info.id]: saved }));
+      toast.success(`${name} updated`, `Now running package v${latest.version}.`);
+      reloadOne(name, info);
+    } catch (error) {
+      toast.error(`Couldn't update ${name}`, error instanceof Error ? error.message : String(error));
+    } finally {
+      setUpgrading(null);
+    }
+  };
 
   /** Re-reads just one canister's own stats after a Start/Stop op on it,
    * rather than re-fetching every card on the page for a one-canister
@@ -304,7 +350,7 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
           Installed — {canisters.length} canister{canisters.length !== 1 ? "s" : ""}
         </h2>
         <div className="flex items-center gap-2">
-          {statsError && <span className="text-[10px] text-[#ff5252]">Live stats unavailable: {statsError}</span>}
+          {(statsError || packageError) && <span className="text-[10px] text-[#ff5252]">{statsError ? `Live stats unavailable: ${statsError}` : `Package versions unavailable: ${packageError}`}</span>}
           <button
             onClick={() => setCollapsed((v) => !v)}
             title={collapsed ? "Expand" : "Collapse"}
@@ -321,6 +367,9 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
           const metadataType = metadataTypeLabel(s?.canister_type);
           const adminLink = s?.links.find((link) => "Admin" in link.kind);
           const publicLinks = s?.links.filter((link) => "Public" in link.kind) ?? [];
+          const installedPackage = packageInstalls[info.id];
+          const latestPackage = installedPackage ? packageInfos[installedPackage.package_name] : undefined;
+          const updateAvailable = Boolean(latestPackage && installedPackage.sha !== latestPackage.sha);
           return (
             <div key={name} className="flex flex-col gap-2 p-3 rounded-lg bg-[#0f1629] border border-[#1e2d47]">
               <div className="flex items-center justify-between">
@@ -345,6 +394,12 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
                   {s?.version && <span className="normal-case font-mono">v{s.version}</span>}
                 </span>
               )}
+              {installedPackage && (
+                <span className="text-[10px] text-[#4a5568]">
+                  Package v{installedPackage.version}
+                  {updateAvailable && latestPackage && <span className="text-[#fbbf24]"> · v{latestPackage.version} available</span>}
+                </span>
+              )}
               <CanisterID id={info.id} className="text-[10px]" />
               {!s?.error && (
                 <div className="text-[10px] text-[#4a5568] space-y-0.5">
@@ -366,6 +421,18 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
                   `ic-sql`'s embedded table-browser) stays inside this
                   dashboard. */}
               <div className="flex items-center gap-1 mt-auto pt-0.5">
+                {updateAvailable && latestPackage && (
+                  <button
+                    type="button"
+                    disabled={upgrading !== null}
+                    onClick={() => void runPackageUpdate(name, info, installedPackage, latestPackage)}
+                    title={`Update to v${latestPackage.version}`}
+                    className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] text-[#fbbf24] border border-[#fbbf2444] hover:bg-[#fbbf2414] transition-colors disabled:opacity-40"
+                  >
+                    <RefreshCw size={11} className={upgrading === info.id ? "animate-spin" : ""} />
+                    {upgrading === info.id ? "Updating…" : "Update"}
+                  </button>
+                )}
                 {adminLink && (
                   <Link
                     to={`/project/${job.id}/canister/${encodeURIComponent(info.id)}/view-data`}
@@ -436,18 +503,12 @@ function MarketplaceSection({ job }: { job: Project }) {
       .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)));
   }, []);
 
-  // Nothing's been published to this `backend` yet - fall back to sample
-  // listings so the Featured layout previews with something on it instead
-  // of an empty state (see `MOCK_MARKETPLACE_ITEMS`'s own doc comment).
-  const usingMock = items !== null && items.length === 0;
-  const sourceItems = usingMock ? MOCK_MARKETPLACE_ITEMS : items;
-
   const filtered = useMemo(() => {
-    const all = sourceItems ?? [];
+    const all = items ?? [];
     const q = query.toLowerCase().trim();
     if (!q) return all;
     return all.filter((item) => item.title.toLowerCase().includes(q) || item.description.toLowerCase().includes(q));
-  }, [sourceItems, query]);
+  }, [items, query]);
 
   // No search in progress: show a "Featured" shortlist (most downloaded
   // first) rather than the whole catalog - once searching, show every
@@ -479,16 +540,9 @@ function MarketplaceSection({ job }: { job: Project }) {
       {items !== null && (
         displayed.length > 0 ? (
           <>
-            <div className="flex items-center gap-2 mb-3">
-              {!query.trim() && (
-                <h3 className="text-[11px] font-medium text-[#4a5568] uppercase tracking-wider">Featured</h3>
-              )}
-              {usingMock && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded border border-[#c084fc33] bg-[#c084fc0d] text-[#c084fc]">
-                  Sample listings - nothing's published yet
-                </span>
-              )}
-            </div>
+            {!query.trim() && (
+              <h3 className="text-[11px] font-medium text-[#4a5568] uppercase tracking-wider mb-3">Featured</h3>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {displayed.map((item) => {
                 const idText = item.id.toString();
@@ -519,7 +573,7 @@ function MarketplaceSection({ job }: { job: Project }) {
           </>
         ) : (
           <p className="text-xs text-[#4a5568] text-center">
-            {`No installable canister matches "${query}"`}
+            {items.length === 0 ? "No marketplace items published yet." : `No installable canister matches "${query}"`}
           </p>
         )
       )}

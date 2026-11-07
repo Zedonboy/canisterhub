@@ -37,6 +37,7 @@ import { agentCanisterId } from "./canisterId";
  * second), short enough that a dashboard build that never implements this
  * protocol doesn't leave the page hanging. */
 const RESPONSE_TIMEOUT_MS = 5000;
+export const DELEGATION_REFRESH_EVENT = "chat-ui:delegation-refreshed";
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -53,6 +54,11 @@ export function isEmbedded(): boolean {
 }
 
 let delegatedIdentityPromise: Promise<Identity | null> | null = null;
+let delegationIssue: string | null = null;
+
+export function getDelegationIssue(): string | null {
+  return delegationIssue;
+}
 
 /** Best-effort, memoized for the lifetime of this page load: `null` if
  * not embedded, if the parent has no real identity to delegate, or if it
@@ -61,8 +67,26 @@ let delegatedIdentityPromise: Promise<Identity | null> | null = null;
  * throws. */
 export function getDelegatedIdentity(): Promise<Identity | null> {
   if (!isEmbedded()) return Promise.resolve(null);
-  delegatedIdentityPromise ??= requestDelegatedIdentity().catch(() => null);
+  delegatedIdentityPromise ??= requestDelegatedIdentity()
+    .then((identity) => {
+      if (identity) delegationIssue = null;
+      else delegationIssue ??= "The dashboard did not provide a secure session.";
+      return identity;
+    })
+    .catch(() => {
+      delegationIssue = "The dashboard could not provide a secure session.";
+      return null;
+    });
   return delegatedIdentityPromise;
+}
+
+/** Starts a fresh parent handshake after a delegated session expires. */
+export function retryDelegatedIdentity(): Promise<Identity | null> {
+  if (!isEmbedded()) return Promise.resolve(null);
+  delegationIssue = null;
+  delegatedIdentityPromise = null;
+  window.dispatchEvent(new Event(DELEGATION_REFRESH_EVENT));
+  return getDelegatedIdentity();
 }
 
 function requestDelegatedIdentity(): Promise<Identity | null> {
@@ -73,6 +97,7 @@ function requestDelegatedIdentity(): Promise<Identity | null> {
   return new Promise<Identity | null>((resolve) => {
     const timeout = setTimeout(() => {
       window.removeEventListener("message", onMessage);
+      delegationIssue = "The dashboard did not respond in time to the secure session request.";
       resolve(null);
     }, RESPONSE_TIMEOUT_MS);
 
@@ -92,11 +117,13 @@ function requestDelegatedIdentity(): Promise<Identity | null> {
           const chain = DelegationChain.fromJSON(data.delegationChainJson as Parameters<typeof DelegationChain.fromJSON>[0]);
           resolve(DelegationIdentity.fromDelegation(ephemeral, chain));
         } catch {
+          delegationIssue = "The dashboard returned an invalid secure session.";
           resolve(null);
         }
       } else if (data.type === "MODULE_DELEGATION_UNAVAILABLE") {
         clearTimeout(timeout);
         window.removeEventListener("message", onMessage);
+        delegationIssue = "The dashboard is unable to share a secure session right now.";
         resolve(null);
       }
     }

@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
 import { Send } from "lucide-react";
 import { Button } from "./Button";
+import { reportDelegationFailure } from "@/lib/delegationRecovery";
 
 const MAX_LEN = 2000;
 
-/** Enter sends, Shift+Enter inserts a newline. The draft is only cleared once
- * `onSend` resolves, so a failed send never silently eats what was typed. */
+/** Enter sends, Shift+Enter inserts a newline. The draft clears immediately;
+ * if the request fails, the text is restored so it can be retried. */
 export function Composer({
   placeholder,
   onSend,
@@ -27,11 +28,15 @@ export function Composer({
     if (!value || busy || disabled) return;
     setBusy(true);
     setError(null);
+    setText("");
     try {
       await onSend(value);
-      setText("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setText(value);
+      const delegationExpired = reportDelegationFailure(e);
+      setError(delegationExpired
+        ? "Your secure dashboard session expired. Reconnect to continue."
+        : e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
       ref.current?.focus();

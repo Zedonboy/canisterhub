@@ -39,6 +39,7 @@ export default function ItemDetail({ item, loading }: { item: Item | undefined; 
               <KindBadge kind={item.kind} />
               <h2 className="text-xl font-semibold leading-snug">{item.name}</h2>
               <p className="text-2xl font-semibold tabular-nums">{formatMoney(item.priceMinor, item.currency)}</p>
+              <p className="text-xs text-c-muted">Payment terms: {item.paymentMethod === "Prepaid" ? "Prepaid" : "Cash on delivery"}</p>
               <p className="text-sm text-c-muted whitespace-pre-wrap">{item.description}</p>
               <p className="text-xs text-c-faint">
                 {item.kind === "Service" ? "Service" : out ? "Out of stock" : item.stock === null ? "In stock" : `${item.stock} in stock`}

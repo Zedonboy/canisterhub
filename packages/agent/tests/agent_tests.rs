@@ -20,10 +20,10 @@
 //! local server binary to avoid a download on first run.
 
 use agent::{
-    AdminRequest, AiCanister, Channel, Config, ConfigUpdate, HttpRequest, HttpResponse,
-    IncomingMessage,
+    AdminRequest, AiCanister, Channel, ClientDataKind, ClientDataRequest, ClientDataValue, Config,
+    ConfigUpdate, HttpRequest, HttpResponse, IncomingMessage,
 };
-use candid::{encode_args, encode_one, CandidType, Principal};
+use candid::{encode_one, CandidType, Principal};
 use hmac::{Hmac, Mac};
 use pocket_ic::common::rest::{CanisterHttpReply, CanisterHttpResponse, MockCanisterHttpResponse};
 use pocket_ic::{query_candid_as, update_candid_as, PocketIc, PocketIcBuilder};
@@ -107,7 +107,31 @@ fn setup_with_arg(arg: Vec<u8>) -> (PocketIc, Principal) {
 }
 
 fn setup(config: Config) -> (PocketIc, Principal) {
-    setup_with_arg(encode_one(config).unwrap())
+    let (pic, id) = setup_with_arg(encode_one(agent::ProjectContext::default()).unwrap());
+    let update = ConfigUpdate {
+        project_id: Some(config.project_id),
+        protocol_id: Some(config.protocol_id),
+        mail_bridge_principal: Some(config.mail_bridge_principal),
+        whatsapp_verify_token: Some(config.whatsapp_verify_token),
+        whatsapp_app_secret: Some(config.whatsapp_app_secret),
+        whatsapp_access_token: Some(config.whatsapp_access_token),
+        whatsapp_phone_number_id: Some(config.whatsapp_phone_number_id),
+        telegram_secret_token: Some(config.telegram_secret_token),
+        telegram_bot_token: Some(config.telegram_bot_token),
+        mail_bridge_url: Some(config.mail_bridge_url),
+        mail_bridge_api_key: Some(config.mail_bridge_api_key),
+        mail_from_address: Some(config.mail_from_address),
+        system_prompt: Some(config.system_prompt),
+        llm_provider: Some(config.llm_provider),
+        llm_model: Some(config.llm_model),
+        llm_api_key: Some(config.llm_api_key),
+        max_output_tokens: Some(config.max_output_tokens),
+        max_tool_iterations: Some(config.max_tool_iterations),
+        admin_webhook_url: Some(config.admin_webhook_url),
+        admin_webhook_secret: Some(config.admin_webhook_secret),
+    };
+    update_config(&pic, id, admin(), &update).unwrap();
+    (pic, id)
 }
 
 fn update_config(
@@ -132,7 +156,7 @@ fn get_config(pic: &PocketIc, id: Principal, caller: Principal) -> Result<Config
 // ---------------------------------------------------------------------------
 
 #[test]
-fn init_installs_the_given_config() {
+fn dynamic_config_installs_the_given_config() {
     let config = Config {
         mail_bridge_principal: Some(connector()),
         ..Default::default()
@@ -142,9 +166,24 @@ fn init_installs_the_given_config() {
 }
 
 #[test]
-fn init_without_an_argument_uses_default_config() {
-    let (pic, id) = setup_with_arg(encode_args(()).unwrap());
+fn empty_project_context_uses_default_config() {
+    let (pic, id) = setup_with_arg(encode_one(agent::ProjectContext::default()).unwrap());
     assert_eq!(get_config(&pic, id, admin()).unwrap(), Config::default());
+}
+
+#[test]
+fn init_prefills_project_id_from_project_context() {
+    let context = agent::ProjectContext {
+        project_id: "project-42".to_string(),
+        canisters: vec![agent::ProjectCanister {
+            canister_id: connector(),
+            package_name: "notification.wasm".to_string(),
+        }],
+    };
+    let args = encode_one(context).unwrap();
+    let (pic, id) = setup_with_arg(args);
+    let config = get_config(&pic, id, admin()).unwrap();
+    assert_eq!(config.project_id.as_deref(), Some("project-42"));
 }
 
 #[test]
@@ -196,7 +235,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
     let (pic, id) = setup(Config::default());
     let (schema,): (Vec<ReadonlySchemaField>,) =
         query_candid_as(&pic, id, admin(), "get_config_schema", ()).unwrap();
-    assert_eq!(schema.len(), 25);
+    assert_eq!(schema.len(), 26);
     let whatsapp = schema
         .iter()
         .find(|field| field.key == "whatsapp_webhook_url")
@@ -212,7 +251,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         .filter(|field| field.is_readonly == Some(false))
         .map(|field| field.key.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(editable.len(), 20);
+    assert_eq!(editable.len(), 21);
     for key in [
         "connected_canisters",
         "project_id",
@@ -220,6 +259,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         "system_prompt",
         "llm_provider",
         "llm_api_key",
+        "max_output_tokens",
         "whatsapp_verify_token",
         "telegram_bot_token",
         "mail_bridge_api_key",
@@ -236,6 +276,23 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         Some(DynamicConfigValue::PrincipalId(id))
             if id.to_text() == crate_protocol_id()
     ));
+    let max_output_tokens = schema
+        .iter()
+        .find(|field| field.key == "max_output_tokens")
+        .expect("maximum output tokens schema");
+    assert!(matches!(
+        max_output_tokens.default_value.as_ref(),
+        Some(DynamicConfigValue::Number(120))
+    ));
+    let system_prompt = schema
+        .iter()
+        .find(|field| field.key == "system_prompt")
+        .expect("system prompt schema");
+    assert!(matches!(
+        system_prompt.default_value.as_ref(),
+        Some(DynamicConfigValue::Text(value))
+            if value.contains("You are a customer support assistant")
+    ));
 
     let (values,): (HashMap<String, DynamicConfigValue>,) =
         query_candid_as(&pic, id, admin(), "get_config", ()).unwrap();
@@ -248,6 +305,11 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         Some(DynamicConfigValue::PrincipalId(value))
             if value.to_text() == crate_protocol_id()
     ));
+    assert!(matches!(
+        values.get("system_prompt"),
+        Some(DynamicConfigValue::Text(value))
+            if value.contains("You are a customer support assistant")
+    ));
 
     let update = HashMap::from([
         (
@@ -257,6 +319,10 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         (
             "llm_api_key".to_string(),
             DynamicConfigValue::Text("write-only-secret".to_string()),
+        ),
+        (
+            "max_output_tokens".to_string(),
+            DynamicConfigValue::Number(96),
         ),
         (
             "max_tool_iterations".to_string(),
@@ -269,6 +335,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
     let runtime = get_config(&pic, id, admin()).unwrap();
     assert_eq!(runtime.system_prompt.as_deref(), Some("Be concise"));
     assert_eq!(runtime.llm_api_key.as_deref(), Some("write-only-secret"));
+    assert_eq!(runtime.max_output_tokens, Some(96));
     assert_eq!(runtime.max_tool_iterations, Some(9));
     let (refreshed,): (HashMap<String, DynamicConfigValue>,) =
         query_candid_as(&pic, id, admin(), "get_config", ()).unwrap();
@@ -276,10 +343,30 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         refreshed.get("system_prompt"),
         Some(DynamicConfigValue::Text(value)) if value == "Be concise"
     ));
+    assert!(matches!(
+        refreshed.get("max_output_tokens"),
+        Some(DynamicConfigValue::Number(96))
+    ));
     assert!(
         !refreshed.contains_key("llm_api_key"),
         "dynamic config must never return stored secrets"
     );
+
+    let clear_prompt = HashMap::from([(
+        "system_prompt".to_string(),
+        DynamicConfigValue::Text(String::new()),
+    )]);
+    let (result,): (Result<(), String>,) =
+        update_candid_as(&pic, id, admin(), "set_config", (clear_prompt,)).unwrap();
+    result.unwrap();
+    let (restored,): (HashMap<String, DynamicConfigValue>,) =
+        query_candid_as(&pic, id, admin(), "get_config", ()).unwrap();
+    assert!(matches!(
+        restored.get("system_prompt"),
+        Some(DynamicConfigValue::Text(value))
+            if value.contains("You are a customer support assistant")
+    ));
+
     assert!(matches!(
         values.get("connected_canisters"),
         Some(DynamicConfigValue::Vector(values)) if values.is_empty()
@@ -312,7 +399,7 @@ fn dynamic_config_adds_and_removes_agentic_canisters_through_llm_context_discove
     pic.install_canister(
         tool_id,
         APP_API_WASM.to_vec(),
-        encode_one(()).unwrap(),
+        encode_one(agent::ProjectContext::default()).unwrap(),
         Some(admin()),
     );
 
@@ -352,7 +439,7 @@ fn add_canister_discovers_and_persists_declared_ai_methods() {
     pic.install_canister(
         tool_id,
         APP_API_WASM.to_vec(),
-        encode_one(()).unwrap(),
+        encode_one(agent::ProjectContext::default()).unwrap(),
         Some(admin()),
     );
 
@@ -682,6 +769,28 @@ fn call_with_llm_reply(
     pic.await_call(call_id).unwrap()
 }
 
+fn mock_next_http_json(pic: &PocketIc, body: serde_json::Value) {
+    let mut requests = Vec::new();
+    for _ in 0..10 {
+        pic.tick();
+        requests = pic.get_canister_http();
+        if !requests.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(requests.len(), 1, "expected one LLM outcall");
+    pic.mock_canister_http_response(MockCanisterHttpResponse {
+        subnet_id: requests[0].subnet_id,
+        request_id: requests[0].request_id,
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status: 200,
+            headers: vec![],
+            body: body.to_string().into_bytes(),
+        }),
+        additional_responses: vec![],
+    });
+}
+
 fn web_send(
     pic: &PocketIc,
     id: Principal,
@@ -751,6 +860,86 @@ fn web_messages(
     let (r,): (Result<Vec<agent::StoredChatMessage>, String>,) =
         query_candid_as(pic, id, caller, "web_messages", (0u64,)).unwrap();
     r
+}
+
+fn web_pending_client_data(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+) -> Result<Option<ClientDataRequest>, String> {
+    let (result,): (Result<Option<ClientDataRequest>, String>,) =
+        query_candid_as(pic, id, caller, "web_pending_client_data", ()).unwrap();
+    result
+}
+
+#[test]
+fn web_client_data_tool_requests_and_accepts_device_location() {
+    let (pic, id) = setup(llm_config());
+    let customer = test_principal(44);
+    let call_id = pic
+        .submit_call(
+            id,
+            customer,
+            "web_send",
+            candid::encode_args(("Find the nearest branch",)).unwrap(),
+        )
+        .unwrap();
+
+    mock_next_http_json(
+        &pic,
+        serde_json::json!({
+            "choices": [{"message": {
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_location",
+                    "type": "function",
+                    "function": {
+                        "name": "request_client_data",
+                        "arguments": "{\"data_type\":\"location\",\"prompt\":\"Share your location so I can find the nearest branch.\"}"
+                    }
+                }]
+            }}]
+        }),
+    );
+    mock_next_http_json(
+        &pic,
+        serde_json::json!({
+            "choices": [{"message": {"content": "Please share your current location.", "tool_calls": []}}]
+        }),
+    );
+    let sent: Result<(), String> = candid::decode_one(&pic.await_call(call_id).unwrap()).unwrap();
+    sent.unwrap();
+
+    let request = web_pending_client_data(&pic, id, customer)
+        .unwrap()
+        .expect("pending location request");
+    assert_eq!(request.kind, ClientDataKind::Location);
+
+    pic.advance_time(std::time::Duration::from_secs(5));
+    let bytes = call_with_llm_reply(
+        &pic,
+        id,
+        customer,
+        "web_submit_client_data",
+        candid::encode_args((
+            request.id,
+            ClientDataValue::Location {
+                latitude: 6.5244,
+                longitude: 3.3792,
+            },
+            Option::<String>::None,
+        ))
+        .unwrap(),
+        "The nearest branch is 2 km away.",
+    );
+    let submitted: Result<(), String> = candid::decode_one(&bytes).unwrap();
+    submitted.unwrap();
+    assert!(web_pending_client_data(&pic, id, customer)
+        .unwrap()
+        .is_none());
+    let history = web_messages(&pic, id, customer).unwrap();
+    assert!(history[2].content.contains("latitude=6.5244"));
+    assert!(history[2].content.contains("longitude=3.3792"));
 }
 
 fn list_conversations(

@@ -22,6 +22,138 @@ pub enum Channel {
     Web,
 }
 
+/// Information the agent can ask the client application to collect from the
+/// current customer. The channel adapter decides whether this is rendered as
+/// a native control (for example, a location button) or a typed reply.
+#[derive(CandidType, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClientDataKind {
+    Location,
+    Text,
+    Email,
+    Phone,
+    Number,
+    Date,
+}
+
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ClientDataRequest {
+    pub id: u64,
+    pub kind: ClientDataKind,
+    pub prompt: String,
+    pub created_at: u64,
+}
+
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum ClientDataValue {
+    Location { latitude: f64, longitude: f64 },
+    Text(String),
+}
+
+impl ClientDataValue {
+    pub fn parse_location_text(text: &str) -> Option<Self> {
+        let values = text
+            .split(|character: char| {
+                !(character.is_ascii_digit()
+                    || character == '.'
+                    || character == '-'
+                    || character == '+')
+            })
+            .filter(|part| !part.is_empty())
+            .map(str::parse::<f64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        if values.len() != 2 {
+            return None;
+        }
+        let value = Self::Location {
+            latitude: values[0],
+            longitude: values[1],
+        };
+        value
+            .validate_for(ClientDataKind::Location)
+            .ok()
+            .map(|_| value)
+    }
+
+    pub fn validate_for(&self, kind: ClientDataKind) -> Result<(), String> {
+        match (kind, self) {
+            (
+                ClientDataKind::Location,
+                Self::Location {
+                    latitude,
+                    longitude,
+                },
+            ) if latitude.is_finite()
+                && longitude.is_finite()
+                && (-90.0..=90.0).contains(latitude)
+                && (-180.0..=180.0).contains(longitude) =>
+            {
+                Ok(())
+            }
+            (ClientDataKind::Location, Self::Location { .. }) => Err(
+                "latitude must be between -90 and 90 and longitude between -180 and 180"
+                    .to_string(),
+            ),
+            (ClientDataKind::Location, _) => Err("this request requires a location".to_string()),
+            (_, Self::Text(value)) if value.trim().is_empty() => {
+                Err("the requested value must not be empty".to_string())
+            }
+            (_, Self::Text(value)) if value.chars().count() > 2_000 => {
+                Err("the requested value is longer than 2000 characters".to_string())
+            }
+            (_, Self::Text(_)) => Ok(()),
+            (_, Self::Location { .. }) => Err("this request requires a text value".to_string()),
+        }
+    }
+
+    pub fn as_prompt_text(&self, kind: ClientDataKind) -> String {
+        match self {
+            Self::Location {
+                latitude,
+                longitude,
+            } => format!(
+                "Client provided the requested location: latitude={latitude}, longitude={longitude}."
+            ),
+            Self::Text(value) => format!(
+                "Client provided the requested {}: {}",
+                kind.label(),
+                value.trim()
+            ),
+        }
+    }
+}
+
+impl ClientDataKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Location => "location",
+            Self::Text => "information",
+            Self::Email => "email address",
+            Self::Phone => "phone number",
+            Self::Number => "number",
+            Self::Date => "date",
+        }
+    }
+}
+
+#[cfg(test)]
+mod client_data_tests {
+    use super::*;
+
+    #[test]
+    fn typed_coordinates_are_accepted_without_guessing_from_extra_numbers() {
+        assert_eq!(
+            ClientDataValue::parse_location_text("latitude=6.5244, longitude=3.3792"),
+            Some(ClientDataValue::Location {
+                latitude: 6.5244,
+                longitude: 3.3792,
+            })
+        );
+        assert!(ClientDataValue::parse_location_text("Call 0800 near 6.5, 3.3").is_none());
+        assert!(ClientDataValue::parse_location_text("91, 3").is_none());
+    }
+}
+
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
 pub struct StoredMessage {
     pub id: u64,
@@ -39,16 +171,20 @@ pub enum MessagePayload {
 impl MessagePayload {
     pub fn incoming(&self) -> Option<IncomingMessage> {
         match self {
-            Self::WhatsApp(m) => m.text.clone().map(|text| IncomingMessage {
-                channel: Channel::WhatsApp,
-                session_id: m.from.clone(),
-                text,
-            }),
-            Self::Telegram(m) => m.text.clone().map(|text| IncomingMessage {
-                channel: Channel::Telegram,
-                session_id: m.chat_id.to_string(),
-                text,
-            }),
+            Self::WhatsApp(m) => location_text(m.latitude, m.longitude)
+                .or_else(|| m.text.clone())
+                .map(|text| IncomingMessage {
+                    channel: Channel::WhatsApp,
+                    session_id: m.from.clone(),
+                    text,
+                }),
+            Self::Telegram(m) => location_text(m.latitude, m.longitude)
+                .or_else(|| m.text.clone())
+                .map(|text| IncomingMessage {
+                    channel: Channel::Telegram,
+                    session_id: m.chat_id.to_string(),
+                    text,
+                }),
             Self::Mail(m) => Some(IncomingMessage {
                 channel: Channel::Email,
                 session_id: m.envelope_from.clone(),
@@ -56,6 +192,25 @@ impl MessagePayload {
             }),
         }
     }
+
+    pub fn client_data(&self) -> Option<ClientDataValue> {
+        match self {
+            Self::WhatsApp(m) => coordinates(m.latitude, m.longitude),
+            Self::Telegram(m) => coordinates(m.latitude, m.longitude),
+            Self::Mail(_) => None,
+        }
+    }
+}
+
+fn coordinates(latitude: Option<f64>, longitude: Option<f64>) -> Option<ClientDataValue> {
+    Some(ClientDataValue::Location {
+        latitude: latitude?,
+        longitude: longitude?,
+    })
+}
+
+fn location_text(latitude: Option<f64>, longitude: Option<f64>) -> Option<String> {
+    coordinates(latitude, longitude).map(|value| value.as_prompt_text(ClientDataKind::Location))
 }
 
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
@@ -73,6 +228,8 @@ pub struct WhatsAppMessage {
     pub to: Option<String>,
     pub message_type: String,
     pub text: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
     pub timestamp: Option<String>,
     pub raw: String,
 }
@@ -85,6 +242,8 @@ pub struct TelegramMessage {
     pub from_user_id: Option<i64>,
     pub from_username: Option<String>,
     pub text: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
     pub date: Option<i64>,
     pub raw: String,
 }
@@ -122,9 +281,20 @@ pub enum AuthResult {
 /// not accept identity fields from the JSON parameters.
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AiContext {
-    pub agent: Principal,
+    pub project_id: String,
+    pub agent_canister_id: Principal,
     pub channel: Channel,
     pub session_id: String,
+}
+
+/// A business package can ask the agent to message a session without
+/// selecting a channel. The agent resolves the channel from its conversation
+/// store so the caller cannot misroute a customer's message.
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
+pub struct BusinessMessage {
+    pub session_id: String,
+    pub text: String,
+    pub subject: Option<String>,
 }
 
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq)]

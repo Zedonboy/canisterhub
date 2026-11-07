@@ -16,9 +16,10 @@ const StorageDetail = lazy(() => import("@/pages/StorageDetail"));
 // const DatabasePage = lazy(() => import("@/pages/Database"));
 const CanisterSettings = lazy(() => import("@/pages/CanisterSettings"));
 const CanisterViewData = lazy(() => import("@/pages/CanisterViewData"));
-const Analytics = lazy(() => import("@/pages/Analytics"));
-const Agents = lazy(() => import("@/pages/Agents"));
-const AgentMap = lazy(() => import("@/pages/AgentMap"));
+// Disabled for production launch.
+// const Analytics = lazy(() => import("@/pages/Analytics"));
+// const Agents = lazy(() => import("@/pages/Agents"));
+// const AgentMap = lazy(() => import("@/pages/AgentMap"));
 const SettingsPage = lazy(() => import("@/pages/Settings"));
 const WalletPage = lazy(() => import("@/pages/Wallet"));
 const ProductInstall = lazy(() => import("@/pages/ProductInstall"));
@@ -26,6 +27,7 @@ const ProductInstall = lazy(() => import("@/pages/ProductInstall"));
 const PublisherSetup = lazy(() => import("@/pages/PublisherSetup"));
 // const Orchestrate = lazy(() => import("@/pages/Orchestrate"));
 const Runtime = lazy(() => import("@/pages/Runtime"));
+const Logs = lazy(() => import("@/pages/Logs"));
 const NotFound = lazy(() => import("@/pages/NotFound"));
 const TemplateInstall = lazy(() => import("@/pages/TemplateInstall"));
 
@@ -58,19 +60,19 @@ export default function App() {
             {/* <Route path="database" element={<DatabasePage />} /> */}
             <Route path="canister/:canisterId/settings" element={<CanisterSettings />} />
             <Route path="canister/:canisterId/view-data" element={<CanisterViewData />} />
+            {/* Disabled for production launch.
             <Route path="analytics" element={<Analytics />} />
             <Route path="agents" element={<Agents />} />
             <Route path="agents/map" element={<AgentMap />} />
+            */}
             <Route path="settings" element={<SettingsPage />} />
             <Route path="wallet" element={<WalletPage />} />
             {/* Billing merged into Wallet - keep the old path working for
                 anyone with a stale link/bookmark. */}
             <Route path="billing" element={<Navigate to="../wallet" replace />} />
-            {/* Logs used to be a tab on Analytics (now a canister-listing
-                page instead, its old dashboard content - including that
-                tab - moved to `packages/analytics-dashboard`) - keep the
-                old path working for anyone with a stale link/bookmark. */}
-            <Route path="logs" element={<Navigate to="../analytics" replace />} />
+            {/* Unified log viewer - polls the IC management canister's
+                `fetch_canister_logs` for the project's canisters. */}
+            <Route path="logs" element={<Logs />} />
             {/* Secretary (AI) disabled for production launch - bounce stale links/
                 the remaining "Ask AI" buttons to Overview instead of a blank page. */}
             <Route path="orchestrate" element={<Navigate to="../overview" replace />} />

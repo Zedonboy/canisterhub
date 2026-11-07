@@ -6,6 +6,36 @@
 use candid::{CandidType, Principal};
 use serde::{Deserialize, Serialize};
 
+/// Project-owned canisters available when this package is installed. The
+/// package name is the stable `.wasm` filename, not a project canister label.
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ProjectCanister {
+    pub canister_id: Principal,
+    pub package_name: String,
+}
+
+/// The single standard install argument supplied to every package.
+#[derive(CandidType, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct ProjectContext {
+    pub project_id: String,
+    pub canisters: Vec<ProjectCanister>,
+}
+
+impl ProjectContext {
+    pub fn canister_for_package(&self, package_name: &str) -> Option<Principal> {
+        let package_name = package_name.trim();
+        self.canisters
+            .iter()
+            .find(|canister| {
+                canister
+                    .package_name
+                    .trim()
+                    .eq_ignore_ascii_case(package_name)
+            })
+            .map(|canister| canister.canister_id)
+    }
+}
+
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Config {
     /// Project registry key used when this package calls protocol APIs.
@@ -15,6 +45,13 @@ pub struct Config {
     /// Dynamic config exposes the compiled principal as this field's default.
     #[serde(default)]
     pub protocol_id: Option<Principal>,
+    /// Project inventory package allowed to send customer-facing business
+    /// messages (for example, verified payment receipts).
+    #[serde(default)]
+    pub inventory_canister_id: Option<Principal>,
+    /// Restaurant package allowed to send customer-facing order receipts.
+    #[serde(default)]
+    pub restaurant_canister_id: Option<Principal>,
     pub mail_bridge_principal: Option<Principal>,
     pub whatsapp_verify_token: Option<String>,
     pub whatsapp_app_secret: Option<String>,
@@ -28,9 +65,11 @@ pub struct Config {
 
     /// The system prompt prepended to every conversation - this is the main
     /// thing a business customizes: persona, tone, what the assistant is
-    /// for, and (critically) an explicit statement of what it *can't* do
-    /// (see `llm_context.md`'s "Writing a good system prompt" section). If
-    /// unset, a generic fallback is used (see `llm::default_system_prompt`).
+    /// for, an explicit statement of what it *can't* do, and its reply
+    /// formatting (the chat renders Markdown - see `llm::default_system_prompt`
+    /// for the fallback's shape, including the image-URL-on-its-own-line
+    /// convention for showing product photos). If unset, a generic fallback
+    /// is used.
     pub system_prompt: Option<String>,
     /// `managed` routes through CanisterHub's backend and selects IC LLM or
     /// DeepSeek from `llm_model`. `openai`, `anthropic`, and `deepseek` call
@@ -48,6 +87,11 @@ pub struct Config {
     /// API key for a direct/BYOK provider. Never sent to CanisterHub's
     /// backend and ignored for managed providers.
     pub llm_api_key: Option<String>,
+    /// Maximum number of tokens the model may generate for each completion
+    /// in a message's agent loop. Unset uses the assistant-oriented default
+    /// of 120 tokens.
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
     /// Upper bound on how many LLM <-> tool round trips one incoming
     /// message may cause before this canister gives up and escalates to a
     /// human (see `llm::run_agent_loop`) - bounds cycle spend and stable
@@ -93,6 +137,7 @@ pub struct ConfigUpdate {
     pub llm_provider: Option<Option<String>>,
     pub llm_model: Option<Option<String>>,
     pub llm_api_key: Option<Option<String>>,
+    pub max_output_tokens: Option<Option<u32>>,
     pub max_tool_iterations: Option<Option<u8>>,
     pub admin_webhook_url: Option<Option<String>>,
     pub admin_webhook_secret: Option<Option<String>>,
@@ -148,6 +193,9 @@ impl Config {
         if let Some(v) = update.llm_api_key {
             self.llm_api_key = v;
         }
+        if let Some(v) = update.max_output_tokens {
+            self.max_output_tokens = v;
+        }
         if let Some(v) = update.max_tool_iterations {
             self.max_tool_iterations = v;
         }
@@ -167,6 +215,22 @@ mod tests {
 
     fn principal(byte: u8) -> Principal {
         Principal::from_slice(&[byte; 10])
+    }
+
+    #[test]
+    fn project_context_resolves_by_package_name() {
+        let context = ProjectContext {
+            project_id: "project-1".to_string(),
+            canisters: vec![ProjectCanister {
+                canister_id: principal(7),
+                package_name: "mail_bridge.wasm".to_string(),
+            }],
+        };
+        assert_eq!(
+            context.canister_for_package("mail_bridge.wasm"),
+            Some(principal(7))
+        );
+        assert_eq!(context.canister_for_package("another-package"), None);
     }
 
     #[test]

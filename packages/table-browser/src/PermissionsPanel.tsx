@@ -3,6 +3,7 @@ import { Plus, Trash2, Shield } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
+import { Select } from "@/components/ui/Select";
 import { listPermissions, setPermission, removePermission, type Permission, type PermissionLevel } from "@/lib/permissions";
 
 const LEVELS: { value: PermissionLevel; label: string; variant: "green" | "amber" | "red" }[] = [
@@ -117,15 +118,12 @@ export default function PermissionsPanel() {
           </div>
           <div>
             <label className="block text-[11px] text-[#8892a4] mb-1">Access</label>
-            <select
+            <Select
               value={newLevel}
-              onChange={(e) => setNewLevel(e.target.value as PermissionLevel)}
-              className="h-8 px-2 text-xs bg-[#0a0e1a] border border-[#1e2d47] rounded text-[#e2e8f0] focus:outline-none focus:border-[#00d4ff]"
-            >
-              {LEVELS.map((l) => (
-                <option key={l.value} value={l.value}>{l.label}</option>
-              ))}
-            </select>
+              onChange={(next) => setNewLevel(next as PermissionLevel)}
+              triggerClassName="h-8 px-2 text-xs"
+              options={LEVELS.map((l) => ({ value: l.value, label: l.label }))}
+            />
           </div>
           <Button variant="primary" size="sm" onClick={addEntry} disabled={busy || !newPrincipal.trim()}>
             <Plus size={13} /> Add
@@ -144,16 +142,13 @@ export default function PermissionsPanel() {
               <div key={p.principal} className="flex items-center gap-3 px-3 py-2.5 border-b border-[#1e2d47] last:border-0 hover:bg-[#0f1629] transition-colors">
                 <span className="text-xs font-mono text-[#e2e8f0] truncate flex-1" title={p.principal}>{p.principal}</span>
                 <Badge variant={levelMeta(p.level).variant}>{levelMeta(p.level).label}</Badge>
-                <select
+                <Select
                   value={p.level}
-                  onChange={(e) => changeLevel(p.principal, e.target.value as PermissionLevel)}
+                  onChange={(next) => changeLevel(p.principal, next as PermissionLevel)}
                   disabled={busy}
-                  className="h-7 px-1.5 text-[11px] bg-[#0a0e1a] border border-[#1e2d47] rounded text-[#e2e8f0] focus:outline-none focus:border-[#00d4ff]"
-                >
-                  {LEVELS.map((l) => (
-                    <option key={l.value} value={l.value}>{l.label}</option>
-                  ))}
-                </select>
+                  triggerClassName="h-7 px-1.5 text-[11px]"
+                  options={LEVELS.map((l) => ({ value: l.value, label: l.label }))}
+                />
                 <button
                   onClick={() => remove(p.principal)}
                   disabled={busy}

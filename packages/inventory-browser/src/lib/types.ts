@@ -12,6 +12,7 @@ export interface InventoryItem {
   /** Integer minor units (2500 = 25.00 in a two-decimal currency). */
   priceMinor: bigint;
   currency: string;
+  paymentMethod: PaymentMethod;
   /** Public URL of the item's picture (stored on the canister), or `null`. */
   imageUrl: string | null;
   /** `null` means stock isn't tracked for this item (typical for services). */
@@ -28,6 +29,7 @@ export interface ItemInput {
   sku: string | null;
   priceMinor: bigint;
   currency: string;
+  paymentMethod: PaymentMethod;
   imageUrl: string | null;
   /** `null` = don't track stock. */
   stock: bigint | null;
@@ -71,6 +73,8 @@ export type PaymentStatus = "AwaitingPayment" | "Paid" | "Failed" | "RefundPendi
 export interface OrderLine {
   inventoryId: bigint;
   name: string;
+  /** SKU snapshotted when the order was placed, or `null` if unset/old order. */
+  sku: string | null;
   kind: ItemKind;
   quantity: bigint;
   unitPriceMinor: bigint;
@@ -93,6 +97,7 @@ export interface Order {
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   paymentReference: string | null;
+  checkoutUrl: string | null;
   amountPaidMinor: bigint;
   amountRefundedMinor: bigint;
   reservationExpiresAt: number | null;

@@ -1,3 +1,5 @@
+type ProjectCanister = record { canister_id : principal; package_name : text };
+type ProjectContext = record { project_id : text; canisters : vec ProjectCanister };
 // Minimal proof that this auth canister currently recognizes an identity.
 // Private profile fields are intentionally excluded.
 type Authorization = record { "principal" : opt principal; profile_id : nat64 };
@@ -40,6 +42,7 @@ type ConfigFieldSchema = record {
   // Optional typed filter for canister-picker fields. `None` has the
   // same meaning as `Some(CanisterType::Custom)`.
   canister_type : opt CanisterType;
+  package_name : opt text;
   // True for canister-provided display data that set_config cannot mutate.
   is_readonly : opt bool;
   default_value : opt ConfigValue;
@@ -182,7 +185,7 @@ type UpdateProfile = record {
 };
 type LinkKind = variant { Admin; Public };
 type CanisterLink = record { label : text; url : text; kind : LinkKind };
-service : () -> {
+service : (ProjectContext) -> {
   // Minimal, non-sensitive identity lookup for application canisters.
   authorize_principal : (principal) -> (opt Authorization) query;
   // Session-token counterpart used by HTTP API canisters, whose gateway
@@ -247,6 +250,7 @@ service : () -> {
   // authority to read that session's own basic profile attributes.
   resolve_session : (text) -> (opt ProfileClaims) query;
   set_config : (vec record { text; ConfigValue }) -> (Result_5);
+  update_project_context : (ProjectContext) -> (variant { Ok; Err : text });
   set_oauth_provider : (text, OAuthProviderConfig) -> (Result_5);
   update_config : (ConfigUpdate) -> (Result_5);
   // Creates this caller's profile on first call, or applies `update` to the

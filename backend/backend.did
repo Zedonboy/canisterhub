@@ -11,15 +11,20 @@ type AccessRights = variant {
 // See, e.g., [https://mmapped.blog/posts/01-effective-rust-canisters#serde-bytes](https://mmapped.blog/posts/01-effective-rust-canisters#serde-bytes) for more details regarding why `Vec<u8>` does not work out of the box.
 // Also, we cannot use `serde_bytes::ByteBuf` directly because it is not `Storable`.
 type ByteBuf = record { inner : blob };
+type BoolResult = variant { Ok : bool; Err : text };
 // One tracked canister's identity.
-type CanisterInfo = record { id : principal; kind : CanisterKind };
-// Which building block a tracked canister actually is. Most generic
-// marketplace deploys record `Other`; the project-wide notification module
-// is classified explicitly so the one-per-project invariant can be enforced.
+type CanisterInfo = record {
+  id : principal;
+  kind : CanisterKind;
+  // Stable package identity for dependency resolution. Absent for imported,
+  // runtime-created, and legacy canisters.
+  package_name : opt text;
+};
+// Which building block a tracked canister actually is. Notification remains
+// as a legacy kind for older project records; Web Push now lives in backend.
 type CanisterKind = variant {
   Analytics;
-  // The single project-wide Web Push service. Every module that needs
-  // notifications shares this canister instead of deploying its own.
+  // Legacy project-owned notification canister kind.
   Notification;
   Auth;
   Static;
@@ -298,6 +303,29 @@ type MarketplacePurchaseReceipt = record {
   already_owned : bool;
   ledger_canister_id : principal;
 };
+type PackageInfo = record {
+  id : text;
+  name : text;
+  description : text;
+  url : text;
+  version : text;
+  sha : text;
+};
+type PackageInfoInput = record {
+  description : text;
+  url : text;
+  version : text;
+  sha : text;
+};
+type InstalledPackage = record {
+  project_id : text;
+  canister_name : text;
+  canister_id : principal;
+  package_name : text;
+  version : text;
+  sha : text;
+  installed_at : nat64;
+};
 // A single orchestrated app - see this section's own header comment.
 // `canisters` is authoritative and additive-only (see
 // `add_project_canisters`): the dashboard's only source of truth for which
@@ -334,6 +362,7 @@ type PushDelivery = record {
   error : opt text;
   subscription_removed : bool;
 };
+type ProjectNotificationPreferences = record { push_enabled : bool };
 type PushNotification = record { url : text; title : text; body : text };
 type PushSubscription = record { endpoint : text; auth : text; p256dh : text };
 type Result = variant { Ok; Err : text };
@@ -344,6 +373,10 @@ type Result_12 = variant { Ok : nat64; Err : text };
 type Result_13 = variant { Ok : MarketplacePurchaseReceipt; Err : text };
 type Result_14 = variant { Ok : vec PushSubscription; Err : text };
 type Result_15 = variant { Ok : vec PushDelivery; Err : text };
+type Result_16 = variant { Ok : InstalledPackage; Err : text };
+type Result_17 = variant { Ok : vec InstalledPackage; Err : text };
+type Result_18 = variant { Ok : vec PackageInfo; Err : text };
+type Result_19 = variant { Ok : ProjectNotificationPreferences; Err : text };
 type Result_2 = variant { Ok : ByteBuf; Err : text };
 type Result_3 = variant { Ok : blob; Err : text };
 type Result_4 = variant { Ok : vec ManagedAiUsage; Err : text };
@@ -432,11 +465,14 @@ service : () -> {
   get_managed_ai_usage : (text) -> (Result_4) query;
   // Fetches a single marketplace item by id.
   get_marketplace_item : (nat64) -> (opt MarketplaceItem) query;
+  get_package_info : (text) -> (opt PackageInfo) query;
   // Fetches one project by id - but only for its own owner (see `Project::owner`'s
   // doc comment). Returns `None` for a non-owner caller, indistinguishable
   // from the project not existing at all, rather than an error revealing that
   // it does.
   get_project : (text) -> (opt Project) query;
+  get_project_notification_preferences : (text) -> (Result_19) query;
+  verify_project_package_membership : (text, principal) -> (BoolResult);
   // Owners can read their own token credits; backend controllers can inspect
   // any token-credit balance for billing and support.
   get_token_credits : (principal) -> (Result_5) query;
@@ -496,6 +532,8 @@ service : () -> {
   item_key_name : (text, text) -> (Result_3) query;
   // Lists all marketplace items.
   list_marketplace_items : () -> (vec MarketplaceItem) query;
+  list_package_infos : () -> (vec PackageInfo) query;
+  list_project_package_installations : (text) -> (Result_17) query;
   // Every project the caller owns, newest first - mirrors
   // `orchestrator::job::JobStore::list_for`. The real data behind the
   // dashboard's project list, called directly - no orchestrator HTTP call.
@@ -550,12 +588,12 @@ service : () -> {
   // confirms the transfer. Pending calls are journaled before the await, and a
   // retry accepts ICRC-2 `Duplicate` as the original successful payment.
   purchase_marketplace_item : (nat64) -> (Result_13);
-  // Called by a package canister with its project id. The backend verifies
-  // that the caller is registered in that project, then forwards the push to
-  // the project's notification canister with the project owner as recipient.
+  // Called by a registered project canister. The backend delivers push to
+  // the project owner using subscriptions stored in backend stable memory.
   send_project_notification : (text, PushNotification) -> (Result_15);
   push_import_vapid : (text, text) -> (Result_3);
   push_init_vapid : (text) -> (Result_3);
+  push_ensure_vapid : () -> (Result_3);
   push_list_subscriptions : () -> (Result_14) query;
   push_send : (principal, PushNotification) -> (Result_15);
   push_subscribe : (PushSubscription) -> (Result);
@@ -568,6 +606,7 @@ service : () -> {
   // nothing sensitive being gated here, only a number `orchestrator` reads to
   // break ties between semantically-similar search results.
   record_download : (nat64) -> (Result);
+  record_project_package_installation : (text, text, text) -> (Result_16);
   // Registers an explicit publisher principal for a GitHub repository.
   //
   // Controller-only: a bare authenticated caller cannot prove they actually
@@ -595,12 +634,14 @@ service : () -> {
   // Revokes a principal's access to a vetkey this canister manages (e.g.
   // after a refund or chargeback). Same authorization as `set_user_rights`.
   remove_user : (principal, ByteBuf, principal) -> (Result_6);
+  seed_package_infos : (vec PackageInfo) -> (Result);
   // Records a project-wide LLM context document. Owner-gated, same shape as
   // `remove_project_canister` below.
   set_project_llm_context : (text, text) -> (Result);
   // Records a project's own chosen name. Owner-gated, same shape as
   // `remove_project_canister` below.
   set_project_name : (text, text) -> (Result);
+  set_project_notification_preferences : (text, bool) -> (Result);
   // Grants or modifies a principal's access to a marketplace item's
   // `item_key_id()` (its registered publisher, or a controller). Normal
   // marketplace purchases use `purchase_marketplace_item`, which grants
@@ -621,4 +662,5 @@ service : () -> {
   // frontend on its own project, never the orchestrator (see this file's
   // "Project tracking" section doc note).
   update_project_state : (text, ProjectState, opt text) -> (Result);
+  upload_package_infos : (vec PackageInfoInput) -> (Result_18);
 }

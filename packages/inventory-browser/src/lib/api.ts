@@ -7,7 +7,7 @@
 import { getInventoryActor } from "./actor";
 import { withSession } from "./session";
 import type * as C from "./candid/orderInventory";
-import type { AuditEntry, Business, InventoryItem, ItemInput, ItemKind, Order, OrderLine, OrderStatus } from "./types";
+import type { AuditEntry, Business, InventoryItem, ItemInput, ItemKind, Order, OrderLine, OrderStatus, PaymentMethod } from "./types";
 
 export class UnauthorizedError extends Error {}
 
@@ -26,6 +26,8 @@ const nsToMs = (ns: bigint) => Number(ns / 1_000_000n);
 const variantKey = <K extends string>(v: object): K => Object.keys(v)[0] as K;
 
 const kindOut = (k: ItemKind): C.InventoryKind => (k === "Product" ? { Product: null } : { Service: null });
+const paymentMethodOut = (method: PaymentMethod): C.PaymentMethod =>
+  method === "Prepaid" ? { Prepaid: null } : { CashOnDelivery: null };
 
 function itemIn(i: C.InventoryItem): InventoryItem {
   return {
@@ -36,6 +38,7 @@ function itemIn(i: C.InventoryItem): InventoryItem {
     sku: opt(i.sku),
     priceMinor: i.price_minor,
     currency: i.currency,
+    paymentMethod: variantKey(i.payment_method),
     imageUrl: opt(i.image_url),
     stock: opt(i.stock_quantity),
     active: i.active,
@@ -48,6 +51,7 @@ function lineIn(l: C.OrderLine): OrderLine {
   return {
     inventoryId: l.inventory_id,
     name: l.name,
+    sku: opt(l.sku),
     kind: variantKey(l.kind),
     quantity: l.quantity,
     unitPriceMinor: l.unit_price_minor,
@@ -74,6 +78,7 @@ function orderIn(o: C.Order): Order {
     paymentMethod: variantKey(o.payment_method),
     paymentStatus: variantKey(o.payment_status),
     paymentReference: opt(o.payment_reference),
+    checkoutUrl: opt(o.checkout_url),
     amountPaidMinor: o.amount_paid_minor,
     amountRefundedMinor: o.amount_refunded_minor,
     reservationExpiresAt: opt(o.reservation_expires_at) === null ? null : nsToMs(opt(o.reservation_expires_at)!),
@@ -121,6 +126,7 @@ export const inventoryApi = {
         sku: toOpt(input.sku?.trim() || null),
         price_minor: input.priceMinor,
         currency: input.currency.trim(),
+        payment_method: some(paymentMethodOut(input.paymentMethod)),
         image_url: toOpt(input.imageUrl),
         stock_quantity: toOpt(input.stock),
       }))
@@ -148,6 +154,7 @@ export const inventoryApi = {
       sku: patch.sku ? some(patch.sku.trim()) : none,
       price_minor: patch.priceMinor === undefined ? none : some(patch.priceMinor),
       currency: patch.currency === undefined ? none : some(patch.currency.trim()),
+      payment_method: patch.paymentMethod === undefined ? none : some(paymentMethodOut(patch.paymentMethod)),
       // the canister clears an image when given an empty string
       image_url: patch.imageUrl === undefined ? none : some(patch.imageUrl ?? ""),
       active: patch.active === undefined ? none : some(patch.active),

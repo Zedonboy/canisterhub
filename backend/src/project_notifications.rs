@@ -2,15 +2,14 @@
 //!
 //! Project packages call this backend with their project id. The backend
 //! authorizes the calling canister against the project's tracked canister
-//! registry, resolves the project's single notification canister, and asks it
-//! to deliver the payload only to the project's owner.
-
-use candid::Principal;
-use ic_cdk::call::Call;
+//! registry and delivers the payload to the project's owner using subscriptions
+//! stored directly in this backend canister.
 
 use crate::{
-    is_notification_canister, PushDelivery, PushNotification, MAX_PROJECT_ID_BYTES, PROJECTS,
+    project_push_notifications_enabled, PushDelivery, PushNotification, MAX_PROJECT_ID_BYTES,
+    PROJECTS,
 };
+use candid::Principal;
 
 const MAX_NOTIFICATION_TITLE_BYTES: usize = 200;
 const MAX_NOTIFICATION_BODY_BYTES: usize = 4 * 1_024;
@@ -27,7 +26,7 @@ fn ensure_text_size(label: &str, value: &str, max: usize) -> Result<(), String> 
     }
 }
 
-fn resolve_route(project_id: &str, caller: Principal) -> Result<(Principal, Principal), String> {
+fn resolve_owner(project_id: &str, caller: Principal) -> Result<Principal, String> {
     if project_id.is_empty() || project_id.len() > MAX_PROJECT_ID_BYTES {
         return Err(format!(
             "project_id must contain between 1 and {MAX_PROJECT_ID_BYTES} bytes"
@@ -49,20 +48,11 @@ fn resolve_route(project_id: &str, caller: Principal) -> Result<(Principal, Prin
         return Err("caller is not a canister registered in this project".to_string());
     }
 
-    let notification_id = project
-        .canisters
-        .iter()
-        .find(|(name, canister)| is_notification_canister(name, canister))
-        .map(|(_, canister)| canister.id)
-        .ok_or_else(|| "project has no notification canister".to_string())?;
-
-    Ok((project.owner, notification_id))
+    Ok(project.owner)
 }
 
-/// Accepts a notification only from a canister tracked in `project_id`, then
-/// routes it through that project's notification canister to the project
-/// owner. The notification canister must list this backend as a trusted
-/// sender; the dashboard configures that automatically for new deployments.
+/// Accepts a notification only from a canister tracked in `project_id` and
+/// delivers it through backend-owned Web Push subscriptions for the project owner.
 #[ic_cdk::update]
 pub async fn send_project_notification(
     project_id: String,
@@ -85,15 +75,14 @@ pub async fn send_project_notification(
     )?;
 
     let caller = ic_cdk::api::msg_caller();
-    let (owner, notification_id) = resolve_route(&project_id, caller)?;
-    let response = Call::bounded_wait(notification_id, "push_send")
-        .with_args(&(owner, notification))
-        .await
-        .map_err(|error| format!("notification canister call failed: {error:?}"))?;
-
-    response
-        .candid::<Result<Vec<PushDelivery>, String>>()
-        .map_err(|error| format!("notification canister returned an invalid response: {error}"))?
+    let owner = resolve_owner(&project_id, caller)?;
+    if !project_push_notifications_enabled(&project_id) {
+        ic_cdk::api::debug_print(format!(
+            "backend: project notification suppressed project_id={project_id} reason=owner_disabled"
+        ));
+        return Ok(Vec::new());
+    }
+    crate::web_push::send(owner, notification).await
 }
 
 #[cfg(test)]

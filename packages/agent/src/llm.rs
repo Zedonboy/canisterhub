@@ -27,7 +27,9 @@
 use crate::config::Config;
 use crate::messages::SessionKey;
 use crate::remote_tools::RemoteCanisterTool;
-use crate::tools::{GetProfileTool, RequestAdminActionTool, UpdateUsernameTool};
+use crate::tools::{
+    GetProfileTool, RequestAdminActionTool, RequestClientDataTool, UpdateUsernameTool,
+};
 use candid::{CandidType, Deserialize, Principal};
 use ic_rig::completion::{CompletionRequest, CompletionResponse, ModelChoice, Usage};
 use ic_rig::http::{HttpClient, HttpError, HttpRequest, HttpResponse};
@@ -36,6 +38,8 @@ use ic_rig::tool::ToolDefinition;
 use ic_rig::{Agent, CompletionModel, Message};
 use std::cell::Cell;
 use std::rc::Rc;
+
+pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 120;
 
 #[derive(Clone, Copy, Debug, CandidType, Deserialize, PartialEq, Eq)]
 enum ManagedAiService {
@@ -166,7 +170,7 @@ impl<M: CompletionModel> CompletionModel for TrackingModel<M> {
     }
 }
 
-pub const DEFAULT_MAX_TOOL_ITERATIONS: u32 = 4;
+pub const DEFAULT_MAX_TOOL_ITERATIONS: u32 = 10;
 
 /// Used when `Config::system_prompt` is unset. A real deployment should
 /// always set its own - see `llm_context.md`'s "Writing a good system
@@ -174,15 +178,22 @@ pub const DEFAULT_MAX_TOOL_ITERATIONS: u32 = 4;
 /// reasonable (and, importantly, still states its own limits) before an
 /// implementer has customized it.
 pub fn default_system_prompt() -> String {
-    "You are a customer support assistant. You can look up and change only the \
-     account of the person you are currently talking to - you have no way to \
-     access or affect any other customer's data, and no administrative \
-     abilities (refunds, account deletion, and similar requests must go \
-     through request_admin_action). Your conversation history and customer \
-     profile data are stored in this agent canister. Be concise, honest about what you \
-     can and cannot do, and use request_admin_action rather than guessing or \
-     refusing outright when a request is legitimate but outside your other \
-     tools."
+    "You are the business's customer support assistant. You may look up the \
+     current customer's profile and, only when they ask, change that \
+     customer's username. The update_username tool changes the customer's \
+     username only; it does not change your assistant name, identity, profile, \
+     or settings. You cannot edit your own name or profile, and must never \
+     claim that you have done so. You cannot access or affect another \
+     customer's data. You have no administrative abilities (refunds, account \
+     deletion, and similar requests must go through request_admin_action). \
+     Your conversation history and customer profile data are stored in this \
+     agent canister. Be concise and honest about what you can and cannot do. \
+     Use request_admin_action rather than guessing or refusing outright when \
+     a request is legitimate but outside your other tools. Format every reply \
+     in Markdown: **bold** the key facts, use bullet or numbered lists for \
+     steps and options, and tables for structured comparisons. To show a \
+     product photo, put its image URL on its own line - the chat renders it \
+     as an image."
         .to_string()
 }
 
@@ -550,11 +561,18 @@ pub async fn run_agent_loop(
     match result {
         Ok(text) => text,
         Err(e) => {
+            crate::log_error(format!(
+                "LLM turn failed; escalating without logging message content: {e}"
+            ));
             let details = format!("Automated escalation: {e} (message: {prompt})");
             match crate::admin::file_and_notify(customer, "unresolved_conversation", &details).await
             {
-                Ok(msg) => msg,
-                Err(_) => {
+                Ok(msg) => {
+                    crate::log_warn("LLM failure escalated to an administrator");
+                    msg
+                }
+                Err(error) => {
+                    crate::log_error(format!("LLM escalation also failed: {error}"));
                     "I'm having trouble completing this right now - please try again shortly."
                         .to_string()
                 }
@@ -574,6 +592,10 @@ async fn dispatch(
         .llm_model
         .clone()
         .unwrap_or_else(|| default_model_for(provider).to_string());
+    crate::log_info(format!(
+        "LLM dispatch provider={provider} model={model_id} history_messages={}",
+        history.len()
+    ));
 
     // Kept only as a migration escape hatch for canisters configured before
     // managed platform calls moved behind the backend. It is intentionally
@@ -622,7 +644,12 @@ async fn dispatch(
             run_with_model(client.model(model_id), config, customer, history, prompt).await
         }
         "deepseek" => {
-            let client = ic_rig::providers::deepseek::Client::new(IcpClient, api_key);
+            // DeepSeek documents the OpenAI-compatible base URL without the
+            // legacy `/v1` prefix. The provider client defaults to `/v1`, so
+            // set the documented URL explicitly; its client appends
+            // `/chat/completions` and sends `Authorization: Bearer <key>`.
+            let client = ic_rig::providers::deepseek::Client::new(IcpClient, api_key)
+                .with_base_url("https://api.deepseek.com");
             run_with_model(client.model(model_id), config, customer, history, prompt).await
         }
         other => Err(format!(
@@ -647,6 +674,13 @@ async fn run_with_model<M: CompletionModel>(
         .map(u32::from)
         .unwrap_or(DEFAULT_MAX_TOOL_ITERATIONS)
         .max(1);
+    let max_output_tokens = config
+        .max_output_tokens
+        .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+        .max(1);
+    crate::log_info(format!(
+        "LLM call started max_output_tokens={max_output_tokens} max_tool_iterations={max_iterations}"
+    ));
 
     // Recorded into `AgentStats` below regardless of how `chat` turns
     // out - see `TrackingModel`'s doc comment.
@@ -667,14 +701,19 @@ async fn run_with_model<M: CompletionModel>(
         .tool(RequestAdminActionTool {
             customer: customer.clone(),
         })
+        .tool(RequestClientDataTool {
+            customer: customer.clone(),
+        })
         .tool(RemoteCanisterTool {
             customer: customer.clone(),
+            project_id: config.project_id.clone(),
             canisters: crate::state::list_ai_canisters(),
         })
         // Anthropic's API rejects a request with no `max_tokens` at all;
-        // every other provider treats it as an optional cap. Set
-        // unconditionally so switching `llm_provider` never breaks on this.
-        .max_tokens(1024)
+        // every other provider treats it as an optional cap. Set the dynamic
+        // assistant-oriented limit unconditionally so provider switches are
+        // safe and responses remain concise.
+        .max_tokens(max_output_tokens)
         .max_iterations(max_iterations);
     // The owner's private console additionally gets read-only tools over all
     // conversations; no customer session ever does (see `owner_tools.rs`).
@@ -690,6 +729,15 @@ async fn run_with_model<M: CompletionModel>(
     let result = agent.chat(prompt, history).await.map_err(|e| e.to_string());
     let (prompt_tokens, completion_tokens) = usage_totals.get();
     crate::state::record_usage(prompt_tokens, completion_tokens);
+    match &result {
+        Ok(text) => crate::log_info(format!(
+            "LLM call completed prompt_tokens={prompt_tokens} completion_tokens={completion_tokens} reply_chars={}",
+            text.chars().count()
+        )),
+        Err(error) => crate::log_error(format!(
+            "LLM call failed prompt_tokens={prompt_tokens} completion_tokens={completion_tokens}: {error}"
+        )),
+    }
     result
 }
 
@@ -698,7 +746,9 @@ mod ic_llm_model_tests {
     use super::*;
     use crate::messages::{Channel, SessionKey};
     use crate::remote_tools::RemoteCanisterTool;
-    use crate::tools::{GetProfileTool, RequestAdminActionTool, UpdateUsernameTool};
+    use crate::tools::{
+        GetProfileTool, RequestAdminActionTool, RequestClientDataTool, UpdateUsernameTool,
+    };
     use ic_llm::{AssistantMessage, ChatMessage, Response};
     use ic_rig::tool::Tool as _;
 
@@ -728,8 +778,13 @@ mod ic_llm_model_tests {
             }
             .definition(),
             RequestAdminActionTool { customer }.definition(),
+            RequestClientDataTool {
+                customer: key("probe"),
+            }
+            .definition(),
             RemoteCanisterTool {
                 customer: key("probe"),
+                project_id: None,
                 canisters: vec![],
             }
             .definition(),

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Search, ShoppingCart, SlidersHorizontal, X } from "lucide-react";
 import { clsx } from "clsx";
 import { Button } from "@/components/Button";
+import { Select } from "@/components/Select";
 import { ItemImage, KindBadge, Notice, Stepper } from "@/components/bits";
 import type { Item, Kind } from "@/lib/api";
 import { cart, useCart } from "@/lib/cart";
@@ -38,6 +39,7 @@ function ItemCard({ item }: { item: Item }) {
         <div className="p-3 pb-1 flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <KindBadge kind={item.kind} />
+            <span className="text-[10px] text-c-faint">{item.paymentMethod === "Prepaid" ? "Prepaid" : "Cash on delivery"}</span>
             <StockNote item={item} inCart={qty} />
           </div>
           <h3 className="text-sm font-medium text-c-text leading-snug line-clamp-2 group-hover:text-c-accent">{item.name}</h3>
@@ -129,9 +131,13 @@ export default function Catalog({ items, loading, error, reload }: { items: Item
           />
         </div>
         <div className="flex gap-2">
-          <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort" className={clsx(field, "flex-1 sm:flex-none")}>
-            {SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
+          <Select
+            value={sort}
+            onChange={(next) => setSort(next as Sort)}
+            aria-label="Sort"
+            className="flex-1 sm:flex-none"
+            options={SORTS.map((s) => ({ value: s.value, label: s.label }))}
+          />
           <Button variant="secondary" onClick={() => setShowFilters((v) => !v)} aria-expanded={showFilters}>
             <SlidersHorizontal size={14} /> Filters{activeFilters > 0 && <span className="px-1.5 rounded-full bg-c-accent text-c-on-accent text-[10px]">{activeFilters}</span>}
           </Button>

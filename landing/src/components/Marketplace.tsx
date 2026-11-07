@@ -5,17 +5,17 @@ const POINTS = [
   {
     icon: Package,
     title: "Reusable building blocks",
-    description: "Billing, scheduling, search, order tracking — install a vetted package instead of writing it from zero.",
+    description: "Food ordering, inventory & orders, Kora/Paystack payments, SQL and vector databases, asset storage, an AI customer inbox — install a vetted package instead of writing it from zero.",
   },
   {
     icon: ShieldCheck,
-    title: "Verified publishers",
-    description: "Every listing is tied to a real, GitHub-verified repository, and every release's integrity is checked before install.",
+    title: "Inspect before you install",
+    description: "Every listing carries its real source repo and a wasm hash checked at install time — no black-box binaries.",
   },
   {
     icon: GitBranch,
     title: "Own what you install",
-    description: "Packages come with real source and a real GitHub repo — nothing is a black-box binary you can't inspect.",
+    description: "Packages deploy into your project as your own canisters, under your control, with their admin panels already built in.",
   },
 ];
 
@@ -26,7 +26,7 @@ export function Marketplace() {
         <SectionHeading
           eyebrow="Marketplace"
           title="Don't rebuild what already exists"
-          subtitle="Browse a growing catalog of canisters built for exactly the problems SMEs run into — and publish your own once you've built something worth sharing."
+          subtitle="Browse a catalog of canisters built for the problems real businesses run into — ordering, payments, data, customer chat — and publish your own once you've built something worth sharing."
         />
 
         <div className="grid sm:grid-cols-3 gap-5">

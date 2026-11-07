@@ -10,7 +10,7 @@ import { CanisterID } from "@/components/CanisterID";
 import { toast } from "@/components/Toast";
 import { relativeTime } from "@/lib/mock-data";
 import type { ProjectContext } from "@/components/layout/AppShell";
-import { setProjectName, deleteProject, removeProjectCanister, type Project, type CanisterKind } from "@/lib/backend";
+import { setProjectName, deleteProject, removeProjectCanister, getProjectNotificationPreferences, setProjectNotificationPreferences, type Project, type CanisterKind } from "@/lib/backend";
 import { stopCanister, deleteCanister } from "@/lib/canisterOps";
 import { isPushSupported, getPushStatus, enablePushNotifications, disablePushNotifications } from "@/lib/pushNotifications";
 import { clsx } from "clsx";
@@ -27,35 +27,39 @@ const KIND_LABELS: Record<CanisterKind, string> = {
   other: "Other",
 };
 
-/** Real browser Web Push subscribe/unsubscribe (`lib/pushNotifications.ts`) -
- * scoped to this project's installed notification module. Each module uses a
- * distinct service-worker registration, so projects may use independent
- * VAPID identities without replacing one another's browser subscription.
+/** Real browser Web Push subscribe/unsubscribe (`lib/pushNotifications.ts`),
+ * backed by the protocol backend rather than a project-installed canister.
  * `"denied"` is a dead end this UI can't undo - only the browser's own site
  * settings can, so that state just explains itself instead of showing a
  * now-useless toggle. */
-function PushNotificationsCard({ canisterId, network }: { canisterId?: string; network: string }) {
+function PushNotificationsCard({ projectId }: { projectId: string }) {
   const [status, setStatus] = useState<"loading" | "enabled" | "disabled" | "denied">("loading");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!canisterId || !isPushSupported()) {
+    if (!isPushSupported()) {
       setStatus("disabled");
       return;
     }
-    getPushStatus(canisterId).then(setStatus).catch(() => setStatus("disabled"));
-  }, [canisterId]);
+    let active = true;
+    Promise.all([getPushStatus(), getProjectNotificationPreferences(projectId)])
+      .then(([browserStatus, preference]) => {
+        if (active) setStatus(preference.push_enabled ? browserStatus : "disabled");
+      })
+      .catch(() => { if (active) setStatus("disabled"); });
+    return () => { active = false; };
+  }, [projectId]);
 
   const enable = async () => {
     setBusy(true);
     try {
-      if (!canisterId) throw new Error("Install the notification module first.");
-      await enablePushNotifications(canisterId, network);
+      await enablePushNotifications();
+      await setProjectNotificationPreferences(projectId, true);
       setStatus("enabled");
-      toast.success("Notifications enabled", "This browser will now receive push notifications.");
+      toast.success("Notifications enabled", "Project notifications will be delivered to subscribed browsers.");
     } catch (e) {
       toast.error("Couldn't enable notifications", e instanceof Error ? e.message : String(e));
-      setStatus(await (canisterId ? getPushStatus(canisterId) : Promise.resolve("disabled" as const)).catch(() => "disabled"));
+      setStatus(await getPushStatus().catch(() => "disabled"));
     } finally {
       setBusy(false);
     }
@@ -64,8 +68,8 @@ function PushNotificationsCard({ canisterId, network }: { canisterId?: string; n
   const disable = async () => {
     setBusy(true);
     try {
-      if (!canisterId) return;
-      await disablePushNotifications(canisterId, network);
+      await setProjectNotificationPreferences(projectId, false);
+      await disablePushNotifications();
       setStatus("disabled");
       toast.success("Notifications disabled");
     } catch (e) {
@@ -87,15 +91,13 @@ function PushNotificationsCard({ canisterId, network }: { canisterId?: string; n
             <div>
               <div className="text-sm text-[#e2e8f0]">Push notifications</div>
               <p className="text-xs text-[#4a5568] mt-0.5 max-w-sm">
-                {!canisterId
-                  ? "Install a notification module in this project to manage project-owned browser notifications."
-                  : status === "denied"
+                {status === "denied"
                   ? "Blocked in your browser's site settings for this page - allow notifications there to turn this on."
-                  : "Get notified in this browser when something needs your attention, even when the dashboard isn't open."}
+                : "When enabled, project notifications are delivered to browsers subscribed to this project."}
               </p>
             </div>
           </div>
-          {canisterId && status !== "denied" && (
+          {status !== "denied" && (
             <Button
               variant={status === "enabled" ? "secondary" : "primary"}
               size="sm"
@@ -122,7 +124,6 @@ function PushNotificationsCard({ canisterId, network }: { canisterId?: string; n
 function GeneralTab({ job, refetch }: { job: Project; refetch: () => void }) {
   const [name, setName] = useState(job.project_name ?? "");
   const [saving, setSaving] = useState(false);
-  const notificationCanister = Object.values(job.canisters).find((info) => info.kind === "notification");
 
   const save = async () => {
     const trimmed = name.trim();
@@ -172,7 +173,7 @@ function GeneralTab({ job, refetch }: { job: Project; refetch: () => void }) {
         </CardContent>
       </Card>
 
-      <PushNotificationsCard canisterId={notificationCanister?.id} network={job.network} />
+      <PushNotificationsCard projectId={job.id} />
     </div>
   );
 }

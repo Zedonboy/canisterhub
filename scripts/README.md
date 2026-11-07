@@ -11,6 +11,46 @@ backend declaration from `backend/backend.did` with:
 npm run generate
 ```
 
+## Production package releases
+
+`seed_package_infos.js` uploads the current package release registry used to
+detect upgrades on installed project canisters. Validate the checked-in
+v1.0.0 release data without changing canister state:
+
+```bash
+cd scripts
+deno task seed-packages --file ./production-packages.v1.0.0.json --dry-run
+```
+
+Seed a local backend (the default environment) - run after `icp deploy
+backend` so a fresh local network carries the same production registry the
+dashboard's upgrade detection expects:
+
+```bash
+deno task seed-packages --file ./production-packages.v1.0.0.json
+```
+
+Seed the production backend with a controller identity:
+
+```bash
+deno task seed-packages \
+  --file ./production-packages.v1.0.0.json \
+  --environment ic \
+  --identity deploy
+```
+
+Each seed row's `package_name` is the HTTPS GitHub Release URL for its `.wasm`
+artifact. The script maps that field to the backend's `url` field. The backend
+automatically sets each package name from the final `.wasm` filename, such as
+`agent.wasm`; seed files do not include a separate `name`. Modules use that stable artifact name as their dynamic configuration
+dependency ID. The seed file also does not choose the backend's
+internal package ID: on first upload the backend assigns
+`<hyphenated-name>-<raw_rand hex>` and retains it for later releases of the
+same artifact. The backend also retains the
+version and SHA installed on each project canister, so a new registry SHA
+appears as an explicit dashboard upgrade instead of silently changing
+installation history.
+
 `npm run publish` regenerates that declaration before running
 `publish_to_marketplace.js`. The generated `bindings/` directory is ignored;
 `backend.did` remains the interface source of truth.

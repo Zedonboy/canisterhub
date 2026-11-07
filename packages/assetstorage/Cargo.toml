@@ -8,6 +8,7 @@ description = "ICP certified asset storage canister with controller-managed perm
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+canister-hub-sdk.workspace = true
 candid.workspace = true
 ic-cdk.workspace = true
 ic-certified-assets.workspace = true

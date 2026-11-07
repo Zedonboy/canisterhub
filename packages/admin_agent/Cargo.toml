@@ -7,6 +7,7 @@ edition.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+canister-hub-sdk.workspace = true
 candid.workspace = true
 # Matches this repo's other on-chain canisters (backend/connector) - see
 # `agent/Cargo.toml`'s identical comment on why `ic-rig` (below)

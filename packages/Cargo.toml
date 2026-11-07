@@ -1,13 +1,13 @@
 [workspace]
 members = [
-    "admin_agent",
     "agent",
-    "app_api",
     "assetstorage",
     "auth",
     "ic-kv",
     "ic-sql",
-    "notification",
+    "kora-payment",
+    "paystack-payment",
+    "restaurant",
     "order_inventory",
 ]
 resolver = "2"

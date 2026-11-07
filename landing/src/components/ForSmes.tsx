@@ -5,12 +5,12 @@ const AUDIENCE = [
   {
     icon: Store,
     title: "Running a growing business",
-    description: "You need a website, a booking or ordering system, and a way to see what's actually happening — not a server rack.",
+    description: "You need a storefront or food-ordering system, a way to take payments, and a handle on what's actually happening — not a server rack.",
   },
   {
     icon: Wrench,
     title: "Not a full engineering team",
-    description: "CanisterHub's dashboard and Secretary are built so a non-technical owner can launch and manage real infrastructure directly.",
+    description: "CanisterHub's dashboard and Secretary are built so a non-technical owner can launch packages, manage orders, and read the logs directly.",
   },
   {
     icon: LineChart,

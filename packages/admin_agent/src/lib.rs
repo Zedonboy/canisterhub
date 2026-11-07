@@ -77,8 +77,8 @@ fn require_controller() -> Result<(), String> {
 }
 
 #[ic_cdk::init]
-fn init(config: Config) {
-    state::set_config(config);
+fn init(_project_context: canister_hub_sdk::ProjectContext) {
+    state::set_config(Config::default());
 }
 
 // ---------------------------------------------------------------------------

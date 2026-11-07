@@ -1,0 +1,29 @@
+[package]
+name = "paystack-payment"
+version.workspace = true
+edition.workspace = true
+description = "Paystack hosted checkout payment processor for CanisterHub projects"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+canister-hub-sdk.workspace = true
+candid.workspace = true
+ciborium.workspace = true
+hmac.workspace = true
+ic-asset-certification.workspace = true
+ic-cdk-020.workspace = true
+ic-cdk-management-canister.workspace = true
+ic-http-certification.workspace = true
+ic-stable-structures.workspace = true
+include_dir.workspace = true
+serde.workspace = true
+# `preserve_order` keeps JSON object key order on parse, so re-serializing
+# the `data` object for webhook-signature verification reproduces Paystack's
+# exact signed bytes (Node's JSON.stringify order) - without it, key
+# reordering would make every legitimate signature fail verification.
+serde_json = { workspace = true, features = ["preserve_order"] }
+sha2.workspace = true
+url.workspace = true
+

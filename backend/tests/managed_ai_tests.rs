@@ -73,6 +73,7 @@ fn create_project(pic: &PocketIc, id: Principal, agent: Principal) {
                 CanisterInfo {
                     id: agent,
                     kind: CanisterKind::Agent,
+                    package_name: None,
                 },
             )],
         ),

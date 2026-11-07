@@ -1,36 +1,36 @@
-import { Cpu, Database, ShieldCheck, Sparkles, Store, BarChart3 } from "lucide-react";
+import { Cpu, Database, KeyRound, Sparkles, Store, LayoutDashboard } from "lucide-react";
 import { Container, SectionHeading, Card } from "./ui";
 
 const FEATURES = [
   {
     icon: Cpu,
     title: "Compute runtime",
-    description: "Deploy any canister wasm, upgrade it safely, and host your backend without racking a single server.",
+    description: "Deploy any canister wasm, upgrade it safely, and host your backend without racking a single server — the protocol replicates and runs it for you.",
   },
   {
     icon: Database,
-    title: "Instant database",
-    description: "On-chain, tamper-proof data storage with the reliability of a managed database and none of the maintenance.",
+    title: "Real databases on-chain",
+    description: "A PostgreSQL-dialect SQL database with a PostgREST-compatible API and row-level security, plus key-value and vector-search stores — durable storage that survives upgrades.",
   },
   {
-    icon: ShieldCheck,
-    title: "Built-in authentication",
-    description: "Internet Identity out of the box — secure sign-in for your customers, with no password table to ever leak.",
+    icon: KeyRound,
+    title: "Sign in with Google or Internet Identity",
+    description: "The auth canister gives your customers OAuth sign-in (Google, GitHub, any provider) or a principal-native IC identity — one profile either way, and no password table to ever leak.",
   },
   {
     icon: Sparkles,
-    title: "Agentic tools",
-    description: "Describe what you need in plain English; your AI Secretary writes, tests, and deploys it for you.",
+    title: "AI Secretary",
+    description: "An agent that runs your business over WhatsApp, Telegram, email, or an embeddable web chat — calling the real tools your canisters expose, with your own LLM key or managed AI.",
   },
   {
     icon: Store,
     title: "Marketplace",
-    description: "Install vetted, reusable building blocks — billing, scheduling, search — instead of building from scratch.",
+    description: "Install vetted building blocks instead of writing from zero: food ordering, inventory & orders, Kora/Paystack payments, SQL and vector databases, asset storage, and more.",
   },
   {
-    icon: BarChart3,
-    title: "Real analytics",
-    description: "Every metric comes straight from your own canisters — not a vendor's dashboard standing between you and your data.",
+    icon: LayoutDashboard,
+    title: "Admin panels built in",
+    description: "Every package serves its own certified admin UI from inside its canister — order boards, menus, payment logs, a table browser. One dashboard sign-in reaches all of them.",
   },
 ];
 

@@ -1,7 +1,7 @@
 // In-memory stand-in for the agent canister, enabled with VITE_MOCK=1
 // (`npm run dev:mock`). Lets the UI be explored without a backend.
 
-import type { ChannelName, ChatMessage, Conversation, SenderRole } from "./chat";
+import type { ChannelName, ChatMessage, Conversation, SenderRole, Ticket } from "./chat";
 
 const MIN = 60_000;
 const now = Date.now();
@@ -39,12 +39,29 @@ const consoleMsgs: [SenderRole, string, number][] = [
 
 const webSession: [SenderRole, string, number][] = [];
 
+const tickets: Ticket[] = [
+  { id: 42, channel: "Telegram", sessionId: "552019384", actionType: "Delivery complaint", details: "Customer says the delivery is two hours late and is asking for a refund. Please review the order and contact them.", status: "Pending", resultMessage: null, createdAt: now - 3 * MIN, updatedAt: now - 3 * MIN },
+  { id: 41, channel: "Email", sessionId: "chioma@example.com", actionType: "Bulk order quote", details: "Customer requested a recurring weekly quote for 40 shirts. Confirm pricing and contract terms.", status: "Completed", resultMessage: "Our team will follow up with the confirmed quote.", createdAt: now - 26 * 60 * MIN, updatedAt: now - 24 * 60 * MIN },
+];
+
 function toMsgs(m: [SenderRole, string, number][]): ChatMessage[] {
   return m.map(([role, text, ago], index) => ({ index, role, text, at: now - ago }));
 }
 const key = (c: ChannelName, s: string) => threads.find((t) => t.channel === c && t.sessionId === s);
 
 export const mock = {
+  async listTickets(): Promise<Ticket[]> {
+    await delay(150);
+    return tickets.map((ticket) => ({ ...ticket }));
+  },
+  async completeTicket(id: number): Promise<Ticket> {
+    await delay(200);
+    const ticket = tickets.find((entry) => entry.id === id);
+    if (!ticket) throw new Error(`ticket #${id} not found`);
+    ticket.status = "Completed";
+    ticket.updatedAt = Date.now();
+    return { ...ticket };
+  },
   async listConversations(): Promise<Conversation[]> {
     await delay(200);
     return threads

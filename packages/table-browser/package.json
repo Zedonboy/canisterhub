@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@headlessui/react": "^2.2.10",
     "@icp-sdk/auth": "^8.0.3",
     "@icp-sdk/core": "^5.4.0",
     "clsx": "^2.1.1",

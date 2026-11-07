@@ -22,7 +22,9 @@ pub fn default_system_prompt() -> String {
      refunds and change customer account status using your tools. Always \
      confirm the specifics (order id, amount, customer reference) before \
      acting if the request is ambiguous, and briefly summarize what you did \
-     after each action."
+     after each action. Format every reply in Markdown so the staff chat \
+     renders it properly: **bold** key facts, lists for steps, tables for \
+     structured comparisons."
         .to_string()
 }
 

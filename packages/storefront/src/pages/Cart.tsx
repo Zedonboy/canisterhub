@@ -25,7 +25,7 @@ function Field({ label, required, children }: { label: string; required?: boolea
 
 export default function Cart({ items, loading, auth, onOrdered }: { items: Item[]; loading: boolean; auth: Auth; onOrdered: () => void }) {
   const lines = useCart();
-  const [form, setForm] = useState({ name: "", phone: "", address: "", instructions: "", note: "" });
+  const [form, setForm] = useState({ name: "", phone: "", email: "", address: "", instructions: "", note: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,10 +39,12 @@ export default function Cart({ items, loading, auth, onOrdered }: { items: Item[
   const unavailable = found.filter((r) => soldOut(r.item) || (r.item.stock !== null && r.quantity > r.item.stock));
   const currencies = new Set(found.map((r) => r.item.currency));
   const mixed = currencies.size > 1;
+  const mixedPayment = new Set(found.map((r) => r.item.paymentMethod)).size > 1;
+  const needsEmail = found.some((r) => r.item.paymentMethod === "Prepaid");
   const currency = found[0]?.item.currency ?? "";
   const total = found.reduce((s, r) => s + r.item.priceMinor * BigInt(r.quantity), 0n);
-  const blocked = mixed || missing.length > 0 || unavailable.length > 0 || found.length === 0;
-  const formOk = form.name.trim() && form.phone.trim() && form.address.trim();
+  const blocked = mixed || mixedPayment || missing.length > 0 || unavailable.length > 0 || found.length === 0;
+  const formOk = form.name.trim() && form.phone.trim() && form.address.trim() && (!needsEmail || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()));
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setForm({ ...form, [k]: e.target.value });
 
   if (loading && items.length === 0) return <p className="py-16 text-center text-sm text-c-muted">Loading your cart…</p>;
@@ -65,6 +67,10 @@ export default function Cart({ items, loading, auth, onOrdered }: { items: Item[
       const order = await placeOrder({ lines: found.map((r) => ({ id: r.id, quantity: r.quantity })), ...form });
       cart.clear();
       onOrdered();
+      if (order.checkoutUrl) {
+        window.location.assign(order.checkoutUrl);
+        return;
+      }
       navigate(`/orders?placed=${order.id}`);
     } catch (err) {
       setError(errorText(err));
@@ -88,6 +94,7 @@ export default function Cart({ items, loading, auth, onOrdered }: { items: Item[
           </Notice>
         )}
         {mixed && <Notice tone="error">Your cart mixes currencies ({[...currencies].join(", ")}). Remove items until they share one currency.</Notice>}
+        {mixedPayment && <Notice tone="error">Your cart has different vendor payment terms. Place separate orders for prepaid and cash on delivery items.</Notice>}
 
         <ul className="flex flex-col divide-y divide-c-line rounded-xl border border-c-line bg-c-surface">
           {found.map(({ item, quantity }) => {
@@ -103,6 +110,7 @@ export default function Cart({ items, loading, auth, onOrdered }: { items: Item[
                     <span className="text-sm font-semibold tabular-nums">{formatMoney(item.priceMinor * BigInt(quantity), item.currency)}</span>
                   </div>
                   <span className="text-xs text-c-faint">{formatMoney(item.priceMinor, item.currency)} each</span>
+                  <span className="text-[11px] text-c-muted">{item.paymentMethod === "Prepaid" ? "Prepaid" : "Cash on delivery"}</span>
                   {bad && (
                     <span className="text-xs text-c-danger">
                       {soldOut(item) ? "Out of stock" : `Only ${item.stock} available`} -{" "}
@@ -138,11 +146,12 @@ export default function Cart({ items, loading, auth, onOrdered }: { items: Item[
             <h2 className="text-sm font-semibold">Delivery details</h2>
             <Field label="Full name" required><input className={input} value={form.name} onChange={set("name")} autoComplete="name" maxLength={100} required /></Field>
             <Field label="Phone number" required><input className={input} value={form.phone} onChange={set("phone")} autoComplete="tel" inputMode="tel" maxLength={40} required /></Field>
+            <Field label="Email address" required={needsEmail}><input className={input} value={form.email} onChange={set("email")} autoComplete="email" type="email" maxLength={254} required={needsEmail} /></Field>
             <Field label="Delivery / service address" required><textarea className={input} rows={2} value={form.address} onChange={set("address")} autoComplete="street-address" maxLength={500} required /></Field>
             <Field label="Delivery instructions"><input className={input} value={form.instructions} onChange={set("instructions")} placeholder="Gate code, landmark…" maxLength={300} /></Field>
             <Field label="Note to the shop"><input className={input} value={form.note} onChange={set("note")} maxLength={500} /></Field>
             <div className="flex items-center gap-2 text-xs text-c-muted rounded-lg bg-c-surface2 px-3 py-2">
-              <Banknote size={14} className="text-c-accent" /> Pay on delivery - nothing is charged now.
+              <Banknote size={14} className="text-c-accent" /> {mixedPayment ? "Separate orders are required for different payment terms." : found[0]?.item.paymentMethod === "Prepaid" ? "This order is prepaid; the shop will provide payment instructions." : "Cash on delivery; pay when your order arrives."}
             </div>
             {error && <Notice tone="error">{error}</Notice>}
             <Button type="submit" variant="primary" size="lg" disabled={blocked || !formOk || busy}>

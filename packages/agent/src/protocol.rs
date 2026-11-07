@@ -38,7 +38,7 @@ pub async fn notify_owner(config: &crate::Config, title: &str, body: &str, url: 
     let protocol = match config.protocol_id.map(Ok).unwrap_or_else(canister_id) {
         Ok(id) => id,
         Err(error) => {
-            ic_cdk::api::debug_print(format!("agent: {error}"));
+            crate::log_error(error);
             return;
         }
     };
@@ -51,16 +51,15 @@ pub async fn notify_owner(config: &crate::Config, title: &str, body: &str, url: 
         .with_args(&(project_id.to_string(), notification))
         .await;
     match response {
-        Err(error) => ic_cdk::api::debug_print(format!(
-            "agent: protocol notification call failed: {error:?}"
-        )),
+        Err(error) => crate::log_error(format!("protocol notification call failed: {error:?}")),
         Ok(response) => match response.candid::<Result<Vec<PushDelivery>, String>>() {
-            Ok(Ok(_)) => {}
-            Ok(Err(error)) => {
-                ic_cdk::api::debug_print(format!("agent: protocol notification refused: {error}"))
-            }
-            Err(error) => ic_cdk::api::debug_print(format!(
-                "agent: protocol notification response was invalid: {error}"
+            Ok(Ok(deliveries)) => crate::log_info(format!(
+                "project owner notification completed deliveries={}",
+                deliveries.len()
+            )),
+            Ok(Err(error)) => crate::log_warn(format!("protocol notification refused: {error}")),
+            Err(error) => crate::log_error(format!(
+                "protocol notification response was invalid: {error}"
             )),
         },
     }

@@ -52,6 +52,8 @@ pub fn parse_messages(body: &[u8]) -> Result<Vec<WhatsAppMessage>, String> {
                     to: to.clone(),
                     message_type: msg["type"].as_str().unwrap_or("unknown").to_string(),
                     text: msg["text"]["body"].as_str().map(str::to_string),
+                    latitude: msg["location"]["latitude"].as_f64(),
+                    longitude: msg["location"]["longitude"].as_f64(),
                     timestamp: msg["timestamp"].as_str().map(str::to_string),
                     raw: msg.to_string(),
                 });
@@ -59,4 +61,17 @@ pub fn parse_messages(body: &[u8]) -> Result<Vec<WhatsAppMessage>, String> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_shared_location() {
+        let body = br#"{"entry":[{"changes":[{"value":{"messages":[{"id":"m1","from":"234","type":"location","location":{"latitude":6.5244,"longitude":3.3792}}]}}]}]}"#;
+        let messages = parse_messages(body).unwrap();
+        assert_eq!(messages[0].latitude, Some(6.5244));
+        assert_eq!(messages[0].longitude, Some(3.3792));
+    }
 }

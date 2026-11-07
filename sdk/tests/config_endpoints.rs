@@ -1,8 +1,9 @@
 //! PocketIC integration test for a real `#[dynamic_config]`-annotated
 //! canister (`tests/fixtures/example_module`): the generated
 //! `get_config_schema`/`get_config`/`set_config` endpoints, controller-only
-//! `set_config`, `SecretText` masking for non-controllers, validation
-//! errors, and - the one thing no native unit test can reach, since it needs
+//! `set_config`, write-only `SecretText` masking (controllers included),
+//! validation errors, and - the one thing no native unit test can reach,
+//! since it needs
 //! `ic_cdk::api::is_controller`/an actual canister runtime - that the env
 //! mirror and stable-stored config both survive a canister upgrade.
 //!
@@ -176,6 +177,7 @@ fn schema_reports_every_field_with_its_declared_type_and_requiredness() {
         }
     );
     assert_eq!(auth_canister.canister_type, Some(CanisterType::Auth));
+    assert_eq!(auth_canister.package_name.as_deref(), Some("auth.wasm"));
     assert!(!auth_canister.is_required, "Option<Principal>");
 
     let allowed_origins = &by_key["allowed_origins"];
@@ -397,11 +399,11 @@ fn set_config_accepts_a_typed_vector_and_rejects_wrong_element_types() {
 }
 
 // ---------------------------------------------------------------------------
-// SecretText masking
+// SecretText masking (write-only secrets)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn secret_text_is_masked_for_non_controllers_but_plain_for_controllers() {
+fn secret_text_is_masked_for_every_caller_including_controllers() {
     let (pic, id) = setup();
     let mut update = HashMap::new();
     update.insert("retry_count".to_string(), ConfigValue::Number(1));
@@ -411,21 +413,47 @@ fn secret_text_is_masked_for_non_controllers_but_plain_for_controllers() {
     );
     set_config(&pic, id, controller(), update).unwrap();
 
+    // Controllers are masked too: a controller principal is exactly what a
+    // settings UI or an embedded module page acts as, so the plaintext must
+    // never cross the candid boundary (the "secret egress" rule).
     let as_controller = get_config(&pic, id, controller());
     assert_eq!(
         as_controller.get("api_key"),
-        Some(&ConfigValue::Text("sk-live-secret".to_string()))
+        Some(&ConfigValue::Text("••••••••".to_string()))
     );
 
     let as_stranger = get_config(&pic, id, stranger());
-    assert_ne!(
+    assert_eq!(
         as_stranger.get("api_key"),
-        Some(&ConfigValue::Text("sk-live-secret".to_string()))
+        Some(&ConfigValue::Text("••••••••".to_string()))
     );
-    assert!(matches!(
-        as_stranger.get("api_key"),
-        Some(ConfigValue::Text(_))
-    ));
+}
+
+#[test]
+fn set_config_rejects_storing_the_mask_placeholder_over_a_secret() {
+    let (pic, id) = setup();
+    let mut update = HashMap::new();
+    update.insert("retry_count".to_string(), ConfigValue::Number(1));
+    update.insert(
+        "api_key".to_string(),
+        ConfigValue::Text("sk-live-secret".to_string()),
+    );
+    set_config(&pic, id, controller(), update).unwrap();
+
+    let mut round_trip = HashMap::new();
+    round_trip.insert(
+        "api_key".to_string(),
+        ConfigValue::Text("••••••••".to_string()),
+    );
+    let err = set_config(&pic, id, controller(), round_trip).unwrap_err();
+    assert!(err.contains("masked placeholder"), "{err}");
+
+    // The original secret is still in place (still only ever visible as the mask).
+    let config = get_config(&pic, id, controller());
+    assert_eq!(
+        config.get("api_key"),
+        Some(&ConfigValue::Text("••••••••".to_string()))
+    );
 }
 
 // ---------------------------------------------------------------------------

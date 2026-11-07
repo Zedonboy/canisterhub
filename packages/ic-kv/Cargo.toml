@@ -8,6 +8,7 @@ description = "An Internet Computer canister that behaves like a small key-value
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+canister-hub-sdk.workspace = true
 candid.workspace = true
 ic-cdk.workspace = true
 serde.workspace = true

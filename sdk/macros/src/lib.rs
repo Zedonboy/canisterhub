@@ -33,6 +33,7 @@ enum ConfigItem {
     Select { options: Vec<LitStr> },
     CanisterPicker { module_type: Option<LitStr> },
     CanisterType(LitStr),
+    PackageName(LitStr),
 }
 
 impl Parse for ConfigItem {
@@ -108,6 +109,10 @@ impl Parse for ConfigItem {
                 input.parse::<Token![=]>()?;
                 Ok(ConfigItem::CanisterType(input.parse()?))
             }
+            "package_name" => {
+                input.parse::<Token![=]>()?;
+                Ok(ConfigItem::PackageName(input.parse()?))
+            }
             other => Err(syn::Error::new(
                 ident.span(),
                 format!("unknown `#[config(...)]` attribute `{other}`"),
@@ -131,6 +136,7 @@ struct FieldAttrs {
     select: Option<Vec<LitStr>>,
     canister_picker: Option<Option<LitStr>>,
     canister_type: Option<LitStr>,
+    package_name: Option<LitStr>,
 }
 
 fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
@@ -158,6 +164,7 @@ fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
                     attrs.canister_picker = Some(module_type)
                 }
                 ConfigItem::CanisterType(value) => attrs.canister_type = Some(value),
+                ConfigItem::PackageName(value) => attrs.package_name = Some(value),
             }
         }
     }
@@ -424,6 +431,12 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
             "`canister_type` requires a `candid::Principal` field",
         ));
     }
+    if attrs.package_name.is_some() && base_name != "Principal" {
+        return Err(syn::Error::new(
+            field.ty.span(),
+            "`package_name` requires a `candid::Principal` field",
+        ));
+    }
 
     let markers = [
         attrs.multiline,
@@ -554,6 +567,10 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
         Some(value) => quote! { Some(#value) },
         None => quote! { None },
     };
+    let package_name_field = match &attrs.package_name {
+        Some(value) => quote! { Some(#value.to_string()) },
+        None => quote! { None },
+    };
 
     let schema_tokens = quote! {
         canister_hub_sdk::ic::config::ConfigFieldSchema {
@@ -565,6 +582,7 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
             group_description: #group_description_field,
             field_type: #field_type_tokens,
             canister_type: #canister_type_field,
+            package_name: #package_name_field,
             is_required: #is_required,
             is_readonly: Some(#is_readonly),
             default_value: #default_value_field,
@@ -697,6 +715,14 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 return Err("only a controller may change configuration".to_string());
             }
             canister_hub_sdk::ic::config::set::<#struct_ident>(new_settings)
+        }
+
+        #[ic_cdk::update]
+        fn update_project_context(context: canister_hub_sdk::ProjectContext) -> Result<(), String> {
+            if !ic_cdk::api::is_controller(&ic_cdk::api::msg_caller()) {
+                return Err("only a controller may update project context".to_string());
+            }
+            canister_hub_sdk::ic::config::update_project_context::<#struct_ident>(&context)
         }
 
         #[ic_cdk::query]

@@ -20,7 +20,12 @@ import { AuthClient } from "@icp-sdk/auth/client";
 import { AnonymousIdentity, type Identity } from "@icp-sdk/core/agent";
 import { useEffect, useState } from "react";
 import { network } from "./canisterId";
-import { getDelegatedIdentity, isEmbedded } from "./parentDelegation";
+import {
+  getDelegatedIdentity,
+  getDelegationIssue,
+  isEmbedded,
+  retryDelegatedIdentity,
+} from "./parentDelegation";
 
 const IDENTITY_PROVIDER = network() === "ic"
   ? "https://id.ai/authorize"
@@ -74,27 +79,28 @@ export interface AuthState {
    * belongs to the parent dashboard, not this frame), so `AuthControl`
    * (`App.tsx`) hides that button whenever this is `true`. */
   delegated: boolean;
+  delegationIssue: string | null;
 }
 
 async function computeState(): Promise<AuthState> {
   if (isEmbedded()) {
     const delegated = await getDelegatedIdentity();
     if (delegated) {
-      return { status: "authenticated", principal: delegated.getPrincipal().toText(), delegated: true };
+      return { status: "authenticated", principal: delegated.getPrincipal().toText(), delegated: true, delegationIssue: null };
     }
   }
   const client = await getAuthClient();
   if (client.isAuthenticated()) {
     const identity = await client.getIdentity();
-    return { status: "authenticated", principal: identity.getPrincipal().toText(), delegated: false };
+    return { status: "authenticated", principal: identity.getPrincipal().toText(), delegated: false, delegationIssue: null };
   }
-  return { status: "anonymous", principal: null, delegated: false };
+  return { status: "anonymous", principal: null, delegated: false, delegationIssue: isEmbedded() ? getDelegationIssue() : null };
 }
 
 /** Reactive auth state for any component - resolves the real (possibly
  * restored) session on mount, and again after every `signIn`/`signOut`. */
 export function useAuth() {
-  const [state, setState] = useState<AuthState>({ status: "loading", principal: null, delegated: false });
+  const [state, setState] = useState<AuthState>({ status: "loading", principal: null, delegated: false, delegationIssue: null });
 
   useEffect(() => {
     let cancelled = false;
@@ -123,5 +129,11 @@ export function useAuth() {
     notify();
   };
 
-  return { ...state, signIn, signOut };
+  const reconnectDelegation = async () => {
+    const identity = await retryDelegatedIdentity();
+    notify();
+    return identity;
+  };
+
+  return { ...state, signIn, signOut, reconnectDelegation };
 }

@@ -35,6 +35,9 @@ thread_local! {
     static STORE: RefCell<Store> = RefCell::new(engine::new_store());
 }
 
+#[ic_cdk::init]
+fn init(_project_context: canister_hub_sdk::ProjectContext) {}
+
 /// Sets `key` to `value`, returning whatever `key`'s value was before this
 /// call (`null` if it didn't exist).
 #[ic_cdk::update]

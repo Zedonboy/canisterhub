@@ -1,9 +1,9 @@
 import { useNavigate, useLocation } from "react-router-dom";
 import { clsx } from "clsx";
 import {
-  LayoutDashboard, Shield, HardDrive, BarChart2,
-  Bot, Settings, /* Database, */
-  Zap, ChevronDown, ChevronsLeft, ChevronsRight, Sparkles, Wallet, Cpu, X,
+  LayoutDashboard, Shield, HardDrive, /* BarChart2, */
+  /* Bot, */ Settings, /* Database, */
+  Zap, ChevronDown, ChevronsLeft, ChevronsRight, Sparkles, Wallet, Cpu, ScrollText, X,
 } from "lucide-react";
 import type { Project } from "@/lib/backend";
 import type { ReactNode } from "react";
@@ -69,8 +69,10 @@ export function Sidebar({ projectId, job, mobileOpen, onMobileClose }: SidebarPr
     { label: "Storage",    path: `/project/${projectId}/storage`,    icon: <HardDrive size={15} /> },
     // { label: "Database",   path: `/project/${projectId}/database`,   icon: <Database size={15} /> },
     { label: "Runtime",    path: `/project/${projectId}/runtime`,    icon: <Cpu size={15} /> },
-    { label: "Analytics",  path: `/project/${projectId}/analytics`,  icon: <BarChart2 size={15} /> },
-    { label: "Agents",     path: `/project/${projectId}/agents`,     icon: <Bot size={15} /> },
+    { label: "Logs",       path: `/project/${projectId}/logs`,       icon: <ScrollText size={15} /> },
+    // Disabled for production launch
+    // { label: "Analytics",  path: `/project/${projectId}/analytics`,  icon: <BarChart2 size={15} /> },
+    // { label: "Agents",     path: `/project/${projectId}/agents`,     icon: <Bot size={15} /> },
     { label: "Settings",   path: `/project/${projectId}/settings`,   icon: <Settings size={15} /> },
   ];
 

@@ -6,6 +6,9 @@ import {
   CONSOLE_CHANNEL,
   CONSOLE_SESSION,
   type Channel,
+  type AdminRequest as RawAdminRequest,
+  type ClientDataRequest,
+  type ClientDataValue,
   type ConversationSummary,
   type Result,
   type StoredChatMessage,
@@ -31,6 +34,20 @@ export interface Conversation {
   lastRole: SenderRole;
   lastAt: number;
   messageCount: number;
+}
+
+export type TicketStatus = "Pending" | "Approved" | "Rejected" | "Completed";
+
+export interface Ticket {
+  id: number;
+  channel: ChannelName;
+  sessionId: string;
+  actionType: string;
+  details: string;
+  status: TicketStatus;
+  resultMessage: string | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 const MOCK = import.meta.env.VITE_MOCK === "1";
@@ -76,12 +93,38 @@ function toConversation(s: ConversationSummary): Conversation {
   };
 }
 
+function toTicket(ticket: RawAdminRequest): Ticket {
+  return {
+    id: Number(ticket.id),
+    channel: channelName(ticket.channel),
+    sessionId: ticket.session_id,
+    actionType: ticket.action_type,
+    details: ticket.details,
+    status: Object.keys(ticket.status)[0] as TicketStatus,
+    resultMessage: ticket.result_message[0] ?? null,
+    createdAt: nsToMs(ticket.created_at),
+    updatedAt: nsToMs(ticket.updated_at),
+  };
+}
+
 // ---- SME side -------------------------------------------------------------
 
 export async function listConversations(limit = 200): Promise<Conversation[]> {
   if (MOCK) return mock.listConversations();
   const actor = await getAgentActor();
   return unwrap(await actor.list_conversations(0n, BigInt(limit))).map(toConversation);
+}
+
+export async function listTickets(limit = 200): Promise<Ticket[]> {
+  if (MOCK) return mock.listTickets();
+  const actor = await getAgentActor();
+  return unwrap(await actor.list_admin_requests(0n, BigInt(limit))).map(toTicket);
+}
+
+export async function completeTicket(id: number): Promise<Ticket> {
+  if (MOCK) return mock.completeTicket(id);
+  const actor = await getAgentActor();
+  return toTicket(unwrap(await actor.complete_admin_request(BigInt(id))));
 }
 
 export async function getMessages(channel: ChannelName, sessionId: string): Promise<ChatMessage[]> {
@@ -122,4 +165,20 @@ export async function webMessages(after: number): Promise<ChatMessage[]> {
   if (MOCK) return mock.webMessages(after);
   const actor = await getCustomerActor();
   return toMessages(unwrap(await actor.web_messages(BigInt(after))), after);
+}
+
+export async function webPendingClientData(): Promise<ClientDataRequest | null> {
+  if (MOCK) return null;
+  const actor = await getCustomerActor();
+  return unwrap(await actor.web_pending_client_data())[0] ?? null;
+}
+
+export async function webSubmitClientData(
+  requestId: bigint,
+  value: ClientDataValue,
+  displayName: string,
+): Promise<void> {
+  if (MOCK) return;
+  const actor = await getCustomerActor();
+  unwrap(await actor.web_submit_client_data(requestId, value, [displayName]));
 }

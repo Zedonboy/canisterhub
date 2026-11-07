@@ -40,7 +40,7 @@ fn setup() -> (PocketIc, Principal) {
     pic.install_canister(
         canister_id,
         IC_KV_WASM.to_vec(),
-        encode_one(()).unwrap(),
+        encode_one(canister_hub_sdk::ProjectContext::default()).unwrap(),
         Some(caller()),
     );
     (pic, canister_id)
