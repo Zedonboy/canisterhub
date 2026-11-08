@@ -1,7 +1,7 @@
 name: Release installable packages
 
-# Builds all installable Rust packages, uploads the Wasm files to Cloudflare R2,
-# then publishes the artifacts and an R2-backed package seed file to GitHub.
+# Builds installable Rust packages, uploads package Wasms and template manifests
+# to Cloudflare R2, then publishes all artifacts and a combined seed file.
 # `packages/build.sh` builds the UIs before Rust so that:
 #   - agent.wasm contains chat-ui
 #   - order_inventory.wasm contains inventory-browser and storefront
@@ -129,13 +129,28 @@ jobs:
               --cache-control "public, max-age=31536000, immutable"
           done
 
-      - name: Generate R2 package seed file
+      - name: Generate R2 release seed and template manifests
         run: |
           node scripts/create_r2_package_seed.js \
             --version "$RELEASE_TAG" \
             --base-url "$R2_PUBLIC_BASE_URL" \
             --wasm-dir packages/bin \
+            --template-dir packages/bin/templates \
             --output package-seed.json
+
+      - name: Upload template manifests to Cloudflare R2
+        run: |
+          set -euo pipefail
+          R2_ENDPOINT="$(node --input-type=module -e 'process.stdout.write(new URL(process.env.R2_S3_BUCKET_URL).origin)')"
+          R2_BUCKET_NAME="$(node --input-type=module -e 'process.stdout.write(new URL(process.env.R2_S3_BUCKET_URL).pathname.split("/").filter(Boolean)[0])')"
+          for manifest in packages/bin/templates/*.canister_hub.toml; do
+            filename="${manifest##*/}"
+            aws s3 cp "$manifest" \
+              "s3://${R2_BUCKET_NAME}/${RELEASE_TAG}/${filename}" \
+              --endpoint-url "$R2_ENDPOINT" \
+              --content-type "text/plain; charset=utf-8" \
+              --cache-control "public, max-age=31536000, immutable"
+          done
 
       - name: Publish module release
         uses: softprops/action-gh-release@v2
@@ -162,4 +177,5 @@ jobs:
             packages/bin/restaurant.did
             packages/bin/SHA256SUMS
             package-seed.json
+            packages/bin/templates/*.canister_hub.toml
           fail_on_unmatched_files: true
