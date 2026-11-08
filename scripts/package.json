@@ -6,7 +6,6 @@
   "scripts": {
     "generate": "icp-bindgen --did-file ../backend/backend.did --out-dir ./bindings --actor-disabled --declarations-flat --force",
     "publish": "npm run generate && node publish_to_marketplace.js",
-    "upload-catalog": "node upload_marketplace_catalog.js",
     "create-r2-seed": "node create_r2_package_seed.js",
     "seed-packages": "node seed_package_infos.js"
   },

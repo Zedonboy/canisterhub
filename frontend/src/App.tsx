@@ -28,7 +28,6 @@ const PublisherSetup = lazy(() => import("@/pages/PublisherSetup"));
 const Runtime = lazy(() => import("@/pages/Runtime"));
 const Logs = lazy(() => import("@/pages/Logs"));
 const NotFound = lazy(() => import("@/pages/NotFound"));
-const TemplateInstall = lazy(() => import("@/pages/TemplateInstall"));
 
 function Fallback() {
   return <div className="min-h-screen bg-[#0a0e1a]" />;
@@ -46,7 +45,6 @@ export default function App() {
           <Route path="/marketplace" element={<RequireAuth><Marketplace /></RequireAuth>} />
           <Route path="/market/product/:product_id" element={<RequireAuth><ProductInstall /></RequireAuth>} />
           <Route path="/market/publisher" element={<RequireAuth><PublisherSetup /></RequireAuth>} />
-          <Route path="/templates/:slug" element={<RequireAuth><TemplateInstall /></RequireAuth>} />
           <Route path="/project/:id" element={<RequireAuth><AppShell /></RequireAuth>}>
             <Route path="overview" element={<Overview />} />
             <Route path="overview/product/:product_id" element={<MarketplaceItemDetail />} />

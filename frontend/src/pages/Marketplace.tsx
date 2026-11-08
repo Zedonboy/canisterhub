@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Store, Boxes, KeyRound } from "lucide-react";
+import { ArrowRight, Store, KeyRound } from "lucide-react";
 import { clsx } from "clsx";
 import { Badge } from "@/components/ui/Badge";
 import { ToastProvider } from "@/components/Toast";
@@ -9,18 +9,15 @@ import { ProductSearch } from "@/components/ProductSearch";
 import { TopNav } from "@/components/layout/TopNav";
 import { Footer } from "@/components/layout/Footer";
 import { listProducts, type Product } from "@/lib/products";
-import { listTemplates, type TemplateSummary } from "@/lib/templates";
 
 export default function Marketplace() {
   const navigate = useNavigate();
   const [activeTag, setActiveTag] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
-  const [templates, setTemplates] = useState<TemplateSummary[]>([]);
   useEffect(() => {
     let active = true;
     listProducts().then((value) => active && setProducts(value)).catch(() => active && setProducts([]));
-    listTemplates().then((value) => active && setTemplates(value)).catch(() => active && setTemplates([]));
     return () => { active = false; };
   }, []);
 
@@ -54,14 +51,6 @@ export default function Marketplace() {
             <KeyRound size={12} />
             Publish your own package
           </button>
-        </div>
-
-        <div className="mb-10">
-          <div className="flex items-center justify-between mb-4"><div><h2 className="text-base font-semibold text-[#e2e8f0]">Project Templates</h2><p className="text-xs text-[#4a5568] mt-1">Complete, pre-configured application architectures</p></div><Badge variant="gray">{templates.length} templates</Badge></div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">{templates.map((template) => <button key={template.id} onClick={() => navigate(`/templates/${template.id}`)} className="text-left p-4 rounded-xl border border-[#c084fc33] bg-[#c084fc08] hover:-translate-y-0.5 transition-all group">
-            <div className="flex items-center justify-between mb-3"><div className="w-10 h-10 rounded-lg bg-[#c084fc18] border border-[#c084fc33] flex items-center justify-center"><Boxes size={17} className="text-[#c084fc]"/></div><Badge variant="gray">{template.package_count} packages</Badge></div>
-            <h3 className="text-sm font-semibold group-hover:text-[#c084fc]">{template.name}</h3><p className="text-xs text-[#8892a4] mt-1 line-clamp-2">{template.description}</p><div className="text-[10px] text-[#4a5568] mt-3">{template.category} · v{template.version} · {template.download_count.toLocaleString()} downloads</div>
-          </button>)}</div>
         </div>
 
         {popular.length > 0 && (

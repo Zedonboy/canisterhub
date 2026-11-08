@@ -13,10 +13,20 @@ npm run generate
 
 ## Production package releases
 
-The `Release installable packages` GitHub Action also uploads each built `.wasm`
-to Cloudflare R2 and attaches `package-seed.json` to the GitHub Release. The seed
-file contains the R2 `download_url` and SHA-256 for every package, so it can be
-passed to `seed_package_infos.js` or used to refresh the marketplace catalog.
+The `Release installable packages` GitHub Action builds the package Wasms,
+renders the template manifests in `Templates/` with the release tag and R2
+package URLs, uploads both Wasms and rendered manifests to Cloudflare R2, and
+attaches them to the GitHub Release. It also attaches a generated
+`package-seed.json` containing `packages` and `templates` arrays. Package rows
+include the R2 `download_url` and SHA-256; template rows include the R2 manifest
+URL, GitHub Release URL, slug, and manifest SHA.
+
+The checked-in `scripts/package-seed.json` is the release input: its `packages`
+array describes Wasms, and its `templates` array points to each source manifest
+and supplies the listing metadata. `seed_package_infos.js` consumes only the
+`packages` array to update the backend package registry. Template rows are
+included in the release seed for the template seeding flow; they are not sent
+to the backend by `seed_package_infos.js`.
 
 Configure these repository settings before running the workflow:
 
@@ -28,18 +38,19 @@ Configure these repository settings before running the workflow:
 | Secret | `R2_SECRET_ACCESS_KEY` | Matching R2 S3 Secret Access Key |
 
 The workflow derives the S3 endpoint and bucket name from `R2_S3_BUCKET_URL` and
-stores objects under `<tag>/<package>.wasm`. `R2_PUBLIC_BASE_URL`
+stores objects under `<tag>/<package>.wasm` and
+`<tag>/<template-slug>.canister_hub.toml`. `R2_PUBLIC_BASE_URL`
 must resolve publicly to the same bucket and allow browser `GET`/`HEAD` requests
 from the app's origins through the bucket's CORS policy. Do not use the S3 API
 endpoint as the public base URL.
 
 `seed_package_infos.js` uploads the current package release registry used to
-detect upgrades on installed project canisters. Validate the checked-in
-v1.0.0 release data without changing canister state:
+detect upgrades on installed project canisters. Validate `package-seed.json`
+without changing canister state:
 
 ```bash
 cd scripts
-npm run seed-packages -- --file ./production-packages.v1.1.0.json --dry-run
+npm run seed-packages -- --file ./package-seed.json --dry-run
 ```
 
 Seed a local backend (the default environment) - run after `icp deploy
@@ -47,14 +58,14 @@ backend` so a fresh local network carries the same production registry the
 dashboard's upgrade detection expects:
 
 ```bash
-npm run seed-packages -- --file ./production-packages.v1.1.0.json
+npm run seed-packages -- --file ./package-seed.json
 ```
 
 Seed the production backend with a controller identity:
 
 ```bash
 npm run seed-packages -- \
-  --file ./production-packages.v1.1.0.json \
+  --file ./package-seed.json \
   --environment ic \
   --identity deploy
 ```
@@ -76,52 +87,6 @@ installation history.
 `npm run publish` regenerates that declaration before running
 `publish_to_marketplace.js`. The generated `bindings/` directory is ignored;
 `backend.did` remains the interface source of truth.
-
-## Catalog uploader (controller)
-
-Use `upload_marketplace_catalog.js` to seed or update several official
-templates and free packages in one run. It signs through the installed `icp`
-CLI, so the selected identity must be a controller of `backend`; the script
-never reads or stores the controller's private key.
-
-Copy [`catalog.example.json`](./catalog.example.json), update its GitHub
-release URLs and local file paths, then validate it without changing state:
-
-```bash
-cd scripts
-npm run upload-catalog -- --file ./catalog.json --dry-run
-```
-
-Upload to the local backend with the current default identity:
-
-```bash
-npm run upload-catalog -- --file ./catalog.json
-```
-
-Upload to mainnet with a named controller identity:
-
-```bash
-npm run upload-catalog -- \
-  --file ./catalog.json \
-  --environment ic \
-  --identity deploy
-```
-
-The script resolves `manifest_file` and `wasm_file` relative to the catalog,
-checks that every referenced file exists, and hashes all files before its
-first canister update. Templates use `add_marketplace_template`; packages are
-registered to the same controller principal and then use
-`publish_marketplace_item`. Repository/slug pairs are upserts, so rerunning a
-catalog updates listings rather than duplicating them.
-
-Package rows use `package_name` as their extension-free marketplace title and
-`download_url` as the direct `.wasm` release asset URL. The installer downloads
-that executable directly; templates continue to use manifest URLs.
-
-This bulk path intentionally supports only free packages. Continue using
-`publish_to_marketplace.js` (or the versioned GitHub Action below) for paid
-packages because that path generates an AES key, encrypts the Wasm, and wraps
-the key with vetKD before publishing.
 
 ## Versioned GitHub Action
 

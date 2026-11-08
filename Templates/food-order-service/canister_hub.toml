@@ -1,40 +1,33 @@
 schema_version = 2
 
 [template]
-name = "Food Order Service"
-slug = "food-order-service"
+name = "AI Food Ordering"
+slug = "ai-food-ordering"
 version = "1.0.0"
-description = "A restaurant ordering stack with accounts, relational persistence, API, analytics, and storefront."
+description = "An AI ordering assistant connected to a restaurant menu, portion-based orders, and menu photo storage."
 category = "Commerce"
-tags = ["orders", "food", "analytics"]
+tags = ["food", "restaurant", "ai", "ordering"]
 
 [[packages]]
-name = "auth"
-url = "https://marketplace.candid.cloud/packages/auth"
+name = "storage"
+url = "https://asset.canisterhub.io/1.1.1/assetstorage.wasm"
 
 [[packages]]
-name = "database"
-url = "https://marketplace.candid.cloud/packages/ic-sql"
-depends_on = ["auth"]
+name = "restaurant"
+url = "https://asset.canisterhub.io/1.1.1/restaurant.wasm"
+depends_on = ["storage"]
 
 [[packages]]
-name = "api"
-url = "https://marketplace.candid.cloud/packages/app-api"
-depends_on = ["auth", "database"]
+name = "agent"
+url = "https://asset.canisterhub.io/1.1.1/agent.wasm"
+depends_on = ["restaurant"]
 
-[[packages]]
-name = "analytics"
-url = "https://marketplace.candid.cloud/packages/analytics"
-depends_on = ["database"]
+# These links are installed automatically after each package exists. The
+# agent depends on restaurant so its canister ID is available when config is
+# applied. The package settings page collects any remaining values afterward.
+[config.restaurant]
+storage_canister = "${storage.canister_id}"
 
-[[packages]]
-name = "storefront"
-url = "https://marketplace.candid.cloud/packages/food-order-ui"
-depends_on = ["api", "analytics"]
-
-# Applied via `database`'s own `set_config` once it's installed - see
-# `spreadsheet-service/canister_hub.toml`'s matching comment for why
-# `database` must list `auth` in `depends_on` for this reference to
-# resolve.
-[config.database]
-auth_canister = "${auth.canister_id}"
+[config.agent]
+connected_canisters = ["${restaurant.canister_id}"]
+system_prompt = "You are this restaurant's ordering assistant. Answer from the restaurant's current menu and availability. Help customers choose menu items, ask how many portions they want, and submit the requested items through the restaurant ordering tool. Never invent products, availability, prices, or order status; the restaurant canister is authoritative. Payment terms are set by the restaurant for each menu item. Follow those terms and send a checkout link only when the order tool returns one. Confirm the order details clearly. If a request needs a staff member or cannot be completed, create a ticket for a human operator."

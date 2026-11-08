@@ -1,7 +1,6 @@
-import { LockKeyhole, PackageOpen } from "lucide-react";
+import { PackageOpen } from "lucide-react";
 import type { ReactElement } from "react";
-import { MarketplaceItemType } from "../bindings/backend";
-import { formatMarketplacePrice, getMarketplaceItem, hasPurchasedMarketplaceItem, listMarketplaceItems, purchasedMarketplaceItemIds, type MarketplaceItem } from "./marketplace";
+import { listPackageInfos, type PackageInfo } from "./packageRegistry";
 
 /** Presentation-only view of a real marketplace item. The backend has no
  * separate product catalog: MarketplaceItem is the sole persisted model. */
@@ -23,66 +22,50 @@ export interface Product {
   popular: boolean;
   features: string[];
   downloadCount: bigint;
-  item: MarketplaceItem;
+  packageInfo: PackageInfo;
   purchased: boolean;
 }
 
-function displayPrice(price: bigint | undefined): string {
-  if (price === undefined) return "Free";
-  return formatMarketplacePrice(price);
+function displayName(filename: string): string {
+  return filename.replace(/\.wasm$/i, "").replaceAll("_", " ");
 }
 
-function adaptProduct(item: MarketplaceItem, purchased = false): Product {
-  const paid = item.price !== undefined;
-  const color = paid && !purchased ? "#ffab40" : "#00d4ff";
-  const Icon = paid ? LockKeyhole : PackageOpen;
+function adaptProduct(pkg: PackageInfo): Product {
+  const color = "#00d4ff";
+  const name = displayName(pkg.name);
   return {
-    id: item.id.toString(),
-    slug: item.title.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "item",
-    name: item.title,
-    description: item.description,
-    tagline: item.description,
-    longDescription: item.description,
-    icon: () => <Icon size={16} />,
+    id: pkg.id,
+    slug: name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "package",
+    name,
+    description: pkg.description,
+    tagline: pkg.description,
+    longDescription: pkg.description,
+    icon: () => <PackageOpen size={16} />,
     iconUrl: null,
     color,
     bgColor: `${color}0d`,
     borderColor: `${color}33`,
-    tag: paid ? "Paid" : "Free",
+    tag: "Free",
     cyclesPerDay: 0,
-    cycleCost: purchased ? "Download" : displayPrice(item.price),
-    popular: item.downloads > 0n,
+    cycleCost: "Free",
+    popular: false,
     features: [
       "Installable WebAssembly release",
-      "Publisher repository verified",
-      paid ? "ICP payment with vetKD-protected download" : "Free public download",
+      `Version ${pkg.version}`,
+      "SHA-256 verified package download",
     ],
-    downloadCount: item.downloads,
-    item,
-    purchased,
+    downloadCount: 0n,
+    packageInfo: pkg,
+    purchased: false,
   };
 }
 
-/** Marketplace items are products. This adapter only supplies visual fields
- * expected by the existing cards; it does not create another data model in
- * the backend. */
+/** Package cards come from the controller-seeded package-info registry. */
 export async function listProducts(): Promise<Product[]> {
-  const items = (await listMarketplaceItems()).filter(
-    (item) => item.item_type === MarketplaceItemType.Package,
-  );
-  const purchasedIds = await purchasedMarketplaceItemIds(items);
-  return items.map((item) => adaptProduct(item, purchasedIds.has(item.id.toString())));
+  return (await listPackageInfos()).map(adaptProduct);
 }
 
 export async function getProduct(id: string): Promise<Product | null> {
-  let itemId: bigint;
-  try {
-    itemId = BigInt(id);
-  } catch {
-    return null;
-  }
-  const item = await getMarketplaceItem(itemId);
-  if (item === null || item.item_type !== MarketplaceItemType.Package) return null;
-  const purchased = item.price === undefined ? false : await hasPurchasedMarketplaceItem(item.id);
-  return adaptProduct(item, purchased);
+  const pkg = (await listPackageInfos()).find((candidate) => candidate.id === id);
+  return pkg ? adaptProduct(pkg) : null;
 }

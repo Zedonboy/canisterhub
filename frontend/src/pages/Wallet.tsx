@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import {
-  Wallet as WalletIcon, RefreshCw, Plus, Loader2, TriangleAlert,
+  Wallet as WalletIcon, RefreshCw, Loader2, TriangleAlert,
   CreditCard, TrendingDown, Clock, ChevronRight, ChevronDown, Zap,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
@@ -13,8 +13,9 @@ import { Table, TableHead, TableBody, Th, Tr, Td } from "@/components/ui/Table";
 import { toast } from "@/components/Toast";
 import { useAuth } from "@/lib/auth";
 import { WalletPanel } from "@/components/WalletPanel";
+import { TopUpCyclesButton } from "@/components/TopUpCycles";
 import {
-  formatTokenAmount, parseTokenAmount, getCyclesMintingRate, mintCyclesFromIcp,
+  formatTokenAmount, parseTokenAmount,
   getCyclesMintTransactions, CYCLES_LEDGER_CANISTER_ID, type TokenBalance,
   type CyclesMintTransaction,
 } from "@/lib/wallet";
@@ -227,12 +228,6 @@ export default function WalletPage() {
   const { principal } = useAuth();
   const [tokens, setTokens] = useState<TokenBalance[] | null>(null);
   const [walletReloadSignal, setWalletReloadSignal] = useState(0);
-  const [showTopUp, setShowTopUp] = useState(false);
-  const [icpAmount, setIcpAmount] = useState("1.0");
-  const [topUpBusy, setTopUpBusy] = useState(false);
-  const topUpBusyRef = useRef(false);
-  const [mintRate, setMintRate] = useState<bigint | null>(null);
-  const [mintRateError, setMintRateError] = useState<string | null>(null);
   const [canisterStats, setCanisterStats] = useState<Record<string, CanisterStats> | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [topUpTarget, setTopUpTarget] = useState<{ id: string; name: string } | null>(null);
@@ -259,23 +254,6 @@ export default function WalletPage() {
   useEffect(() => {
     loadStats();
   }, [loadStats]);
-
-  useEffect(() => {
-    if (!showTopUp) return;
-    let active = true;
-    setMintRate(null);
-    setMintRateError(null);
-    getCyclesMintingRate(network)
-      .then((rate) => {
-        if (active) setMintRate(rate);
-      })
-      .catch((error) => {
-        if (active) setMintRateError(error instanceof Error ? error.message : String(error));
-      });
-    return () => {
-      active = false;
-    };
-  }, [showTopUp, network]);
 
   const refreshAll = () => {
     setWalletReloadSignal((n) => n + 1);
@@ -359,39 +337,6 @@ export default function WalletPage() {
     };
   }, [principal, network, walletReloadSignal]);
 
-  let topUpAmountE8s: bigint | null = null;
-  try {
-    topUpAmountE8s = parseTokenAmount(icpAmount, 8);
-    if (topUpAmountE8s < 10_000_000n) topUpAmountE8s = null;
-  } catch {
-    topUpAmountE8s = null;
-  }
-  const estimatedCycles = topUpAmountE8s !== null && mintRate !== null ? topUpAmountE8s * mintRate : null;
-
-  const confirmCyclesMint = async () => {
-    if (topUpBusyRef.current) return;
-    if (topUpAmountE8s === null) {
-      toast.error("Check the amount", "Enter at least 0.1 ICP with at most 8 decimal places.");
-      return;
-    }
-    topUpBusyRef.current = true;
-    setTopUpBusy(true);
-    try {
-      const result = await mintCyclesFromIcp(network, topUpAmountE8s);
-      setShowTopUp(false);
-      toast.success(
-        result.resumed ? "Cycles mint recovered" : "Cycles minted",
-        `${formatTokenAmount(result.minted, 12)} cycles deposited to ${principal}.`
-      );
-      setWalletReloadSignal((n) => n + 1);
-    } catch (error) {
-      toast.error("Cycles mint failed", error instanceof Error ? error.message : String(error));
-    } finally {
-      topUpBusyRef.current = false;
-      setTopUpBusy(false);
-    }
-  };
-
   return (
     <div className="p-4 sm:p-6 space-y-6 animate-fade-in max-w-7xl">
       <div className="flex items-center justify-between">
@@ -420,9 +365,10 @@ export default function WalletPage() {
             <h3 className="text-xs font-medium text-[#4a5568] uppercase tracking-wider flex items-center gap-1.5">
               <CreditCard size={12} /> Billing &amp; Cycles
             </h3>
-            <Button variant="primary" size="sm" onClick={() => setShowTopUp(true)} className="gap-1.5">
-              <Plus size={13} /> Top Up Cycles
-            </Button>
+            {/* The shared project-wide ICP-to-cycles mint dialog lives in
+                `TopUpCyclesButton` (also rendered by the Account page) - the
+                "Top Up Cycles" flow is identical on both pages. */}
+            <TopUpCyclesButton network={network} onMinted={() => setWalletReloadSignal((n) => n + 1)} />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -511,66 +457,6 @@ export default function WalletPage() {
         onClose={() => setTopUpTarget(null)}
         onDone={() => { setTopUpTarget(null); setWalletReloadSignal((n) => n + 1); loadStats(); }}
       />
-
-      <Dialog open={showTopUp} onClose={() => !topUpBusy && setShowTopUp(false)}>
-        <DialogHeader title="Top Up Cycles" onClose={topUpBusy ? undefined : () => setShowTopUp(false)} />
-        <DialogContent className="space-y-4">
-          <div>
-            <Label htmlFor="icp-amount">ICP Amount</Label>
-            <Input
-              id="icp-amount"
-              type="number"
-              min="0.1"
-              step="0.1"
-              value={icpAmount}
-              onChange={(e) => setIcpAmount(e.target.value)}
-              disabled={topUpBusy}
-            />
-            <p className="text-[10px] text-[#4a5568] mt-1">
-              {estimatedCycles !== null
-                ? `Estimated: ${formatTokenAmount(estimatedCycles, 12)} cycles at the current CMC rate`
-                : mintRateError
-                  ? `Current CMC rate unavailable: ${mintRateError}`
-                  : "Loading the current CMC conversion rate…"}
-            </p>
-          </div>
-          <div className="bg-[#0a0e1a] rounded border border-[#1e2d47] p-3 text-xs space-y-1">
-            <div className="flex justify-between">
-              <span className="text-[#4a5568]">Amount</span>
-              <span className="text-[#e2e8f0] font-mono">{icpAmount} ICP</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-[#4a5568]">Estimated cycles</span>
-              <span className="text-[#e2e8f0] font-mono">
-                {estimatedCycles !== null ? formatTokenAmount(estimatedCycles, 12) : "—"}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-[#4a5568]">Destination</span>
-              <span className="text-[#00d4ff] font-mono truncate max-w-[16rem]" title={principal ?? undefined}>
-                {principal ?? "Sign in required"}
-              </span>
-            </div>
-          </div>
-          <p className="text-[11px] text-[#ffab40]">
-            This transfers ICP to the Cycles Minting Canister and irreversibly converts it into your principal's Cycles Ledger balance.
-            The current ICP ledger transfer fee is charged in addition.
-          </p>
-        </DialogContent>
-        <DialogFooter>
-          <Button variant="ghost" size="sm" onClick={() => setShowTopUp(false)} disabled={topUpBusy}>Cancel</Button>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={confirmCyclesMint}
-            disabled={topUpBusy || !principal || topUpAmountE8s === null}
-            className="gap-1.5"
-          >
-            {topUpBusy && <Loader2 size={13} className="animate-spin" />}
-            {topUpBusy ? "Minting…" : "Confirm Top-Up"}
-          </Button>
-        </DialogFooter>
-      </Dialog>
     </div>
   );
 }

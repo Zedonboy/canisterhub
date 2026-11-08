@@ -1,65 +1,84 @@
-[
+{
+  "schema_version": 1,
+  "packages": [
   {
     "description": "Give your business an always-available assistant that helps you respond to customers, stay on top of conversations, and handle everyday work faster—while keeping you in control.",
     "package_name": "agent",
-    "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/agent.wasm",
-    "version": "1.1.0",
+    "download_url": "https://asset.canisterhub.io/1.1.1/agent.wasm",
+    "version": "1.1.1",
     "sha": "a6d2dc6d9cc8c1a655d9ce59d22e585f06d70da040032916d3ab8f70b1618605"
   },
   {
     "description": "Run your shop with less stress. Keep products organized, track stock, receive customer orders, and manage your online storefront from one simple place.",
     "package_name": "order_inventory",
-    "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/order_inventory.wasm",
-    "version": "1.1.0",
+    "download_url": "https://asset.canisterhub.io/1.1.1/order_inventory.wasm",
+    "version": "1.1.1",
     "sha": "772716fca685f2df96cdee5564260189c3d53cbe2eaf6ed1cb15b6d8d8655d13"
   },
   {
     "description": "Keep your business images, documents, and other important files together in a dependable home, ready to use across your website and business tools.",
     "package_name": "assetstorage",
-    "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/assetstorage.wasm",
-    "version": "1.1.0",
+    "download_url": "https://asset.canisterhub.io/1.1.1/assetstorage.wasm",
+    "version": "1.1.1",
     "sha": "5085e3263f3294490987846ee2e1a043cae013c14ecb6576938870542e8d146e"
   },
   {
     "description": "Manage user authentication, identity, and secure access for your Internet Computer applications.",
     "package_name": "auth",
-    "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/auth.wasm",
-    "version": "1.1.0",
+    "download_url": "https://asset.canisterhub.io/1.1.1/auth.wasm",
+    "version": "1.1.1",
     "sha": "7f8d443424e0c36303e2efabb99f020e255284429b9f3d672b08ccd8b4e7e093"
   },
   {
     "description": "Store and retrieve structured key-value data on the Internet Computer.",
     "package_name": "ic-kv",
-    "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/ic-kv.wasm",
-    "version": "1.1.0",
+    "download_url": "https://asset.canisterhub.io/1.1.1/ic-kv.wasm",
+    "version": "1.1.1",
     "sha": "770b77bbdb7446aa8828b79eb7302046abdb4e968e0985a21c291d2ba27ef61b"
   },
   {
     "description": "Use a SQL database canister to manage relational data for your Internet Computer application.",
     "package_name": "ic-sql",
-    "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/ic-sql.wasm",
-    "version": "1.1.0",
+    "download_url": "https://asset.canisterhub.io/1.1.1/ic-sql.wasm",
+    "version": "1.1.1",
     "sha": "b2b2b10bba5526749fad61f3dea6f2bb8dccf351813b380e984c62fdcc612b9a"
   },
   {
     "description": "Accept customer payments through Kora checkout and track payment results in your project.",
     "package_name": "kora-payment",
-    "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/kora-payment.wasm",
-    "version": "1.1.0",
+    "download_url": "https://asset.canisterhub.io/1.1.1/kora-payment.wasm",
+    "version": "1.1.1",
     "sha": "8ea74e962a7249bf788472a18dd90e09a8189787ad2c44ed5aa7756e768c62aa"
   },
   {
     "description": "Accept customer payments through Paystack and track payment results in your project.",
     "package_name": "paystack-payment",
-    "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/paystack-payment.wasm",
-    "version": "1.1.0",
+    "download_url": "https://asset.canisterhub.io/1.1.1/paystack-payment.wasm",
+    "version": "1.1.1",
     "sha": "d665e02fb5d9da4d7a293bd6ea7f5413c895901a5c39ddfe1030aa66f4b06add"
   },
   {
     "description": "Manage a restaurant menu, portion-based orders, kitchen fulfillment, and payment collection.",
     "package_name": "restaurant",
-    "download_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.1.0/restaurant.wasm",
-    "version": "1.1.0",
+    "download_url": "https://asset.canisterhub.io/1.1.1/restaurant.wasm",
+    "version": "1.1.1",
     "sha": "ac7962ac35de16c11a60021a5423e0c169e31d8e69d8f0d42572e5b96411bbe6"
   }
-]
+  ],
+  "templates": [
+    {
+      "title": "AI Food Ordering",
+      "description": "An AI ordering assistant connected to a restaurant menu, portion-based orders, and menu photo storage.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "package_slug": "ai-food-ordering",
+      "manifest_file": "../Templates/food-order-service/canister_hub.toml"
+    },
+    {
+      "title": "AI Inventory Ordering",
+      "description": "An AI ordering assistant connected to a vendor's inventory, product catalog, and storefront image storage.",
+      "git_repo_url": "https://github.com/Zedonboy/canisterhub",
+      "package_slug": "ai-inventory-ordering",
+      "manifest_file": "../Templates/ai-inventory-ordering/canister_hub.toml"
+    }
+  ]
+}

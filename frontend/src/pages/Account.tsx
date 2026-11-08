@@ -7,6 +7,7 @@ import { CanisterID } from "@/components/CanisterID";
 import { ToastProvider } from "@/components/Toast";
 import { Footer } from "@/components/layout/Footer";
 import { WalletPanel } from "@/components/WalletPanel";
+import { TopUpCyclesButton } from "@/components/TopUpCycles";
 import { useAuth } from "@/lib/auth";
 import { runtimeNetwork } from "@/lib/canisterEnv";
 
@@ -17,7 +18,10 @@ import { runtimeNetwork } from "@/lib/canisterEnv";
  * its own "Wallet & Billing" page (the user's own instruction: "use same
  * wallet UI in Billing page for Account page") - Send/Receive/Approve/Add
  * Token and all, just driven by `runtimeNetwork()` instead of a specific
- * project's `job.network`, since there's no project here at all. */
+ * project's `job.network`, since there's no project here at all. The
+ * Profile card also carries the same shared `TopUpCyclesButton` the Wallet
+ * & Billing page renders (the user's own instruction: "use same flow as
+ * the Wallet&Billing"), right after Sign Out. */
 export default function Account() {
   const navigate = useNavigate();
   const { status, principal, signOut } = useAuth();
@@ -72,9 +76,16 @@ export default function Account() {
               </div>
             </div>
             {status === "authenticated" && (
-              <Button variant="danger" size="sm" className="gap-1.5" onClick={handleSignOut}>
-                <LogOut size={13} /> Sign Out
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button variant="danger" size="sm" className="gap-1.5" onClick={handleSignOut}>
+                  <LogOut size={13} /> Sign Out
+                </Button>
+                {/* Same ICP-to-cycles mint flow as the Wallet & Billing page
+                    (`TopUpCyclesButton` is shared by both) - a successful
+                    mint bumps `reloadSignal` so the WalletPanel balances
+                    below refresh, same as that page's own refresh. */}
+                <TopUpCyclesButton network={network} onMinted={() => setReloadSignal((n) => n + 1)} />
+              </div>
             )}
           </CardContent>
         </Card>

@@ -16,7 +16,7 @@ function text(value) {
 
 function usage() {
   console.log(`Usage:
-  npm run seed-packages -- --file ./production-packages.v1.1.0.json [options]
+  npm run seed-packages -- --file ./package-seed.json [options]
 
 Options:
   -f, --file <path>          Package JSON file (required)
@@ -48,8 +48,11 @@ function parseArgs(argv) {
 }
 
 function packagesFrom(raw) {
-  if (!Array.isArray(raw) || raw.length === 0) throw new Error("package file must be a non-empty JSON array");
-  return raw.map((pkg, index) => {
+  const packages = Array.isArray(raw) ? raw : raw?.packages;
+  if (!Array.isArray(packages) || packages.length === 0) {
+    throw new Error("package file must be a non-empty JSON array or an object with a packages array");
+  }
+  return packages.map((pkg, index) => {
     const label = `packages[${index}]`;
     for (const field of ["description", "package_name", "download_url", "version", "sha"]) {
       if (typeof pkg[field] !== "string" || pkg[field].trim() === "") {

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { listMyProjects, type Project } from "@/lib/backend";
 import { type Product } from "@/lib/products";
-import { deployMarketplaceItem } from "@/lib/deploy";
+import { deployPackageInfo } from "@/lib/deploy";
 import { useAuth } from "@/lib/auth";
 import { toast } from "@/components/Toast";
 
@@ -52,8 +52,8 @@ export function InstallProductDialog({ open, onClose, product }: InstallProductD
 
     setInstallingProjectId(project.id);
     try {
-      const deployed = await deployMarketplaceItem(
-        product.item,
+      const deployed = await deployPackageInfo(
+        product.packageInfo,
         project.network,
         project.id,
         Principal.fromText(principal),
@@ -114,9 +114,7 @@ export function InstallProductDialog({ open, onClose, product }: InstallProductD
                       ? "Installing…"
                       : product.purchased
                         ? "Download & install"
-                        : product.item.price !== undefined
-                          ? "Buy & install"
-                          : "Install"}
+                      : "Install"}
                   </Button>
                 </div>
               );

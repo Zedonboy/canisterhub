@@ -1,0 +1,33 @@
+schema_version = 2
+
+[template]
+name = "AI Inventory Ordering"
+slug = "ai-inventory-ordering"
+version = "1.0.0"
+description = "An AI ordering assistant connected to a vendor's inventory, product catalog, and storefront image storage."
+category = "Commerce"
+tags = ["inventory", "orders", "ai", "storefront"]
+
+[[packages]]
+name = "storage"
+url = "https://asset.canisterhub.io/1.1.1/assetstorage.wasm"
+
+[[packages]]
+name = "inventory"
+url = "https://asset.canisterhub.io/1.1.1/order_inventory.wasm"
+depends_on = ["storage"]
+
+[[packages]]
+name = "agent"
+url = "https://asset.canisterhub.io/1.1.1/agent.wasm"
+depends_on = ["inventory"]
+
+# Inventory owns prices, stock, and each item's payment terms. The agent may
+# submit product IDs and quantities, but must never determine prices or terms.
+# Configure a payment provider later if the vendor offers prepaid checkout.
+[config.inventory]
+storage_canister = "${storage.canister_id}"
+
+[config.agent]
+connected_canisters = ["${inventory.canister_id}"]
+system_prompt = "You are this vendor's inventory ordering assistant. Use the inventory ordering tools to look up products and place orders. For every order provide only product IDs and quantities; never calculate, invent, or submit prices, totals, stock, or payment terms. The inventory canister is authoritative for product details, vendor-set cash-on-delivery or prepaid terms, stock, and order status. For prepaid orders, collect the customer's email when requested and share a checkout link only if the inventory tool returns one. Confirm the order details and never claim an order is paid unless the tool reports that status. If a request needs a staff member or cannot be completed, create a ticket for a human operator."

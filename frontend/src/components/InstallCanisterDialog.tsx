@@ -2,13 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Search, Sparkles, Package, Loader2 } from "lucide-react";
 import { Principal } from "@icp-sdk/core/principal";
-import { MarketplaceItemType } from "@/bindings/backend";
 import { Dialog, DialogHeader, DialogContent } from "@/components/ui/Dialog";
-import { formatMarketplacePrice, listMarketplaceItems, purchasedMarketplaceItemIds, type MarketplaceItem } from "@/lib/marketplace";
-import { deployMarketplaceItem, type DeployedCanister } from "@/lib/deploy";
+import { deployPackageInfo, type DeployedCanister } from "@/lib/deploy";
 import { useAuth } from "@/lib/auth";
 import { toast } from "@/components/Toast";
-import { listPackageInfos, packageShaHex } from "@/lib/packageRegistry";
+import { listPackageInfos, type PackageInfo } from "@/lib/packageRegistry";
 
 interface InstallCanisterDialogProps {
   open: boolean;
@@ -48,11 +46,9 @@ interface InstallCanisterDialogProps {
  * anywhere in this component. */
 export function InstallCanisterDialog({ open, onClose, jobId, network, onDeployed, initialQuery, requiredPackageName, navigateToOrchestrate = true }: InstallCanisterDialogProps) {
   const [query, setQuery] = useState(initialQuery ?? "");
-  const [items, setItems] = useState<MarketplaceItem[] | null>(null);
-  const [packageNamesByItem, setPackageNamesByItem] = useState<Record<string, string>>({});
+  const [items, setItems] = useState<PackageInfo[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [deployingId, setDeployingId] = useState<bigint | null>(null);
-  const [purchasedIds, setPurchasedIds] = useState<Set<string>>(new Set());
+  const [deployingId, setDeployingId] = useState<string | null>(null);
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const { principal } = useAuth();
@@ -61,22 +57,10 @@ export function InstallCanisterDialog({ open, onClose, jobId, network, onDeploye
     if (!open) return;
     setQuery(initialQuery ?? "");
     setDeployingId(null);
-    setPurchasedIds(new Set());
     setLoadError(null);
     const t = window.setTimeout(() => inputRef.current?.focus(), 0);
-    Promise.all([listMarketplaceItems(), listPackageInfos().catch(() => [])])
-      .then(async ([marketplaceItems, packageInfos]) => {
-        const packages = marketplaceItems.filter((item) => item.item_type === MarketplaceItemType.Package);
-        setItems(packages);
-        const namesByItem: Record<string, string> = {};
-        for (const item of packages) {
-          const hash = packageShaHex(item.wasm_hash);
-          const info = packageInfos.find((candidate) => candidate.sha === hash);
-          if (info) namesByItem[item.id.toString()] = info.name;
-        }
-        setPackageNamesByItem(namesByItem);
-        setPurchasedIds(await purchasedMarketplaceItemIds(packages));
-      })
+    listPackageInfos()
+      .then(setItems)
       .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)));
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -89,35 +73,35 @@ export function InstallCanisterDialog({ open, onClose, jobId, network, onDeploye
     const q = query.toLowerCase().trim();
     return all.filter((item) => {
       if (required) {
-        const packageNames = [item.package_slug, packageNamesByItem[item.id.toString()], item.title];
-        if (!packageNames.some((name) => name && normalizePackageName(name) === required)) return false;
+        if (normalizePackageName(item.name) !== required) return false;
       }
-      return !q || item.title.toLowerCase().includes(q) || item.description.toLowerCase().includes(q);
+      return !q || item.name.toLowerCase().includes(q) || item.description.toLowerCase().includes(q);
     });
-  }, [items, packageNamesByItem, query, requiredPackageName]);
+  }, [items, query, requiredPackageName]);
 
   const goToOrchestrate = (seed?: string) => {
     onClose();
     navigate(`/project/${jobId}/orchestrate`, seed ? { state: { seed } } : undefined);
   };
 
-  const install = async (item: MarketplaceItem) => {
+  const install = async (item: PackageInfo) => {
     if (!principal) {
       toast.error("Not signed in", "Sign in again and retry.");
       return;
     }
     setDeployingId(item.id);
     try {
-      const result = await deployMarketplaceItem(item, network, jobId, Principal.fromText(principal));
-      toast.success(`${item.title} deployed`, `Canister "${result.name}" (${result.id}) is live.`);
+      const title = item.name.replace(/\.wasm$/i, "").replaceAll("_", " ");
+      const result = await deployPackageInfo(item, network, jobId, Principal.fromText(principal));
+      toast.success(`${title} deployed`, `Canister "${result.name}" (${result.id}) is live.`);
       onDeployed(result);
       if (navigateToOrchestrate) {
-        goToOrchestrate(`I just deployed a new "${item.title}" canister, id ${result.id} (named "${result.name}"). Help me wire it up into this project.`);
+        goToOrchestrate(`I just deployed a new "${title}" canister, id ${result.id} (named "${result.name}"). Help me wire it up into this project.`);
       } else {
         onClose();
       }
     } catch (e) {
-      toast.error(`Couldn't deploy ${item.title}`, e instanceof Error ? e.message : String(e));
+      toast.error(`Couldn't deploy ${item.name}`, e instanceof Error ? e.message : String(e));
       setDeployingId(null);
     }
   };
@@ -154,18 +138,16 @@ export function InstallCanisterDialog({ open, onClose, jobId, network, onDeploye
           </button>}
 
           {loadError && <p className="text-xs text-[#ff5252] px-1 py-2">Couldn't load the marketplace: {loadError}</p>}
-          {!loadError && items === null && <p className="text-xs text-[#4a5568] px-1 py-2">Loading marketplace…</p>}
+          {!loadError && items === null && <p className="text-xs text-[#4a5568] px-1 py-2">Loading packages…</p>}
 
           {items !== null &&
             (filtered.length > 0 ? (
               filtered.map((item) => {
-                const idText = item.id.toString();
                 const isDeploying = deployingId === item.id;
-                const gated = item.encrypted_key !== undefined;
-                const purchased = purchasedIds.has(idText);
+                const title = item.name.replace(/\.wasm$/i, "").replaceAll("_", " ");
                 return (
                   <button
-                    key={idText}
+                    key={item.id}
                     onClick={() => install(item)}
                     disabled={deployingId !== null}
                     className="w-full flex items-center gap-3 p-3 rounded-lg border border-[#1e2d47] hover:bg-[#131929] hover:border-[#00d4ff44] transition-colors text-left disabled:opacity-50"
@@ -175,15 +157,11 @@ export function InstallCanisterDialog({ open, onClose, jobId, network, onDeploye
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-[#e2e8f0] truncate">{item.title}</span>
-                        {gated && item.price != null && (
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded border flex-shrink-0 ${purchased ? "border-[#00d4ff44] bg-[#00d4ff12] text-[#00d4ff]" : "border-[#ffab4044] bg-[#ffab4022] text-[#ffab40]"}`}>
-                            {purchased ? "Download" : formatMarketplacePrice(item.price)}
-                          </span>
-                        )}
+                        <span className="text-sm font-medium text-[#e2e8f0] truncate">{title}</span>
+                        <span className="text-[10px] text-[#00d4ff]">v{item.version}</span>
                       </div>
                       <div className="text-[11px] text-[#4a5568] truncate">
-                        {isDeploying ? "Deploying - downloading and installing the real canister…" : item.description}
+                        {isDeploying ? "Downloading and installing package…" : item.description}
                       </div>
                     </div>
                   </button>
@@ -192,8 +170,8 @@ export function InstallCanisterDialog({ open, onClose, jobId, network, onDeploye
             ) : (
               <p className="text-xs text-[#4a5568] px-1 py-2">
                 {requiredPackageName
-                  ? `The marketplace does not currently list the required package ${requiredPackageName}.`
-                  : items.length === 0 ? "The marketplace is empty right now." : `No installable canister matches "${query}" - try Create Custom Canister with AI above.`}
+                  ? `The package registry does not currently list ${requiredPackageName}.`
+                  : items.length === 0 ? "No packages are seeded yet." : `No package matches "${query}" - try Create Custom Canister with AI above.`}
               </p>
             ))}
         </div>

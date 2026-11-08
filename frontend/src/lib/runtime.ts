@@ -224,6 +224,22 @@ async function installWasm(
   }
 }
 
+/** Shared Runtime canister creation/install path for trusted package installs:
+ * create through the Cycles Ledger, then target management-canister calls at
+ * the new canister id as their effective canister id, using chunked upload
+ * for modules larger than the direct-install limit. */
+export async function createAndInstallCanisterFromWasm(
+  network: string,
+  wasmModule: Uint8Array,
+  controllers: Principal[],
+  initArg: Uint8Array,
+): Promise<Principal> {
+  const canisterId = await createCanisterWithCyclesLedger(network, controllers);
+  const actor = await managementActor(network, canisterId);
+  await installWasm(actor, canisterId, wasmModule, { install: null }, initArg);
+  return canisterId;
+}
+
 /** The universal `ProjectContext` install argument used by marketplace,
  * template, and arbitrary Runtime deployments. */
 async function projectInitArg(projectId: string): Promise<Uint8Array> {
@@ -271,10 +287,12 @@ export async function deployWasmRuntime(label: string, wasmModule: Uint8Array, n
   const initArg = await projectInitArg(projectId);
   const orchestrator = orchestratorPrincipal();
   const controllers = orchestrator ? [userPrincipal, orchestrator] : [userPrincipal];
-  const canisterId = await createCanisterWithCyclesLedger(network, controllers);
-  const actor = await managementActor(network, canisterId);
-
-  await installWasm(actor, canisterId, wasmModule, { install: null }, initArg);
+  const canisterId = await createAndInstallCanisterFromWasm(
+    network,
+    wasmModule,
+    controllers,
+    initArg,
+  );
 
   const canisterIdText = canisterId.toText();
   const [kind, hasConfig] = await Promise.all([

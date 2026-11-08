@@ -12,6 +12,7 @@ import { Principal } from "@icp-sdk/core/principal";
 import { getAgent } from "./agent";
 import { idlFactory as managementIdlFactory, MANAGEMENT_CANISTER_ID, type ManagementService } from "./candid/management";
 import { fetchMarketplaceWasm } from "./vetkeyDecrypt";
+import { fetchVerifiedPackageWasm, type PackageInfo } from "./packageRegistry";
 import { purchaseMarketplaceAccess, recordDownload } from "./marketplace";
 import { addProjectCanisters, getProject, type CanisterKind } from "./backend";
 import type { MarketplaceItem } from "../bindings/backend";
@@ -19,6 +20,7 @@ import { runtimeValue } from "./canisterEnv";
 import { getModuleConfigSchema, setModuleConfig } from "./moduleConfig";
 import { findPackageInfoForRelease, packageShaHex, projectPackageCanistersByName, recordProjectPackageInstallation } from "./packageRegistry";
 import { encodeProjectContext } from "./candid/agentInit";
+import { createAndInstallCanisterFromWasm } from "./runtime";
 
 async function managementActor(network: string): Promise<ManagementService> {
   const agent = await getAgent(network);
@@ -140,5 +142,40 @@ export async function deployMarketplaceItem(item: MarketplaceItem, network: stri
   }
   await recordDownload(item.id);
 
+  return { name, id: canisterId.toText() };
+}
+
+/** Deploys a free official package directly from the backend package-info
+ * registry. The registry URL and SHA are the source of truth for this flow;
+ * it does not consult MarketplaceItem download URLs. */
+export async function deployPackageInfo(pkg: PackageInfo, network: string, projectId: string, userPrincipal: Principal): Promise<DeployedCanister> {
+  const wasm = await fetchVerifiedPackageWasm(pkg);
+  const project = await getProject(projectId);
+  if (!project) throw new Error(`Project ${projectId} was not found`);
+  const initArg = encodeProjectContext({
+    projectId,
+    packageCanisters: await projectPackageCanistersByName(project),
+  });
+  const orchestrator = orchestratorPrincipal();
+  const controllers = orchestrator ? [userPrincipal, orchestrator] : [userPrincipal];
+  const canisterId = await createAndInstallCanisterFromWasm(network, wasm, controllers, initArg);
+
+  try {
+    const schema = await getModuleConfigSchema(canisterId.toText(), network);
+    if (schema.some((field) => field.key === "project_id")) {
+      await setModuleConfig(canisterId.toText(), network, { project_id: { Text: projectId } });
+    }
+  } catch {
+    // Packages without dynamic project configuration remain installable.
+  }
+
+  const packageTitle = pkg.name.replace(/\.wasm$/i, "").replaceAll("_", " ");
+  const name = `${slugify(packageTitle)}-${canisterId.toText().slice(0, 5)}`;
+  await addProjectCanisters(projectId, [[name, {
+    id: canisterId.toText(),
+    kind: "other" as CanisterKind,
+    packageName: pkg.name,
+  }]]);
+  await recordProjectPackageInstallation(projectId, name, pkg.name);
   return { name, id: canisterId.toText() };
 }
