@@ -220,9 +220,6 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
   const [llmApiKey, setLlmApiKey] = useState("");
   const [clearApiKey, setClearApiKey] = useState(false);
   const [maxToolIterations, setMaxToolIterations] = useState("");
-  const [adminWebhookUrl, setAdminWebhookUrl] = useState("");
-  const [adminWebhookSecret, setAdminWebhookSecret] = useState("");
-  const [clearWebhookSecret, setClearWebhookSecret] = useState(false);
   const [whatsappPhoneNumberId, setWhatsappPhoneNumberId] = useState("");
   const [whatsappVerifyToken, setWhatsappVerifyToken] = useState("");
   const [clearWhatsappVerifyToken, setClearWhatsappVerifyToken] = useState(false);
@@ -237,8 +234,6 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
     setLoadError(null);
     setLlmApiKey("");
     setClearApiKey(false);
-    setAdminWebhookSecret("");
-    setClearWebhookSecret(false);
     setWhatsappVerifyToken("");
     setClearWhatsappVerifyToken(false);
     setWhatsappAppSecret("");
@@ -251,7 +246,6 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
         setLlmProvider(c.llmProvider === "platform" ? "managed_ic_llm" : (c.llmProvider ?? "managed_ic_llm"));
         setLlmModel(c.llmModel ?? "");
         setMaxToolIterations(c.maxToolIterations !== null ? String(c.maxToolIterations) : "");
-        setAdminWebhookUrl(c.adminWebhookUrl ?? "");
         setWhatsappPhoneNumberId(c.whatsappPhoneNumberId ?? "");
       })
       .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)))
@@ -264,13 +258,11 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
     setSaving(true);
     try {
       await updateAgentConfig(agent.id, network, {
-        adminWebhookUrl,
         systemPrompt,
         llmProvider,
         llmModel,
         maxToolIterations,
         llmApiKey: clearApiKey ? "" : llmApiKey.trim() === "" ? undefined : llmApiKey,
-        adminWebhookSecret: clearWebhookSecret ? "" : adminWebhookSecret.trim() === "" ? undefined : adminWebhookSecret,
         whatsappPhoneNumberId,
         whatsappVerifyToken: clearWhatsappVerifyToken ? "" : whatsappVerifyToken.trim() === "" ? undefined : whatsappVerifyToken,
         whatsappAppSecret: clearWhatsappAppSecret ? "" : whatsappAppSecret.trim() === "" ? undefined : whatsappAppSecret,
@@ -352,14 +344,6 @@ function ConfigDialog({ agent, network, onClose, onSaved }: { agent: AgentCanist
               <WriteOnlySecret id="agent-whatsapp-verify" label="Webhook verify token" value={whatsappVerifyToken} clear={clearWhatsappVerifyToken} onValue={setWhatsappVerifyToken} onClear={setClearWhatsappVerifyToken} />
               <WriteOnlySecret id="agent-whatsapp-secret" label="App secret" value={whatsappAppSecret} clear={clearWhatsappAppSecret} onValue={setWhatsappAppSecret} onClear={setClearWhatsappAppSecret} />
               <WriteOnlySecret id="agent-whatsapp-access" label="Access token" value={whatsappAccessToken} clear={clearWhatsappAccessToken} onValue={setWhatsappAccessToken} onClear={setClearWhatsappAccessToken} />
-            </ConfigGroup>
-
-            <ConfigGroup title="Administrative Escalation" description="Send actions requiring human approval to the SME's administrative system.">
-              <div>
-                <Label htmlFor="agent-webhook-url">Admin webhook URL (optional)</Label>
-                <Input id="agent-webhook-url" placeholder="https://…" value={adminWebhookUrl} onChange={(e) => setAdminWebhookUrl(e.target.value)} className="text-xs" />
-              </div>
-              <WriteOnlySecret id="agent-webhook-secret" label="Admin webhook secret" value={adminWebhookSecret} clear={clearWebhookSecret} onValue={setAdminWebhookSecret} onClear={setClearWebhookSecret} />
             </ConfigGroup>
           </>
         )}

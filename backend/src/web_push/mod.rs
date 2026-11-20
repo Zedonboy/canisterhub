@@ -77,6 +77,58 @@ pub fn list(principal: &Principal) -> Vec<PushSubscription> {
     state::list(principal)
 }
 
+/// Worst-case cycles needed to deliver one notification to every subscription
+/// `principal` has: one non-replicated outcall each, with a full-size encrypted
+/// body, VAPID authorization header, and the response cap.
+pub fn send_cost(principal: &Principal) -> u128 {
+    state::list(principal)
+        .iter()
+        .map(|subscription| {
+            crate::cycles::http_outcall_cost(
+                subscription.endpoint.len(),
+                push::MAX_REQUEST_HEADER_BYTES,
+                push::MAX_BODY_BYTES,
+                push::MAX_RESPONSE_BYTES,
+            )
+        })
+        .fold(0, u128::saturating_add)
+}
+
+const TEST_SEND_COOLDOWN_NS: u64 = 24 * 60 * 60 * 1_000_000_000;
+
+/// Self-service test push: at most one successful send per principal per 24
+/// hours. A send counts only if the push service accepted it (2xx) for at
+/// least one subscription, so failures and empty sends can be retried.
+pub async fn send_test(
+    principal: Principal,
+    notification: PushNotification,
+) -> Result<Vec<PushDelivery>, String> {
+    let now = ic_cdk::api::time();
+    if let Some(last) = state::last_test_send(&principal) {
+        let ready_at = last.saturating_add(TEST_SEND_COOLDOWN_NS);
+        if now < ready_at {
+            let hours = (ready_at - now).div_ceil(3_600 * 1_000_000_000);
+            return Err(format!(
+                "a test notification was already sent successfully; try again in about {hours} hour(s)"
+            ));
+        }
+    }
+    if !state::begin_test_send(principal) {
+        return Err("a test notification is already being sent".to_string());
+    }
+    let result = send(principal, notification).await;
+    state::end_test_send(&principal);
+    if let Ok(deliveries) = &result {
+        if deliveries
+            .iter()
+            .any(|d| d.status.is_some_and(|s| (200..300).contains(&s)))
+        {
+            state::record_test_send(principal, ic_cdk::api::time());
+        }
+    }
+    result
+}
+
 pub async fn send(
     principal: Principal,
     notification: PushNotification,

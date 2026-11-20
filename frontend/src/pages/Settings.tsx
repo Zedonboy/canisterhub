@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useOutletContext, Link } from "react-router-dom";
-import { Settings, Server, AlertTriangle, Square, Trash2, Download, ExternalLink, Bell, BellOff, BellRing } from "lucide-react";
+import { Settings, Server, AlertTriangle, Square, Trash2, Download, ExternalLink, Bell, BellOff, BellRing, Send } from "lucide-react";
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input, Label } from "@/components/ui/Input";
@@ -12,7 +12,7 @@ import { relativeTime } from "@/lib/mock-data";
 import type { ProjectContext } from "@/components/layout/AppShell";
 import { setProjectName, deleteProject, removeProjectCanister, getProjectNotificationPreferences, setProjectNotificationPreferences, type Project, type CanisterKind } from "@/lib/backend";
 import { stopCanister, deleteCanister } from "@/lib/canisterOps";
-import { isPushSupported, getPushStatus, enablePushNotifications, disablePushNotifications } from "@/lib/pushNotifications";
+import { isPushSupported, getPushStatus, enablePushNotifications, disablePushNotifications, sendTestPushNotification } from "@/lib/pushNotifications";
 import { clsx } from "clsx";
 
 const KIND_LABELS: Record<CanisterKind, string> = {
@@ -35,6 +35,7 @@ const KIND_LABELS: Record<CanisterKind, string> = {
 function PushNotificationsCard({ projectId }: { projectId: string }) {
   const [status, setStatus] = useState<"loading" | "enabled" | "disabled" | "denied">("loading");
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     if (!isPushSupported()) {
@@ -79,6 +80,18 @@ function PushNotificationsCard({ projectId }: { projectId: string }) {
     }
   };
 
+  const sendTest = async () => {
+    setTesting(true);
+    try {
+      await sendTestPushNotification();
+      toast.success("Test notification sent", "Check your browser notifications.");
+    } catch (e) {
+      toast.error("Couldn't send the test notification", e instanceof Error ? e.message : String(e));
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader><CardTitle>Notifications</CardTitle></CardHeader>
@@ -97,18 +110,25 @@ function PushNotificationsCard({ projectId }: { projectId: string }) {
               </p>
             </div>
           </div>
-          {status !== "denied" && (
-            <Button
-              variant={status === "enabled" ? "secondary" : "primary"}
-              size="sm"
-              className="gap-1.5 flex-shrink-0"
-              disabled={busy || status === "loading"}
-              onClick={status === "enabled" ? disable : enable}
-            >
-              {status === "enabled" ? <BellOff size={13} /> : <Bell size={13} />}
-              {busy ? "Working…" : status === "loading" ? "Checking…" : status === "enabled" ? "Disable" : "Enable"}
-            </Button>
-          )}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {status === "enabled" && (
+              <Button variant="outline" size="sm" className="gap-1.5" disabled={busy || testing} onClick={() => void sendTest()}>
+                <Send size={13} /> {testing ? "Sending…" : "Send test"}
+              </Button>
+            )}
+            {status !== "denied" && (
+              <Button
+                variant={status === "enabled" ? "secondary" : "primary"}
+                size="sm"
+                className="gap-1.5 flex-shrink-0"
+                disabled={busy || testing || status === "loading"}
+                onClick={status === "enabled" ? disable : enable}
+              >
+                {status === "enabled" ? <BellOff size={13} /> : <Bell size={13} />}
+                {busy ? "Working…" : status === "loading" ? "Checking…" : status === "enabled" ? "Disable" : "Enable"}
+              </Button>
+            )}
+          </div>
         </div>
       </CardContent>
     </Card>
@@ -160,7 +180,7 @@ function GeneralTab({ job, refetch }: { job: Project; refetch: () => void }) {
           </div>
           <div>
             <Label>Project ID</Label>
-            <p className="text-xs font-mono text-[#4a5568] mt-1">{job.id}</p>
+            <CanisterID id={job.id} showFull className="mt-1" />
           </div>
           <div>
             <Label>Owner Principal</Label>

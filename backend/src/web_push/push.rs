@@ -27,7 +27,11 @@ const RECORD_SIZE: u32 = 4_096;
 // Keeps the complete aes128gcm body (salt + record metadata + ephemeral key
 // + ciphertext/tag) below the 4 KiB limit enforced by common push services.
 const MAX_PLAINTEXT_BYTES: usize = 3_800;
-const MAX_RESPONSE_BYTES: u64 = 4_096;
+pub(super) const MAX_RESPONSE_BYTES: u64 = 4_096;
+/// Upper bound on the encrypted aes128gcm body (see MAX_PLAINTEXT_BYTES).
+pub(super) const MAX_BODY_BYTES: usize = 4_096;
+/// Authorization (VAPID JWT + key) plus the fixed Content-*/TTL headers.
+pub(super) const MAX_REQUEST_HEADER_BYTES: usize = 1_024;
 const VAPID_TTL_SECONDS: u64 = 12 * 60 * 60;
 
 #[derive(Clone, Debug, Serialize)]

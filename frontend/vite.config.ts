@@ -25,7 +25,7 @@ function getDevServerConfig() {
     ["PUBLIC_CANISTER_ID:backend", backendId],
     ["PUBLIC_AUTH_NETWORK", network.managed ? "local" : "ic"],
     ["IC_HOST_LOCAL", network.api_url],
-    ["IC_HOST_MAINNET", "https://ic0.app"],
+    ["IC_HOST_MAINNET", "https://icp0.io"],
     ["ORCHESTRATOR_URL", "http://127.0.0.1:8787"],
     ["ic_root_key", network.root_key],
   ].map(([key, value]) => `${key}=${value}`).join("&");

@@ -40,10 +40,13 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod cycles;
+mod devices;
 mod managed_ai;
 mod package_registry;
 mod project_notifications;
 mod web_push;
+pub use devices::Device;
 pub use managed_ai::{
     ManagedAiChoice, ManagedAiCompletionRequest, ManagedAiCompletionResponse,
     ManagedAiConfigUpdate, ManagedAiMessage, ManagedAiRequest, ManagedAiResponse, ManagedAiRole,
@@ -128,6 +131,12 @@ fn require_authenticated_caller(action: &str) -> Result<Principal, String> {
         ));
     }
     Ok(caller)
+}
+
+/// Like `require_authenticated_caller`, but resolves a co-owner device to the
+/// owner it acts as. Use for everything keyed by project ownership.
+fn require_owner(action: &str) -> Result<Principal, String> {
+    require_authenticated_caller(action).map(devices::owner_of)
 }
 
 fn ensure_text_size(label: &str, value: &str, max_bytes: usize) -> Result<(), String> {
@@ -479,7 +488,10 @@ pub struct ProjectNotificationPreferences {
 
 pub(crate) fn project_push_notifications_enabled(project_id: &str) -> bool {
     PROJECT_NOTIFICATION_PREFERENCES.with(|preferences| {
-        preferences.borrow().get(&project_id.to_string()).unwrap_or(true)
+        preferences
+            .borrow()
+            .get(&project_id.to_string())
+            .unwrap_or(true)
     })
 }
 
@@ -845,10 +857,11 @@ fn validate_marketplace_download_url(
     }
     let package_manifest = format!("{package_slug}.canister_hub.toml");
     let is_manifest = file_name == "canister_hub.toml" || file_name == package_manifest;
-    let is_wasm = allow_wasm_asset && file_name.ends_with(".wasm")
-        && file_name
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.'));
+    let is_wasm = allow_wasm_asset
+        && file_name.ends_with(".wasm")
+        && file_name.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.')
+        });
     if !is_manifest && !is_wasm {
         return Err(format!(
             "download_url must point to a release Wasm asset or package manifest"
@@ -1019,7 +1032,7 @@ fn push_subscribe(principal: Principal, subscription: PushSubscription) -> Resul
     if principal != caller {
         return Err("subscription principal must match the authenticated caller".to_string());
     }
-    web_push::subscribe(caller, subscription)
+    web_push::subscribe(devices::owner_of(caller), subscription)
 }
 
 #[update]
@@ -1028,7 +1041,7 @@ fn push_unsubscribe(principal: Principal, endpoint: String) -> Result<(), String
     if principal != caller {
         return Err("subscription principal must match the authenticated caller".to_string());
     }
-    web_push::unsubscribe(caller, &endpoint)
+    web_push::unsubscribe(devices::owner_of(caller), &endpoint)
 }
 
 #[query]
@@ -1037,7 +1050,7 @@ fn push_list_subscriptions(principal: Principal) -> Result<Vec<PushSubscription>
     if principal != caller {
         return Err("subscription principal must match the authenticated caller".to_string());
     }
-    Ok(web_push::list(&caller))
+    Ok(web_push::list(&devices::owner_of(caller)))
 }
 
 #[update]
@@ -1047,11 +1060,15 @@ async fn push_ensure_vapid() -> Result<Vec<u8>, String> {
 }
 
 #[update]
-fn push_send(
-    _principal: Principal,
-    _notification: PushNotification,
+async fn push_send(
+    principal: Principal,
+    notification: PushNotification,
 ) -> Result<Vec<PushDelivery>, String> {
-    notification_module_moved()
+    let caller = require_authenticated_caller("send test push notifications")?;
+    if principal != caller {
+        return Err("notification recipient must match the authenticated caller".to_string());
+    }
+    web_push::send_test(devices::owner_of(caller), notification).await
 }
 
 /// Adds or updates an official project template in the marketplace.
@@ -1871,7 +1888,7 @@ fn issue_jwt() -> Result<String, String> {
 /// asserted on the caller's behalf by some other authenticated party.
 #[update]
 fn create_project(id: String, request: String, network: String) -> Result<(), String> {
-    let caller = require_authenticated_caller("create a project")?;
+    let caller = require_owner("create a project")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     ensure_text_size("project request", &request, MAX_PROJECT_REQUEST_BYTES)?;
     ensure_text_size("project network", &network, MAX_PROJECT_NETWORK_BYTES)?;
@@ -1915,7 +1932,7 @@ fn update_project_state(
     state: ProjectState,
     pending_question: Option<String>,
 ) -> Result<(), String> {
-    let caller = require_authenticated_caller("update a project")?;
+    let caller = require_owner("update a project")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     ensure_optional_text_size(
         "pending question",
@@ -1945,7 +1962,7 @@ fn update_project_state(
 /// `remove_project_canister` below.
 #[update]
 fn set_project_name(id: String, project_name: String) -> Result<(), String> {
-    let caller = require_authenticated_caller("rename a project")?;
+    let caller = require_owner("rename a project")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     ensure_text_size("project name", &project_name, MAX_PROJECT_NAME_BYTES)?;
     if project_name.trim().is_empty() {
@@ -1969,7 +1986,7 @@ fn set_project_name(id: String, project_name: String) -> Result<(), String> {
 fn get_project_notification_preferences(
     id: String,
 ) -> Result<ProjectNotificationPreferences, String> {
-    let caller = require_authenticated_caller("read project notification settings")?;
+    let caller = require_owner("read project notification settings")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     let is_owner = PROJECTS
         .with(|projects| projects.borrow().get(&id))
@@ -1978,19 +1995,15 @@ fn get_project_notification_preferences(
         return Err(format!("no project with id {id}"));
     }
     Ok(ProjectNotificationPreferences {
-        push_enabled: PROJECT_NOTIFICATION_PREFERENCES.with(|preferences| {
-            preferences
-                .borrow()
-                .get(&id)
-                .unwrap_or(true)
-        }),
+        push_enabled: PROJECT_NOTIFICATION_PREFERENCES
+            .with(|preferences| preferences.borrow().get(&id).unwrap_or(true)),
     })
 }
 
 /// Saves the authenticated owner's project-wide Web Push preference.
 #[update]
 fn set_project_notification_preferences(id: String, push_enabled: bool) -> Result<(), String> {
-    let caller = require_authenticated_caller("change project notification settings")?;
+    let caller = require_owner("change project notification settings")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     let is_owner = PROJECTS.with(|projects| {
         projects
@@ -2016,7 +2029,7 @@ fn set_project_notification_preferences(id: String, push_enabled: bool) -> Resul
 /// shape as `remove_project_canister` below.
 #[update]
 fn add_project_canisters(id: String, canisters: Vec<(String, CanisterInfo)>) -> Result<(), String> {
-    let caller = require_authenticated_caller("add project canisters")?;
+    let caller = require_owner("add project canisters")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     if canisters.len() > MAX_PROJECT_CANISTERS {
         return Err(format!(
@@ -2093,7 +2106,7 @@ fn add_project_canisters(id: String, canisters: Vec<(String, CanisterInfo)>) -> 
 /// `remove_project_canister` below.
 #[update]
 fn set_project_llm_context(id: String, context: String) -> Result<(), String> {
-    let caller = require_authenticated_caller("update project context")?;
+    let caller = require_owner("update project context")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     ensure_text_size("LLM context", &context, MAX_LLM_CONTEXT_BYTES)?;
     PROJECTS.with(|p| {
@@ -2118,7 +2131,7 @@ fn finish_project(
     final_message: Option<String>,
     error: Option<String>,
 ) -> Result<(), String> {
-    let caller = require_authenticated_caller("finish a project")?;
+    let caller = require_owner("finish a project")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     ensure_optional_text_size(
         "final message",
@@ -2156,7 +2169,7 @@ fn finish_project(
 /// was asked for.
 #[update]
 fn remove_project_canister(id: String, name: String) -> Result<(), String> {
-    let caller = require_authenticated_caller("remove a project canister")?;
+    let caller = require_owner("remove a project canister")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     ensure_text_size("canister name", &name, MAX_CANISTER_NAME_BYTES)?;
     let removed = PROJECTS.with(|p| {
@@ -2192,7 +2205,7 @@ fn remove_project_canister(id: String, name: String) -> Result<(), String> {
 /// safety rule, not something enforced here.
 #[update]
 fn delete_project(id: String) -> Result<(), String> {
-    let caller = require_authenticated_caller("delete a project")?;
+    let caller = require_owner("delete a project")?;
     ensure_text_size("project id", &id, MAX_PROJECT_ID_BYTES)?;
     PROJECTS.with(|p| {
         let mut projects = p.borrow_mut();
@@ -2215,7 +2228,7 @@ fn delete_project(id: String) -> Result<(), String> {
 /// it does.
 #[query]
 fn get_project(id: String) -> Option<Project> {
-    let caller = ic_cdk::api::msg_caller();
+    let caller = devices::owner_of(ic_cdk::api::msg_caller());
     if caller == Principal::anonymous() || id.len() > MAX_PROJECT_ID_BYTES {
         return None;
     }
@@ -2263,7 +2276,7 @@ fn hydrate_project_package_names(mut project: Project) -> Project {
 /// dashboard's project list, called directly - no orchestrator HTTP call.
 #[query]
 fn list_my_projects() -> Vec<Project> {
-    let caller = ic_cdk::api::msg_caller();
+    let caller = devices::owner_of(ic_cdk::api::msg_caller());
     if caller == Principal::anonymous() {
         return Vec::new();
     }
@@ -2277,6 +2290,50 @@ fn list_my_projects() -> Vec<Project> {
     });
     projects.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     projects
+}
+
+/// Adds `device` as a co-owner: it will see and manage all of the caller's
+/// projects. Only an owner (not a device) may add devices. This records the
+/// authorisation only; the browser then adds the principal as a controller of
+/// each canister (see the frontend's `lib/devices.ts`).
+#[update]
+fn add_device(device: Principal, label: String) -> Result<Device, String> {
+    let caller = require_authenticated_caller("add a device")?;
+    if devices::owner_of(caller) != caller {
+        return Err("only the owner may add devices".to_string());
+    }
+    let owns_projects = PROJECTS.with(|p| {
+        p.borrow()
+            .iter()
+            .any(|entry| entry.value().owner == device)
+    });
+    devices::add(caller, device, label, owns_projects, ic_cdk::api::time())
+}
+
+/// Removes a device. Only the owner may. The browser removes the principal from
+/// each canister's controllers (see the frontend's `lib/devices.ts`).
+#[update]
+fn remove_device(device: Principal) -> Result<(), String> {
+    let caller = require_authenticated_caller("remove a device")?;
+    devices::remove(caller, device)
+}
+
+/// The caller's owner's devices. Works for the owner and for any device, so a
+/// device can see who else has access.
+#[query]
+fn list_devices() -> Vec<Device> {
+    let caller = ic_cdk::api::msg_caller();
+    if caller == Principal::anonymous() {
+        return Vec::new();
+    }
+    devices::list(devices::owner_of(caller))
+}
+
+/// The principal the caller acts as: its owner if it is a device, otherwise
+/// itself. Lets the frontend tell a device session from an owner session.
+#[query]
+fn my_owner() -> Principal {
+    devices::owner_of(ic_cdk::api::msg_caller())
 }
 
 ic_cdk::export_candid!();

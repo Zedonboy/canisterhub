@@ -367,6 +367,21 @@ impl HttpClient for IcpClient {
     }
 }
 
+/// Cycles the caller must attach: the IC LLM canister's flat per-chat price, or
+/// the worst-case price of one provider HTTPS outcall for `text_bytes` of
+/// prompt (+25% and 8 KiB for JSON escaping, URL, and auth headers).
+fn required_cycles(ic_llm: bool, text_bytes: usize) -> u128 {
+    if ic_llm {
+        return CYCLES_PER_IC_LLM_CHAT;
+    }
+    crate::cycles::http_outcall_cost(0, 8 * 1024, text_bytes + text_bytes / 4, 131_072)
+}
+
+fn request_text_bytes(request: &ManagedAiRequest) -> usize {
+    request.system_prompt.as_ref().map_or(0, String::len)
+        + request.messages.iter().map(|m| m.content.len()).sum::<usize>()
+}
+
 const MAINNET_LLM_CANISTER: &str = "w36hm-eqaaa-aaaal-qr76a-cai";
 const CYCLES_PER_IC_LLM_CHAT: u128 = 100_000_000_000;
 
@@ -1240,7 +1255,7 @@ fn grant_token_credits(owner: Principal, amount: u64) -> Result<TokenCreditBalan
 #[ic_cdk::query]
 fn get_token_credits(owner: Principal) -> Result<Option<TokenCreditBalance>, String> {
     let caller = ic_cdk::api::msg_caller();
-    if caller != owner && !ic_cdk::api::is_controller(&caller) {
+    if crate::devices::owner_of(caller) != owner && !ic_cdk::api::is_controller(&caller) {
         return Err("only the account owner or a controller may read token credits".to_string());
     }
     Ok(ACCOUNTS.with(|accounts| {
@@ -1268,8 +1283,18 @@ async fn managed_ai_complete(request: ManagedAiRequest) -> Result<ManagedAiRespo
         return Err("managed AI has no provider credential configured".to_string());
     }
 
+    let required_cycles = required_cycles(
+        config.provider == "ic_llm",
+        request_text_bytes(&request),
+    );
     let reserved_token_credits = requested_credit_reservation(&request);
     reserve_token_credits(account.owner, reserved_token_credits)?;
+    if let Err(error) =
+        crate::cycles::check(required_cycles).and_then(|()| crate::cycles::accept(required_cycles))
+    {
+        release_token_credits(account.owner, reserved_token_credits);
+        return Err(error);
+    }
 
     let key = UsageKey {
         owner: account.owner,
@@ -1341,8 +1366,18 @@ async fn managed_ai_completion(
         ManagedAiService::DeepSeek => "deepseek",
     }
     .to_string();
+    let required_cycles = required_cycles(
+        matches!(request.service, ManagedAiService::IcLlm),
+        request.messages_json.len() + request.tools_json.len(),
+    );
     let reserved_token_credits = requested_v2_credit_reservation(&request);
     reserve_token_credits(account.owner, reserved_token_credits)?;
+    if let Err(error) =
+        crate::cycles::check(required_cycles).and_then(|()| crate::cycles::accept(required_cycles))
+    {
+        release_token_credits(account.owner, reserved_token_credits);
+        return Err(error);
+    }
     let key = UsageKey {
         owner: account.owner,
         // Kept empty in the legacy physical key layout. New agent usage is
@@ -1393,7 +1428,7 @@ fn get_managed_ai_usage(project_id: String) -> Result<Vec<ManagedAiUsage>, Strin
     let project = PROJECTS
         .with(|projects| projects.borrow().get(&project_id))
         .ok_or_else(|| "project not found".to_string())?;
-    if caller != project.owner && !controller {
+    if crate::devices::owner_of(caller) != project.owner && !controller {
         return Err("only the project owner or a controller may read managed AI usage".to_string());
     }
     let mut rows = USAGE.with(|usage| {

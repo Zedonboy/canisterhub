@@ -358,6 +358,11 @@ pub fn list_ai_canisters() -> Vec<AiCanister> {
     AI_CANISTERS.with(|m| m.borrow().iter().map(|entry| entry.value()).collect())
 }
 
+/// Whether `canister` is one of this agent's connected `ai_*` canisters.
+pub fn is_connected_canister(canister: &Principal) -> bool {
+    list_ai_canisters().iter().any(|c| &c.canister_id == canister)
+}
+
 /// Every example tool in `tools.rs` keys a customer's own record by
 /// `SessionKey` alone - see that module's doc comment for why, and for what
 /// a real deployment with a separate account concept should do instead.

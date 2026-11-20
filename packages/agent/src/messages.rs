@@ -429,9 +429,8 @@ pub enum AdminRequestStatus {
 }
 
 /// A request to do something this canister's tools deliberately cannot do
-/// themselves - created by the `request_admin_action` tool (see `tools.rs`),
-/// POSTed to `Config.admin_webhook_url` (see `admin.rs`), and updated in
-/// place when `POST /webhook/admin` calls back with a resolution.
+/// themselves - created by the `request_admin_action` tool (see `tools.rs`)
+/// and handled by a human operator from the inbox.
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
 pub struct AdminRequest {
     pub id: u64,
@@ -442,14 +441,12 @@ pub struct AdminRequest {
     /// why this template leaves it as text rather than a fixed enum.
     pub action_type: String,
     /// Free-text detail the model provided - human-readable context for
-    /// whoever/whatever handles this on the other side of the webhook, not
+    /// the operator handling this ticket, not
     /// something this canister parses or acts on itself.
     pub details: String,
     pub status: AdminRequestStatus,
-    /// Set once `POST /webhook/admin` resolves this request - the text
-    /// relayed back to the customer via `connector.send_message` verbatim
-    /// (see `admin.rs::handle_callback`'s doc comment on why it's sent
-    /// as-is rather than run back through the LLM).
+    /// Unused: tickets are completed by an operator, not resolved by a
+    /// callback. Kept so existing stored tickets still decode.
     pub result_message: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,

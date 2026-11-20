@@ -1,7 +1,7 @@
 import { CopyLinkButton } from "@/components/CopyLinkButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext, useNavigate, Link } from "react-router-dom";
-import { ExternalLink, Database as DatabaseIcon, Sparkles, MoreVertical, Play, Square, Trash2, Rocket, Store, Bot, ListChecks, Settings as SettingsIcon, ChevronUp, ChevronDown, Search, Package, AppWindow, Globe, RefreshCw } from "lucide-react";
+import { ExternalLink, Database as DatabaseIcon, Sparkles, MoreVertical, Play, Square, Trash2, Rocket, Store, Bot, ListChecks, Settings as SettingsIcon, ChevronUp, ChevronDown, Search, FileCode2, AppWindow, Globe, RefreshCw } from "lucide-react";
 import { Card, CardHeader, CardContent, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -18,8 +18,9 @@ import { getAllCanisterStats, getCanisterStatsDirect, type BusinessStats, type C
 import type { CanisterLink } from "@/lib/moduleConfig";
 import { stopCanister, startCanister, deleteCanister } from "@/lib/canisterOps";
 import type { CanisterType } from "@/lib/candid/canisterMetadata";
-import { formatMarketplacePrice, listMarketplaceItems, purchasedMarketplaceItemIds, type MarketplaceItem } from "@/lib/marketplace";
 import { fetchVerifiedPackageWasm, listPackageInfos, listProjectPackageInstallations, recordProjectPackageInstallation, type InstalledPackage, type PackageInfo } from "@/lib/packageRegistry";
+import { listProducts, type Product } from "@/lib/products";
+import { listTemplates, type Template } from "@/lib/templates";
 import { upgradeWasmRuntime } from "@/lib/runtime";
 
 function metadataTypeLabel(type: CanisterType | null | undefined): string | null {
@@ -476,47 +477,39 @@ function InstalledCanisters({ job, refetch }: { job: Project; refetch: () => voi
   );
 }
 
-/** Real marketplace catalog (`list_marketplace_items`, the same real
- * `backend` catalog `InstallCanisterDialog`'s own search dropdown reads),
- * browsable and installable right on the Overview page instead of only
- * behind the "Create & Deploy a Canister" dialog - searching here filters
- * by title/description, same as that dialog's own search box. Picking an
- * item runs the exact same real deploy flow (`lib/deploy.ts`:
- * download/decrypt wasm, create canister, install code, set controllers)
- * and then hands off to Orchestrate with the new canister's id seeded into
- * the input, so a follow-up AI request already knows which canister it's
- * about - mirrors `InstallCanisterDialog::install` exactly, just rendered
- * inline instead of inside a modal. */
-function MarketplaceSection({ job }: { job: Project }) {
+/** Uses the same package and template feeds as the Marketplace page. */
+function MarketplaceSection() {
   const [query, setQuery] = useState("");
-  const [items, setItems] = useState<MarketplaceItem[] | null>(null);
-  const [purchasedIds, setPurchasedIds] = useState<Set<string>>(new Set());
+  const [products, setProducts] = useState<Product[] | null>(null);
+  const [templates, setTemplates] = useState<Template[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    listMarketplaceItems()
-      .then(async (marketplaceItems) => {
-        setItems(marketplaceItems);
-        setPurchasedIds(await purchasedMarketplaceItemIds(marketplaceItems));
-      })
-      .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)));
+    let active = true;
+    listProducts()
+      .then((items) => active && setProducts(items))
+      .catch((e) => active && setLoadError(e instanceof Error ? e.message : String(e)));
+    listTemplates()
+      .then((items) => active && setTemplates(items))
+      .catch((e) => active && setLoadError(e instanceof Error ? e.message : String(e)));
+    return () => { active = false; };
   }, []);
 
-  const filtered = useMemo(() => {
-    const all = items ?? [];
+  const filteredProducts = useMemo(() => {
+    const all = products ?? [];
+    const q = query.toLowerCase().trim();
+    if (!q) return all;
+    return all.filter((item) => item.name.toLowerCase().includes(q) || item.description.toLowerCase().includes(q));
+  }, [products, query]);
+  const filteredTemplates = useMemo(() => {
+    const all = templates ?? [];
     const q = query.toLowerCase().trim();
     if (!q) return all;
     return all.filter((item) => item.title.toLowerCase().includes(q) || item.description.toLowerCase().includes(q));
-  }, [items, query]);
+  }, [templates, query]);
 
-  // Show the whole catalog (most downloaded first), not a shortlist - the
-  // search box above filters it live in the browser, same pattern as the
-  // standalone Marketplace page.
-  const displayed = useMemo(
-    () => [...filtered].sort((a, b) => Number(b.downloads - a.downloads)),
-    [filtered],
-  );
+  const loading = products === null || templates === null;
 
   return (
     <div>
@@ -530,52 +523,62 @@ function MarketplaceSection({ job }: { job: Project }) {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search the marketplace for a canister to install…"
+          placeholder="Search packages and templates…"
           className="flex-1 bg-transparent text-sm text-[#e2e8f0] placeholder-[#4a5568] outline-none"
         />
       </div>
 
-      {!loadError && items === null && <p className="text-xs text-[#4a5568] text-center">Loading marketplace…</p>}
+      {loading && !loadError && <p className="text-xs text-[#4a5568] text-center">Loading marketplace…</p>}
+      {loadError && <p className="text-xs text-[#ff5252] text-center">Couldn't load the marketplace: {loadError}</p>}
 
-      {items !== null && (
-        displayed.length > 0 ? (
-          <>
-            {!query.trim() && (
-              <h3 className="text-[11px] font-medium text-[#4a5568] uppercase tracking-wider mb-3">All packages</h3>
-            )}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {displayed.map((item) => {
-                const idText = item.id.toString();
-                const gated = item.encrypted_key !== undefined;
-                const purchased = purchasedIds.has(idText);
-                return (
+      {!loading && !loadError && (
+        <div className="space-y-7">
+          <section>
+            <h3 className="text-[11px] font-medium text-[#4a5568] uppercase tracking-wider mb-3">Packages</h3>
+            {filteredProducts.length === 0 ? (
+              <p className="text-xs text-[#4a5568] text-center">{products?.length ? `No packages match "${query}".` : "No packages published yet."}</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredProducts.map((product) => (
                   <button
-                    key={idText}
-                    onClick={() => navigate(`/project/${job.id}/overview/product/${idText}`)}
+                    key={product.id}
+                    onClick={() => navigate(`/market/product/${product.id}`)}
                     className="text-left p-4 rounded-xl border border-[#1e2d47] bg-[#0d1526] hover:border-[#00d4ff44] hover:-translate-y-0.5 transition-all duration-150"
                   >
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="w-10 h-10 rounded-lg bg-[#1a2236] border border-[#1e2d47] flex items-center justify-center flex-shrink-0">
-                        <Package size={17} className="text-[#8892a4]" />
-                      </div>
-                      {gated && item.price != null && (
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded border flex-shrink-0 ${purchased ? "border-[#00d4ff44] bg-[#00d4ff12] text-[#00d4ff]" : "border-[#ffab4044] bg-[#ffab4022] text-[#ffab40]"}`}>
-                          {purchased ? "Download" : formatMarketplacePrice(item.price)}
-                        </span>
-                      )}
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-10 h-10 rounded-lg bg-[#1a2236] border border-[#1e2d47] flex items-center justify-center text-[#8892a4]">{product.icon()}</div>
+                      <span className="text-sm font-semibold text-[#e2e8f0]">{product.name}</span>
                     </div>
-                    <div className="text-sm font-semibold text-[#e2e8f0]">{item.title}</div>
-                    <div className="text-xs text-[#8892a4] mt-1 leading-relaxed line-clamp-2">{item.description}</div>
+                    <div className="text-xs text-[#8892a4] leading-relaxed line-clamp-2">{product.description}</div>
                   </button>
-                );
-              })}
-            </div>
-          </>
-        ) : (
-          <p className="text-xs text-[#4a5568] text-center">
-            {items.length === 0 ? "No marketplace items published yet." : `No installable canister matches "${query}"`}
-          </p>
-        )
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section>
+            <h3 className="text-[11px] font-medium text-[#4a5568] uppercase tracking-wider mb-3">Templates</h3>
+            {filteredTemplates.length === 0 ? (
+              <p className="text-xs text-[#4a5568] text-center">{templates?.length ? `No templates match "${query}".` : "No templates published yet."}</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredTemplates.map((template) => (
+                  <button
+                    key={template.id.toString()}
+                    onClick={() => navigate(`/market/template/${template.id.toString()}`)}
+                    className="text-left p-4 rounded-xl border border-[#1e2d47] bg-[#0d1526] hover:border-[#c084fc66] hover:-translate-y-0.5 transition-all duration-150"
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-10 h-10 rounded-lg bg-[#c084fc11] border border-[#c084fc33] text-[#c084fc] flex items-center justify-center"><FileCode2 size={17} /></div>
+                      <span className="text-sm font-semibold text-[#e2e8f0]">{template.title}</span>
+                    </div>
+                    <div className="text-xs text-[#8892a4] leading-relaxed line-clamp-2">{template.description}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
       )}
     </div>
   );
@@ -711,7 +714,7 @@ export default function Overview() {
         <InstalledCanisters job={job} refetch={refetch} />
       )}
 
-      <MarketplaceSection job={job} />
+      <MarketplaceSection />
 
       {(job.pending_question || job.error || job.final_message || job.llm_context) && (
         <div className="space-y-4">

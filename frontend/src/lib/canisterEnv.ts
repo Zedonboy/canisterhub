@@ -42,5 +42,5 @@ export function localIcHost(): string {
 }
 
 export function mainnetIcHost(): string {
-  return runtimeValue("IC_HOST_MAINNET") ?? "https://ic0.app";
+  return runtimeValue("IC_HOST_MAINNET") ?? "https://icp0.io";
 }

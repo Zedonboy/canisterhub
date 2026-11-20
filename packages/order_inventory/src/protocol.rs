@@ -38,8 +38,14 @@ struct PushDelivery {
     subscription_removed: bool,
 }
 
+/// Cycles attached to `send_project_notification`: the protocol backend makes
+/// one HTTPS outcall per Web Push subscription and the caller pays for them.
+/// The backend accepts only the exact price; the rest is refunded.
+const NOTIFICATION_CYCLES: u128 = 5_000_000_000;
+
 async fn notify_owner(project_id: String, protocol_id: Principal, notification: PushNotification) {
     let response = ic_cdk::call::Call::bounded_wait(protocol_id, "send_project_notification")
+        .with_cycles(NOTIFICATION_CYCLES)
         .with_args(&(project_id, notification))
         .await;
     match response {

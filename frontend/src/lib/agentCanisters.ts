@@ -74,7 +74,6 @@ export async function sendTestMessage(canisterId: string, network: string, text:
 }
 
 export interface AgentConfigSummary {
-  adminWebhookUrl: string | null;
   whatsappPhoneNumberId: string | null;
   systemPrompt: string | null;
   /** Managed platform or direct/BYOK provider identifier. */
@@ -100,7 +99,6 @@ export async function getAgentConfig(canisterId: string, network: string): Promi
   }
   const c = result.Ok;
   return {
-    adminWebhookUrl: optToNullable(c.admin_webhook_url),
     whatsappPhoneNumberId: optToNullable(c.whatsapp_phone_number_id),
     systemPrompt: optToNullable(c.system_prompt),
     llmProvider: optToNullable(c.llm_provider),
@@ -117,14 +115,12 @@ export async function getAgentConfig(canisterId: string, network: string): Promi
  * (the outer `[]` "not mentioned" state), distinct from an empty string
  * meaning "clear it". */
 export interface AgentConfigPatch {
-  adminWebhookUrl: string;
   whatsappPhoneNumberId: string;
   systemPrompt: string;
   llmProvider: string;
   llmModel: string;
   maxToolIterations: string;
   llmApiKey?: string | null;
-  adminWebhookSecret?: string | null;
   whatsappVerifyToken?: string | null;
   whatsappAppSecret?: string | null;
   whatsappAccessToken?: string | null;
@@ -160,9 +156,7 @@ export async function updateAgentConfig(canisterId: string, network: string, pat
     project_id: [],
     protocol_id: [],
     connector_principal: [],
-    admin_webhook_url: setOrClear(patch.adminWebhookUrl),
     system_prompt: setOrClear(patch.systemPrompt),
-    admin_webhook_secret: writeOnlyField(patch.adminWebhookSecret),
     whatsapp_verify_token: writeOnlyField(patch.whatsappVerifyToken),
     whatsapp_app_secret: writeOnlyField(patch.whatsappAppSecret),
     whatsapp_access_token: writeOnlyField(patch.whatsappAccessToken),

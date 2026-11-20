@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { Principal } from "@icp-sdk/core/principal";
-import { ChevronDown, PackagePlus } from "lucide-react";
+import { Check, ChevronDown, Copy, PackagePlus } from "lucide-react";
 import { Input, Label, Textarea } from "@/components/ui/Input";
 import { Toggle } from "@/components/ui/Toggle";
 import { Button } from "@/components/ui/Button";
@@ -232,6 +232,30 @@ function displayConfigValue(value: ConfigValue | undefined): string {
     return value.Vector.map((item) => String(vectorValueToRaw(item))).join(", ");
   }
   return "Unavailable";
+}
+
+function CopyValueButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard access can be denied; nothing useful to show.
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      className="flex-shrink-0 text-[#4a5568] hover:text-[#00d4ff] transition-colors"
+      title="Copy value"
+      aria-label="Copy value"
+    >
+      {copied ? <Check size={13} className="text-[#00e676]" /> : <Copy size={13} />}
+    </button>
+  );
 }
 
 interface FieldProps {
@@ -655,7 +679,10 @@ export function ConfigForm({ schema, initialValues, installedCanisters = {}, onS
                     {group.fields.map((field) => (
                       <div key={field.key} className="py-3 first:pt-0 last:pb-0">
                         <dt className="text-[10px] font-medium uppercase tracking-wide text-[#718096]">{field.label}</dt>
-                        <dd className="mt-1 break-all font-mono text-sm text-[#e2e8f0]">{displayConfigValue(initialValues[field.key])}</dd>
+                        <dd className="mt-1 flex items-start justify-between gap-2 font-mono text-sm text-[#e2e8f0]">
+                          <span className="break-all">{displayConfigValue(initialValues[field.key])}</span>
+                          {initialValues[field.key] !== undefined && <CopyValueButton value={displayConfigValue(initialValues[field.key])} />}
+                        </dd>
                         {field.description && <p className="mt-1 text-[10px] text-[#4a5568]">{field.description}</p>}
                       </div>
                     ))}

@@ -91,9 +91,37 @@ delegations or private keys directly:
 ## Web Push
 
 Web Push subscriptions and delivery are owned by the protocol backend. Project
-owners enable browser notifications from Settings; authorized project modules
+owners enable browser notifications from Settings and can use **Send test** to
+deliver a real Web Push notification to their own subscriptions through
+`push_send`; callers cannot send to another principal, and each principal gets one
+successful test send per 24 hours (a send counts only if the push service
+returned 2xx for a subscription, so failures can be retried). Authorized project modules
 send notifications through `send_project_notification`, which verifies project
 membership and delivers to the owner's saved browser subscriptions.
+
+## Co-owner devices
+
+An owner can add another principal as a device (`add_device`, up to 10; owner
+only). A device resolves to its owner at every project-ownership check, so it
+sees and manages the same projects, push subscriptions and token credits, and
+projects it creates belong to the owner. `remove_device` revokes that. The
+backend only records the authorisation: the browser (Account page,
+`frontend/src/lib/devices.ts`) adds or removes the principal as a controller on
+every canister the owner's projects track, because the owner, not the backend,
+controls those canisters. Marketplace publishing, purchases and vetKD stay tied
+to the individual signing-in principal.
+
+## Caller-funded cycles
+
+The backend does not subsidise outcalls. `send_project_notification`,
+`managed_ai_complete`, and `managed_ai_completion` require the calling canister
+to attach cycles (`Call::...with_cycles`); ingress callers cannot use them.
+The required amount is the worst-case price of the outcalls the call will make
+(plus 10% margin): one per Web Push subscription, one provider HTTPS outcall
+for DeepSeek/OpenAI/etc., or the flat 100B cycles the IC LLM canister charges.
+An under-funded call is rejected before any outcall, with the exact required
+amount in the error. Only the required amount is accepted; the rest is
+refunded. A notification with nothing to deliver costs nothing.
 
 ## Managed AI access
 

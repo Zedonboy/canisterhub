@@ -68,3 +68,6 @@ pocket-ic = "15.0.0"
 # Only for generating a real, validly-encoded vetKD transport key in tests —
 # see fake_transport_public_key() in tests/marketplace_tests.rs.
 rand = "0.8"
+# Assembles tests/proxy.wat, a canister that attaches cycles to a forwarded call
+# (ingress messages cannot carry cycles, so PocketIC needs a canister caller).
+wat = "1"

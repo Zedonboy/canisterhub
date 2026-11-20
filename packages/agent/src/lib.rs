@@ -241,19 +241,16 @@ async fn process_message_with_client_data(
 }
 
 // ---------------------------------------------------------------------------
-// HTTP webhook (administrative callback only - see admin.rs)
+// HTTP webhooks (WhatsApp and Telegram)
 // ---------------------------------------------------------------------------
 
-const ADMIN_WEBHOOK_PATH: &str = "/webhook/admin";
 const WHATSAPP_PATH: &str = "/webhook/whatsapp";
 const TELEGRAM_PATH: &str = "/webhook/telegram";
 
 /// First stop for every inbound HTTP request (a query call - see
 /// `connector/src/http.rs`'s doc comment for the full explanation of the
-/// IC's `http_request`/`http_request_update` split). This canister has
-/// exactly one HTTP endpoint, and it always mutates state (updates an
-/// `AdminRequest`, and typically triggers a reply to the customer) - so it
-/// always upgrades, never handled here.
+/// IC's `http_request`/`http_request_update` split). The channel webhooks
+/// always mutate state, so every POST upgrades instead of being handled here.
 #[ic_cdk::query]
 fn http_request(req: HttpRequest) -> HttpResponse {
     let (path, _) = http::path_and_query(&req.url);
@@ -262,7 +259,7 @@ fn http_request(req: HttpRequest) -> HttpResponse {
             Some(token) => whatsapp::verify_handshake(&req, &token),
             None => HttpResponse::text(503, "whatsapp_verify_token is not configured"),
         },
-        ("POST", ADMIN_WEBHOOK_PATH | WHATSAPP_PATH | TELEGRAM_PATH) => {
+        ("POST", WHATSAPP_PATH | TELEGRAM_PATH) => {
             HttpResponse::upgrade_to_update()
         }
         ("GET" | "HEAD", _) => assets::serve(&req),
@@ -270,10 +267,6 @@ fn http_request(req: HttpRequest) -> HttpResponse {
     }
 }
 
-/// Verifies and applies an administrative resolution (see
-/// `admin::handle_callback`), then relays its `result_message` to the
-/// customer through this canister's outbound channel implementation,
-/// independently of and without re-invoking the LLM.
 #[ic_cdk::update]
 async fn http_request_update(req: HttpRequest) -> HttpResponse {
     let (path, _) = http::path_and_query(&req.url);
@@ -282,34 +275,10 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
         req.method
     ));
     match (req.method.as_str(), path) {
-        ("POST", ADMIN_WEBHOOK_PATH) => handle_admin_callback(&req).await,
         ("POST", WHATSAPP_PATH) => handle_whatsapp(&req),
         ("POST", TELEGRAM_PATH) => handle_telegram(&req),
         _ => HttpResponse::not_found(),
     }
-}
-
-async fn handle_admin_callback(req: &HttpRequest) -> HttpResponse {
-    let signature = http::header(&req.headers, "X-Signature");
-    let updated = match admin::handle_callback(&req.body, signature) {
-        Ok(updated) => updated,
-        Err(e) => return HttpResponse::text(400, e),
-    };
-
-    if let Some(message) = &updated.result_message {
-        let customer = SessionKey {
-            channel: updated.channel,
-            session_id: updated.session_id.clone(),
-        };
-        if let Err(e) = outbound::reply_to_customer(&state::get_config(), &customer, message).await
-        {
-            log_error(format!(
-                "failed to relay admin callback #{} to customer: {e}",
-                updated.id
-            ));
-        }
-    }
-    HttpResponse::text(200, "ok")
 }
 
 fn store_and_process(payload: MessagePayload) {
@@ -384,11 +353,9 @@ async fn send_message(message: BusinessMessage) -> Result<(), String> {
     let caller = ic_cdk::api::msg_caller();
     let config = state::get_config();
     if caller == Principal::anonymous()
-        || (!ic_cdk::api::is_controller(&caller)
-            && config.inventory_canister_id != Some(caller)
-            && config.restaurant_canister_id != Some(caller))
+        || (!ic_cdk::api::is_controller(&caller) && !state::is_connected_canister(&caller))
     {
-        return Err("send_message is restricted to controllers and configured inventory or restaurant packages".to_string());
+        return Err("send_message is restricted to controllers and connected canisters".to_string());
     }
     if message.session_id.trim().is_empty() || message.session_id.len() > 512 {
         return Err("invalid customer session".to_string());
@@ -428,20 +395,17 @@ async fn send_message(message: BusinessMessage) -> Result<(), String> {
     Ok(())
 }
 
-/// Refreshes the project inventory identity used by the package-to-agent
-/// customer messaging boundary. The dashboard calls this after project
-/// canisters change; only a controller may replace the trusted package ID.
+/// Standard project-context refresh the dashboard calls on every canister.
+/// The agent keeps no per-package identities (any connected canister may
+/// message customers), so this only records the project id once.
 #[ic_cdk::update]
 fn update_project_context(context: ProjectContext) -> Result<(), String> {
     require_controller()?;
     let mut config = state::get_config();
-    config.inventory_canister_id = context.canister_for_package("order_inventory.wasm");
-    config.restaurant_canister_id = context.canister_for_package("restaurant.wasm");
-    state::set_config(config);
-    log_info(format!(
-        "project context refreshed inventory_configured={}",
-        state::get_config().inventory_canister_id.is_some()
-    ));
+    if config.project_id.is_none() && !context.project_id.trim().is_empty() {
+        config.project_id = Some(context.project_id);
+        state::set_config(config);
+    }
     Ok(())
 }
 

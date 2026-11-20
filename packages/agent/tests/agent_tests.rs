@@ -24,10 +24,8 @@ use agent::{
     ConfigUpdate, HttpRequest, HttpResponse, IncomingMessage,
 };
 use candid::{encode_one, CandidType, Principal};
-use hmac::{Hmac, Mac};
 use pocket_ic::common::rest::{CanisterHttpReply, CanisterHttpResponse, MockCanisterHttpResponse};
 use pocket_ic::{query_candid_as, update_candid_as, PocketIc, PocketIcBuilder};
-use sha2::Sha256;
 use std::collections::HashMap;
 
 #[derive(CandidType, serde::Deserialize, Clone, Debug)]
@@ -127,8 +125,6 @@ fn setup(config: Config) -> (PocketIc, Principal) {
         llm_api_key: Some(config.llm_api_key),
         max_output_tokens: Some(config.max_output_tokens),
         max_tool_iterations: Some(config.max_tool_iterations),
-        admin_webhook_url: Some(config.admin_webhook_url),
-        admin_webhook_secret: Some(config.admin_webhook_secret),
     };
     update_config(&pic, id, admin(), &update).unwrap();
     (pic, id)
@@ -235,7 +231,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
     let (pic, id) = setup(Config::default());
     let (schema,): (Vec<ReadonlySchemaField>,) =
         query_candid_as(&pic, id, admin(), "get_config_schema", ()).unwrap();
-    assert_eq!(schema.len(), 26);
+    assert_eq!(schema.len(), 23);
     let whatsapp = schema
         .iter()
         .find(|field| field.key == "whatsapp_webhook_url")
@@ -251,7 +247,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         .filter(|field| field.is_readonly == Some(false))
         .map(|field| field.key.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(editable.len(), 21);
+    assert_eq!(editable.len(), 19);
     for key in [
         "connected_canisters",
         "project_id",
@@ -263,7 +259,6 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         "whatsapp_verify_token",
         "telegram_bot_token",
         "mail_bridge_api_key",
-        "admin_webhook_secret",
     ] {
         assert!(editable.contains(&key), "missing dynamic config key {key}");
     }
@@ -291,7 +286,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
     assert!(matches!(
         system_prompt.default_value.as_ref(),
         Some(DynamicConfigValue::Text(value))
-            if value.contains("You are a customer support assistant")
+            if value.contains("customer support assistant")
     ));
 
     let (values,): (HashMap<String, DynamicConfigValue>,) =
@@ -308,7 +303,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
     assert!(matches!(
         values.get("system_prompt"),
         Some(DynamicConfigValue::Text(value))
-            if value.contains("You are a customer support assistant")
+            if value.contains("customer support assistant")
     ));
 
     let update = HashMap::from([
@@ -364,7 +359,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
     assert!(matches!(
         restored.get("system_prompt"),
         Some(DynamicConfigValue::Text(value))
-            if value.contains("You are a customer support assistant")
+            if value.contains("customer support assistant")
     ));
 
     assert!(matches!(
@@ -374,7 +369,6 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
     for (key, path) in [
         ("whatsapp_webhook_url", "/webhook/whatsapp"),
         ("telegram_webhook_url", "/webhook/telegram"),
-        ("admin_callback_webhook_url", "/webhook/admin"),
     ] {
         let Some(DynamicConfigValue::Text(value)) = values.get(key) else {
             panic!("missing {key}");
@@ -611,7 +605,7 @@ fn llm_context_is_readable_by_anyone_and_documents_dynamic_ai_methods() {
 }
 
 // ---------------------------------------------------------------------------
-// POST /webhook/admin: HTTP routing + HMAC verification
+// HTTP routing
 // ---------------------------------------------------------------------------
 
 fn http_req(method: &str, url: &str, headers: Vec<(String, String)>, body: Vec<u8>) -> HttpRequest {
@@ -624,9 +618,9 @@ fn http_req(method: &str, url: &str, headers: Vec<(String, String)>, body: Vec<u
 }
 
 #[test]
-fn admin_webhook_post_upgrades_to_update_call() {
+fn channel_webhook_post_upgrades_to_update_call() {
     let (pic, id) = setup(Config::default());
-    let req = http_req("POST", "/webhook/admin", vec![], b"{}".to_vec());
+    let req = http_req("POST", "/webhook/whatsapp", vec![], b"{}".to_vec());
     let (resp,): (HttpResponse,) =
         query_candid_as(&pic, id, Principal::anonymous(), "http_request", (req,)).unwrap();
     assert_eq!(resp.upgrade, Some(true));
@@ -676,17 +670,12 @@ fn unknown_http_paths_404() {
 }
 
 #[test]
-fn admin_webhook_callback_rejects_bad_signature_and_unknown_request() {
-    let secret = "admin-secret";
-    let (pic, id) = setup(Config {
-        admin_webhook_secret: Some(secret.to_string()),
-        ..Default::default()
-    });
-
-    let body = br#"{"request_id":1,"status":"approved","message":"done"}"#.to_vec();
-
-    // No signature at all.
-    let req = http_req("POST", "/webhook/admin", vec![], body.clone());
+fn removed_admin_webhook_path_is_not_served() {
+    let (pic, id) = setup(Config::default());
+    let req = http_req("POST", "/webhook/admin", vec![], b"{}".to_vec());
+    let (resp,): (HttpResponse,) =
+        query_candid_as(&pic, id, Principal::anonymous(), "http_request", (req.clone(),)).unwrap();
+    assert_ne!(resp.upgrade, Some(true));
     let (resp,): (HttpResponse,) = update_candid_as(
         &pic,
         id,
@@ -695,30 +684,7 @@ fn admin_webhook_callback_rejects_bad_signature_and_unknown_request() {
         (req,),
     )
     .unwrap();
-    assert_eq!(resp.status_code, 400);
-
-    // Correct signature, but no such AdminRequest exists yet.
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    mac.update(&body);
-    let sig = hex::encode(mac.finalize().into_bytes());
-    let req = http_req(
-        "POST",
-        "/webhook/admin",
-        vec![("X-Signature".to_string(), format!("sha256={sig}"))],
-        body,
-    );
-    let (resp,): (HttpResponse,) = update_candid_as(
-        &pic,
-        id,
-        Principal::anonymous(),
-        "http_request_update",
-        (req,),
-    )
-    .unwrap();
-    assert_eq!(
-        resp.status_code, 400,
-        "a well-signed callback for a nonexistent request id must still fail"
-    );
+    assert_eq!(resp.status_code, 404);
 }
 
 // ---------------------------------------------------------------------------

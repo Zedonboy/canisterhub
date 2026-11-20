@@ -18,14 +18,6 @@ export function formatMarketplacePrice(price: bigint): string {
   return `${formatTokenAmount(price, 8)} ICP`;
 }
 
-/** Every real marketplace item - the same catalog `search_marketplace`/
- * `deploy_marketplace_item` (the orchestrator's AI-driven tools) search over,
- * now also browsable directly from the dashboard. */
-export async function listMarketplaceItems(): Promise<MarketplaceItem[]> {
-  const actor = await getMarketplaceActor();
-  return actor.list_marketplace_items();
-}
-
 /** One real marketplace item by id - `null` if it doesn't exist. Used by
  * the product detail page (`/project/:id/overview/product/:product_id`)
  * reached from a Marketplace card. */

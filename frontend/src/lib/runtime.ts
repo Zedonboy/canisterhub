@@ -31,6 +31,7 @@ import { getCanisterMetadata } from "./canisterMetadata";
 import type { CanisterMetadata } from "./candid/canisterMetadata";
 import { hasModuleConfig } from "./moduleConfig";
 import { readPublicInfo } from "./canisterStats";
+import { coOwnerPrincipals } from "./devices";
 
 /** Maps the uploaded module's own self-declared `canister_metadata!`
  * `canister_type` (if any - see `canisterMetadata.ts::getCanisterMetadata`)
@@ -101,9 +102,9 @@ async function cyclesLedgerActor(network: string): Promise<CyclesLedgerService> 
   });
 }
 
-function cyclesLedgerErrorMessage(error: CyclesLedgerCreateCanisterError): string {
+function cyclesLedgerErrorMessage(error: CyclesLedgerCreateCanisterError, cyclesBudget: bigint): string {
   if ("InsufficientFunds" in error) {
-    return `Insufficient Cycles Ledger balance: ${error.InsufficientFunds.balance} cycles available; at least ${INITIAL_CANISTER_CYCLES} cycles plus the ledger fee are required.`;
+    return `Insufficient Cycles Ledger balance: ${error.InsufficientFunds.balance} cycles available; at least ${cyclesBudget} cycles plus the ledger fee are required.`;
   }
   if ("FailedToCreate" in error) return `Cycles Ledger could not create the canister: ${error.FailedToCreate.error}`;
   if ("GenericError" in error) return `Cycles Ledger error ${error.GenericError.error_code}: ${error.GenericError.message}`;
@@ -145,12 +146,13 @@ export async function topUpCanister(canisterId: string, network: string, amount:
 async function createCanisterWithCyclesLedger(
   network: string,
   controllers: Principal[],
+  cyclesBudget: bigint,
 ): Promise<Principal> {
   const ledger = await cyclesLedgerActor(network);
   const result = await ledger.create_canister({
     from_subaccount: [],
     created_at_time: [],
-    amount: INITIAL_CANISTER_CYCLES,
+    amount: cyclesBudget,
     creation_args: [{
       settings: [{
         controllers: [controllers],
@@ -168,7 +170,7 @@ async function createCanisterWithCyclesLedger(
   if ("Duplicate" in result.Err && result.Err.Duplicate.canister_id[0]) {
     return result.Err.Duplicate.canister_id[0];
   }
-  throw new Error(cyclesLedgerErrorMessage(result.Err));
+  throw new Error(cyclesLedgerErrorMessage(result.Err, cyclesBudget));
 }
 
 type InstallMode = Parameters<ManagementService["install_code"]>[0]["mode"];
@@ -233,8 +235,9 @@ export async function createAndInstallCanisterFromWasm(
   wasmModule: Uint8Array,
   controllers: Principal[],
   initArg: Uint8Array,
+  cyclesBudget: bigint = INITIAL_CANISTER_CYCLES,
 ): Promise<Principal> {
-  const canisterId = await createCanisterWithCyclesLedger(network, controllers);
+  const canisterId = await createCanisterWithCyclesLedger(network, controllers, cyclesBudget);
   const actor = await managementActor(network, canisterId);
   await installWasm(actor, canisterId, wasmModule, { install: null }, initArg);
   return canisterId;
@@ -286,7 +289,8 @@ export async function deployWasmRuntime(label: string, wasmModule: Uint8Array, n
   // fails before cycles are spent on the new canister.
   const initArg = await projectInitArg(projectId);
   const orchestrator = orchestratorPrincipal();
-  const controllers = orchestrator ? [userPrincipal, orchestrator] : [userPrincipal];
+  const owners = await coOwnerPrincipals(userPrincipal);
+  const controllers = orchestrator ? [...owners, orchestrator] : owners;
   const canisterId = await createAndInstallCanisterFromWasm(
     network,
     wasmModule,

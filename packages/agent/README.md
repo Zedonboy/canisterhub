@@ -32,15 +32,16 @@ canister installs with `Config::default()` and a controller can complete setup
 through the dynamic configuration API.
 
 The grouped dynamic-configuration surface exposes every runtime setting,
-including AI, WhatsApp, Telegram, email, administrative escalation, project
+including AI, WhatsApp, Telegram, email, project
 integrations, and `connected_canisters`. Adding a connected canister discovers
 its `ai_*` methods; removing it removes those tools from subsequent LLM turns.
 Secret fields are write-only and never returned by `get_config`. Browser push
 is routed through the CanisterHub protocol, so the agent no longer needs or
-exposes a notification-canister principal. Project context also identifies
-the installed restaurant package as an authorized sender for verified order
-receipts.
-The agent canister ID and the WhatsApp, Telegram, administrative callback, and
+exposes a notification-canister principal. Any connected `ai_*` canister (and
+any controller) may call `send_message` to deliver a customer-facing message,
+for example a verified order receipt; the agent keeps no package-specific
+sender list.
+The agent canister ID and the WhatsApp, Telegram, and
 mail ingress endpoints remain read-only. The older controller-only
 `get_runtime_config`/`update_config` methods remain available for compatibility.
 

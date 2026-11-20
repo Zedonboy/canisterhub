@@ -45,13 +45,6 @@ pub struct Config {
     /// Dynamic config exposes the compiled principal as this field's default.
     #[serde(default)]
     pub protocol_id: Option<Principal>,
-    /// Project inventory package allowed to send customer-facing business
-    /// messages (for example, verified payment receipts).
-    #[serde(default)]
-    pub inventory_canister_id: Option<Principal>,
-    /// Restaurant package allowed to send customer-facing order receipts.
-    #[serde(default)]
-    pub restaurant_canister_id: Option<Principal>,
     pub mail_bridge_principal: Option<Principal>,
     pub whatsapp_verify_token: Option<String>,
     pub whatsapp_app_secret: Option<String>,
@@ -98,22 +91,6 @@ pub struct Config {
     /// storage growth from a model that won't stop calling tools. Defaults
     /// to `DEFAULT_MAX_TOOL_ITERATIONS` if unset.
     pub max_tool_iterations: Option<u8>,
-
-    /// Base URL an administrative system's callback listens on -
-    /// `request_admin_action`-triggered requests are POSTed to
-    /// `<this>/admin/requests` (see `admin.rs`). Unset = administrative
-    /// escalation is disabled entirely: `request_admin_action` returns an
-    /// error to the model instead of silently doing nothing.
-    pub admin_webhook_url: Option<String>,
-    /// Shared HMAC-SHA256 key used both directions: signing this
-    /// canister's outbound request to `admin_webhook_url` (so the receiving
-    /// system can verify it really came from here), and verifying the
-    /// inbound callback to `POST /webhook/admin` (so this canister only
-    /// acts on callbacks the operator's own system sent). Using one key
-    /// both ways is the simplest correct setup for a template; splitting it
-    /// into two independent keys is a straightforward hardening step for a
-    /// production deployment - see README.md's "Hardening ideas".
-    pub admin_webhook_secret: Option<String>,
 }
 
 /// `update_config`'s argument - see `Config`'s doc comment. Semantics
@@ -139,8 +116,6 @@ pub struct ConfigUpdate {
     pub llm_api_key: Option<Option<String>>,
     pub max_output_tokens: Option<Option<u32>>,
     pub max_tool_iterations: Option<Option<u8>>,
-    pub admin_webhook_url: Option<Option<String>>,
-    pub admin_webhook_secret: Option<Option<String>>,
 }
 
 impl Config {
@@ -198,12 +173,6 @@ impl Config {
         }
         if let Some(v) = update.max_tool_iterations {
             self.max_tool_iterations = v;
-        }
-        if let Some(v) = update.admin_webhook_url {
-            self.admin_webhook_url = v;
-        }
-        if let Some(v) = update.admin_webhook_secret {
-            self.admin_webhook_secret = v;
         }
         self
     }

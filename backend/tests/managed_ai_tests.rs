@@ -157,14 +157,22 @@ fn managed_deepseek_completion_charges_the_controller_account_without_a_project(
         max_output_tokens: Some(64),
         temperature: Some(0.0),
     };
-    let call_id = pic
-        .submit_call(
-            id,
-            agent,
-            "managed_ai_completion",
-            candid::encode_args((request,)).unwrap(),
-        )
-        .unwrap();
+    // Ingress messages cannot carry cycles, so a proxy canister controlled by
+    // the same owner forwards the call with cycles attached.
+    let proxy = pic.create_canister_with_settings(Some(owner()), None);
+    pic.add_cycles(proxy, 1_000_000_000_000);
+    pic.install_canister(
+        proxy,
+        wat::parse_str(include_str!("proxy.wat")).unwrap(),
+        vec![],
+        Some(owner()),
+    );
+    let mut payload = id.as_slice().to_vec();
+    assert_eq!(payload.len(), 10);
+    payload.extend(candid::encode_args((request,)).unwrap());
+    let balance_before = pic.cycle_balance(id);
+    let call_id = pic.submit_call(proxy, owner(), "go", payload).unwrap();
+    let _ = agent;
     let mut requests = Vec::new();
     for _ in 0..10 {
         pic.tick();
@@ -204,6 +212,44 @@ fn managed_deepseek_completion_charges_the_controller_account_without_a_project(
     );
     assert_eq!(response.usage.total_tokens, 5);
     assert!(response.remaining_token_credits < 10_000);
+    // The caller's cycles paid for the outcall: the backend ends up ahead, not
+    // behind, and the unused part of the 20B attached was refunded.
+    let accepted = pic.cycle_balance(id).saturating_sub(balance_before);
+    assert!(accepted > 0, "backend should keep the cycles it accepted");
+    assert!(
+        pic.cycle_balance(proxy) > 1_000_000_000_000 - 20_000_000_000,
+        "surplus cycles should be refunded to the caller"
+    );
+}
+
+#[test]
+fn managed_completion_without_attached_cycles_is_rejected_before_any_outcall() {
+    let (pic, id, agent) = setup();
+    grant_credits(&pic, id, 10_000);
+    let update = ManagedAiConfigUpdate {
+        enabled: true,
+        provider: "deepseek".to_string(),
+        model: "deepseek-chat".to_string(),
+        api_key: Some("not-a-real-key".to_string()),
+        clear_api_key: false,
+    };
+    let (configured,): (Result<ManagedAiStatus, String>,) =
+        update_candid_as(&pic, id, controller(), "configure_managed_ai", (update,)).unwrap();
+    configured.unwrap();
+    let request = ManagedAiCompletionRequest {
+        service: ManagedAiService::DeepSeek,
+        model: None,
+        messages_json: serde_json::to_string(&vec![ic_rig::Message::user("hello")]).unwrap(),
+        tools_json: "[]".to_string(),
+        max_output_tokens: Some(64),
+        temperature: Some(0.0),
+    };
+    let (result,): (Result<ManagedAiCompletionResponse, String>,) =
+        update_candid_as(&pic, id, agent, "managed_ai_completion", (request,)).unwrap();
+    assert!(result
+        .unwrap_err()
+        .contains("insufficient cycles attached"));
+    assert!(pic.get_canister_http().is_empty());
 }
 
 #[test]

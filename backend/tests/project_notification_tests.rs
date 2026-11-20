@@ -1,7 +1,10 @@
 //! End-to-end tests for the backend's project-scoped notification gateway.
 
-use backend::{CanisterInfo, CanisterKind, PushDelivery, PushNotification};
+use backend::{CanisterInfo, CanisterKind, PushDelivery, PushNotification, PushSubscription};
 use candid::{decode_one, encode_args, CandidType, Principal};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use p256::elliptic_curve::sec1::ToEncodedPoint;
+use pocket_ic::common::rest::{CanisterHttpReply, CanisterHttpResponse, MockCanisterHttpResponse};
 use pocket_ic::{PocketIc, PocketIcBuilder};
 
 const BACKEND_WASM: &[u8] = include_bytes!(concat!(
@@ -108,4 +111,129 @@ fn unregistered_caller_cannot_use_a_project_id() {
     assert!(result
         .unwrap_err()
         .contains("caller is not a canister registered in this project"));
+}
+
+#[test]
+fn authenticated_user_can_send_test_to_own_subscriptions() {
+    let (pic, backend_id, _package_id, owner) = setup();
+    let result: Result<Vec<PushDelivery>, String> = update(
+        &pic,
+        backend_id,
+        owner,
+        "push_send",
+        (owner, notification()),
+    );
+    assert_eq!(result.unwrap(), Vec::new());
+}
+
+#[test]
+fn user_cannot_send_test_to_another_principal() {
+    let (pic, backend_id, _package_id, owner) = setup();
+    let result: Result<Vec<PushDelivery>, String> = update(
+        &pic,
+        backend_id,
+        owner,
+        "push_send",
+        (principal(99), notification()),
+    );
+    assert!(result
+        .unwrap_err()
+        .contains("notification recipient must match the authenticated caller"));
+}
+
+#[test]
+fn anonymous_user_cannot_send_test_push() {
+    let (pic, backend_id, _package_id, _owner) = setup();
+    let result: Result<Vec<PushDelivery>, String> = update(
+        &pic,
+        backend_id,
+        Principal::anonymous(),
+        "push_send",
+        (Principal::anonymous(), notification()),
+    );
+    assert!(result
+        .unwrap_err()
+        .contains("anonymous callers may not send test push notifications"));
+}
+
+fn subscribe_owner(pic: &PocketIc, backend_id: Principal, owner: Principal) {
+    let vapid: Result<Vec<u8>, String> = update(pic, backend_id, owner, "push_ensure_vapid", ());
+    vapid.unwrap();
+    let secret = p256::SecretKey::random(&mut rand::thread_rng());
+    let subscription = PushSubscription {
+        endpoint: "https://push.example/send/1".to_string(),
+        p256dh: URL_SAFE_NO_PAD.encode(secret.public_key().to_encoded_point(false).as_bytes()),
+        auth: URL_SAFE_NO_PAD.encode([7u8; 16]),
+    };
+    let subscribed: Result<(), String> =
+        update(pic, backend_id, owner, "push_subscribe", (owner, subscription));
+    subscribed.unwrap();
+}
+
+/// Submits `push_send`, answers the single push-service outcall with `status`,
+/// and returns the call's result.
+fn push_send_with_push_service_status(
+    pic: &PocketIc,
+    backend_id: Principal,
+    owner: Principal,
+    status: u16,
+) -> Result<Vec<PushDelivery>, String> {
+    let call_id = pic
+        .submit_call(
+            backend_id,
+            owner,
+            "push_send",
+            encode_args((owner, notification())).unwrap(),
+        )
+        .unwrap();
+    let mut requests = Vec::new();
+    for _ in 0..10 {
+        pic.tick();
+        requests = pic.get_canister_http();
+        if !requests.is_empty() {
+            break;
+        }
+    }
+    if requests.is_empty() {
+        // Rejected before any outcall (e.g. cooldown).
+        return decode_one(&pic.await_call(call_id).unwrap()).unwrap();
+    }
+    pic.mock_canister_http_response(MockCanisterHttpResponse {
+        subnet_id: requests[0].subnet_id,
+        request_id: requests[0].request_id,
+        response: CanisterHttpResponse::CanisterHttpReply(CanisterHttpReply {
+            status,
+            headers: vec![],
+            body: vec![],
+        }),
+        additional_responses: vec![],
+    });
+    decode_one(&pic.await_call(call_id).unwrap()).unwrap()
+}
+
+#[test]
+fn test_push_is_limited_to_one_success_per_24_hours() {
+    let (pic, backend_id, _package_id, owner) = setup();
+    subscribe_owner(&pic, backend_id, owner);
+
+    // A push-service error does not start the cooldown, so it can be retried.
+    let failed = push_send_with_push_service_status(&pic, backend_id, owner, 500).unwrap();
+    assert_eq!(failed[0].status, Some(500));
+
+    let sent = push_send_with_push_service_status(&pic, backend_id, owner, 201).unwrap();
+    assert_eq!(sent[0].status, Some(201));
+
+    // Now rate limited, with no outcall made.
+    let limited = push_send_with_push_service_status(&pic, backend_id, owner, 201);
+    assert!(limited.unwrap_err().contains("try again in about 24 hour"));
+
+    pic.advance_time(std::time::Duration::from_secs(23 * 3600));
+    pic.tick();
+    let still_limited = push_send_with_push_service_status(&pic, backend_id, owner, 201);
+    assert!(still_limited.unwrap_err().contains("try again in about 1 hour"));
+
+    pic.advance_time(std::time::Duration::from_secs(3600 + 1));
+    pic.tick();
+    let again = push_send_with_push_service_status(&pic, backend_id, owner, 201).unwrap();
+    assert_eq!(again[0].status, Some(201));
 }

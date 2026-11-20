@@ -35,7 +35,6 @@ export interface ConversationState {
 export interface AgentConfigPublic {
   project_id: [] | [string];
   protocol_id: [] | [Principal];
-  admin_webhook_url: [] | [string];
   whatsapp_phone_number_id: [] | [string];
   system_prompt: [] | [string];
   llm_provider: [] | [string];
@@ -51,9 +50,7 @@ export interface AgentConfigPublic {
 export interface AgentConfigUpdate {
   project_id: [] | [[] | [string]];
   protocol_id: [] | [[] | [Principal]];
-  admin_webhook_url: [] | [[] | [string]];
   system_prompt: [] | [[] | [string]];
-  admin_webhook_secret: [] | [[] | [string]];
   whatsapp_verify_token: [] | [[] | [string]];
   whatsapp_app_secret: [] | [[] | [string]];
   whatsapp_access_token: [] | [[] | [string]];
@@ -92,7 +89,6 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
   const AgentConfigPublic = IDL.Record({
     project_id: IDL.Opt(IDL.Text),
     protocol_id: IDL.Opt(IDL.Principal),
-    admin_webhook_url: IDL.Opt(IDL.Text),
     whatsapp_phone_number_id: IDL.Opt(IDL.Text),
     system_prompt: IDL.Opt(IDL.Text),
     llm_provider: IDL.Opt(IDL.Text),
@@ -103,9 +99,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
   const AgentConfigUpdate = IDL.Record({
     project_id: IDL.Opt(IDL.Opt(IDL.Text)),
     protocol_id: IDL.Opt(IDL.Opt(IDL.Principal)),
-    admin_webhook_url: IDL.Opt(IDL.Opt(IDL.Text)),
     system_prompt: IDL.Opt(IDL.Opt(IDL.Text)),
-    admin_webhook_secret: IDL.Opt(IDL.Opt(IDL.Text)),
     whatsapp_verify_token: IDL.Opt(IDL.Opt(IDL.Text)),
     whatsapp_app_secret: IDL.Opt(IDL.Opt(IDL.Text)),
     whatsapp_access_token: IDL.Opt(IDL.Opt(IDL.Text)),

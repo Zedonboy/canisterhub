@@ -89,3 +89,21 @@ export async function disablePushNotifications(): Promise<void> {
   if ("Err" in result) throw new Error(result.Err);
   await subscription.unsubscribe();
 }
+
+
+/** Sends a real Web Push notification to the signed-in caller's subscriptions. */
+export async function sendTestPushNotification(): Promise<void> {
+  const actor = await getBackendActor();
+  const principal = await resolveIdentity().then((identity) => identity.getPrincipal());
+  const result = await actor.push_send(principal, {
+    title: "CanisterHub test",
+    body: "Notifications are enabled for this browser.",
+    url: "/",
+  });
+  if ("Err" in result) throw new Error(result.Err);
+  if (result.Ok.length === 0) {
+    throw new Error("No browser subscriptions were found. Disable and enable notifications, then try again.");
+  }
+  const failure = result.Ok.find((delivery) => delivery.error);
+  if (failure?.error) throw new Error(failure.error);
+}

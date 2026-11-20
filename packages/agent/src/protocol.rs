@@ -29,6 +29,11 @@ struct PushDelivery {
     subscription_removed: bool,
 }
 
+/// Cycles attached to `send_project_notification`: the protocol backend makes
+/// one HTTPS outcall per Web Push subscription and the caller pays for them.
+/// The backend accepts only the exact price; the rest is refunded.
+const NOTIFICATION_CYCLES: u128 = 5_000_000_000;
+
 /// Best-effort owner notification routed through the protocol. Missing
 /// project configuration or delivery failures never fail customer messaging.
 pub async fn notify_owner(config: &crate::Config, title: &str, body: &str, url: &str) {
@@ -48,6 +53,7 @@ pub async fn notify_owner(config: &crate::Config, title: &str, body: &str, url: 
         url: url.to_string(),
     };
     let response = ic_cdk::call::Call::bounded_wait(protocol, "send_project_notification")
+        .with_cycles(NOTIFICATION_CYCLES)
         .with_args(&(project_id.to_string(), notification))
         .await;
     match response {

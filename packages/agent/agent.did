@@ -1,16 +1,12 @@
 // A request to do something this canister's tools deliberately cannot do
-// themselves - created by the `request_admin_action` tool (see `tools.rs`),
-// POSTed to `Config.admin_webhook_url` (see `admin.rs`), and updated in
-// place when `POST /webhook/admin` calls back with a resolution.
+// themselves - created by the `request_admin_action` tool (see `tools.rs`)
+// and handled by a human operator from the inbox.
 type AdminRequest = record {
   id : nat64;
   status : AdminRequestStatus;
   updated_at : nat64;
   session_id : text;
-  // Set once `POST /webhook/admin` resolves this request - the text
-  // relayed back to the customer via `connector.send_message` verbatim
-  // (see `admin.rs::handle_callback`'s doc comment on why it's sent
-  // as-is rather than run back through the LLM).
+  // Unused: tickets are completed by an operator, not resolved by a callback.
   result_message : opt text;
   // Free-text, model-chosen category (e.g. `"refund"`,
   // `"account_deletion"`, `"escalate"`) - see `tools.rs`'s doc comment on
@@ -90,12 +86,6 @@ type Config = record {
   protocol_id : opt principal;
   telegram_secret_token : opt text;
   mail_bridge_api_key : opt text;
-  // Base URL an administrative system's callback listens on -
-  // `request_admin_action`-triggered requests are POSTed to
-  // `<this>/admin/requests` (see `admin.rs`). Unset = administrative
-  // escalation is disabled entirely: `request_admin_action` returns an
-  // error to the model instead of silently doing nothing.
-  admin_webhook_url : opt text;
   // The system prompt prepended to every conversation - this is the main
   // thing a business customizes: persona, tone, what the assistant is
   // for, and (critically) an explicit statement of what it *can't* do
@@ -105,15 +95,6 @@ type Config = record {
   mail_bridge_url : opt text;
   whatsapp_access_token : opt text;
   whatsapp_verify_token : opt text;
-  // Shared HMAC-SHA256 key used both directions: signing this
-  // canister's outbound request to `admin_webhook_url` (so the receiving
-  // system can verify it really came from here), and verifying the
-  // inbound callback to `POST /webhook/admin` (so this canister only
-  // acts on callbacks the operator's own system sent). Using one key
-  // both ways is the simplest correct setup for a template; splitting it
-  // into two independent keys is a straightforward hardening step for a
-  // production deployment - see README.md's "Hardening ideas".
-  admin_webhook_secret : opt text;
   // `managed` routes through CanisterHub's backend and selects IC LLM or
   // DeepSeek from `llm_model`. `openai`, `anthropic`, and `deepseek` call
   // the provider directly with the SME's own `llm_api_key`. Legacy
@@ -178,12 +159,10 @@ type ConfigUpdate = record {
   protocol_id : opt opt principal;
   telegram_secret_token : opt opt text;
   mail_bridge_api_key : opt opt text;
-  admin_webhook_url : opt opt text;
   system_prompt : opt opt text;
   mail_bridge_url : opt opt text;
   whatsapp_access_token : opt opt text;
   whatsapp_verify_token : opt opt text;
-  admin_webhook_secret : opt opt text;
   llm_provider : opt opt text;
   whatsapp_app_secret : opt opt text;
   max_tool_iterations : opt opt nat8;
@@ -373,15 +352,9 @@ service : (ProjectContext) -> {
   get_stats : () -> (AgentStats) query;
   // First stop for every inbound HTTP request (a query call - see
   // `connector/src/http.rs`'s doc comment for the full explanation of the
-  // IC's `http_request`/`http_request_update` split). This canister has
-  // exactly one HTTP endpoint, and it always mutates state (updates an
-  // `AdminRequest`, and typically triggers a reply to the customer) - so it
-  // always upgrades, never handled here.
+  // IC's `http_request`/`http_request_update` split). The channel webhooks
+  // always mutate state, so every POST upgrades instead of being handled here.
   http_request : (HttpRequest) -> (HttpResponse) query;
-  // Verifies and applies an administrative resolution (see
-  // `admin::handle_callback`), then relays its `result_message` to the
-  // customer through this canister's outbound channel implementation,
-  // independently of and without re-invoking the LLM.
   http_request_update : (HttpRequest) -> (HttpResponse);
   // Newest-first, paginated via `offset`/`limit`.
   list_admin_requests : (nat64, nat64) -> (Result_6) query;

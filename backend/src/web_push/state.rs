@@ -8,6 +8,8 @@ const SUBSCRIPTIONS_MEMORY_ID: ic_stable_structures::memory_manager::MemoryId =
     ic_stable_structures::memory_manager::MemoryId::new(19);
 const VAPID_MEMORY_ID: ic_stable_structures::memory_manager::MemoryId =
     ic_stable_structures::memory_manager::MemoryId::new(20);
+const TEST_SEND_MEMORY_ID: ic_stable_structures::memory_manager::MemoryId =
+    ic_stable_structures::memory_manager::MemoryId::new(21);
 
 #[derive(Clone, Debug, Default, candid::CandidType, serde::Serialize, serde::Deserialize)]
 struct PushSubscriptions(Vec<PushSubscription>);
@@ -49,6 +51,15 @@ thread_local! {
         RefCell::new(StableBTreeMap::init(
             MEMORY_MANAGER.with(|manager| manager.borrow().get(SUBSCRIPTIONS_MEMORY_ID))
         ));
+    /// Time (ns) of each principal's last successful self-service test push.
+    static LAST_TEST_SEND: RefCell<StableBTreeMap<Principal, u64, Memory>> =
+        RefCell::new(StableBTreeMap::init(
+            MEMORY_MANAGER.with(|manager| manager.borrow().get(TEST_SEND_MEMORY_ID))
+        ));
+    /// Principals with a test push in flight, so two concurrent calls cannot
+    /// both pass the cooldown check before either records its success.
+    static TEST_SEND_IN_FLIGHT: RefCell<std::collections::BTreeSet<Principal>> =
+        const { RefCell::new(std::collections::BTreeSet::new()) };
     static VAPID_CONFIG: RefCell<StableCell<VapidConfig, Memory>> =
         RefCell::new(StableCell::init(
             MEMORY_MANAGER.with(|manager| manager.borrow().get(VAPID_MEMORY_ID)),
@@ -140,4 +151,21 @@ pub fn remove_if_unchanged(principal: Principal, sent: &PushSubscription) -> boo
         }
         true
     })
+}
+
+pub fn last_test_send(principal: &Principal) -> Option<u64> {
+    LAST_TEST_SEND.with(|map| map.borrow().get(principal))
+}
+
+pub fn record_test_send(principal: Principal, now: u64) {
+    LAST_TEST_SEND.with(|map| map.borrow_mut().insert(principal, now));
+}
+
+/// Returns false when a test push for `principal` is already in flight.
+pub fn begin_test_send(principal: Principal) -> bool {
+    TEST_SEND_IN_FLIGHT.with(|set| set.borrow_mut().insert(principal))
+}
+
+pub fn end_test_send(principal: &Principal) {
+    TEST_SEND_IN_FLIGHT.with(|set| set.borrow_mut().remove(principal));
 }

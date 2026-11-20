@@ -21,6 +21,7 @@ import { getModuleConfigSchema, setModuleConfig } from "./moduleConfig";
 import { findPackageInfoForRelease, packageShaHex, projectPackageCanistersByName, recordProjectPackageInstallation } from "./packageRegistry";
 import { encodeProjectContext } from "./candid/agentInit";
 import { createAndInstallCanisterFromWasm } from "./runtime";
+import { coOwnerPrincipals } from "./devices";
 
 async function managementActor(network: string): Promise<ManagementService> {
   const agent = await getAgent(network);
@@ -102,7 +103,8 @@ export async function deployMarketplaceItem(item: MarketplaceItem, network: stri
   });
 
   const orchestrator = orchestratorPrincipal();
-  const controllers = orchestrator ? [userPrincipal, orchestrator] : [userPrincipal];
+  const owners = await coOwnerPrincipals(userPrincipal);
+  const controllers = orchestrator ? [...owners, orchestrator] : owners;
   await actor.update_settings({
     canister_id: canisterId,
     settings: { controllers: [controllers], log_visibility: [{ controllers: null }] },
@@ -148,8 +150,15 @@ export async function deployMarketplaceItem(item: MarketplaceItem, network: stri
 /** Deploys a free official package directly from the backend package-info
  * registry. The registry URL and SHA are the source of truth for this flow;
  * it does not consult MarketplaceItem download URLs. */
-export async function deployPackageInfo(pkg: PackageInfo, network: string, projectId: string, userPrincipal: Principal): Promise<DeployedCanister> {
-  const wasm = await fetchVerifiedPackageWasm(pkg);
+export async function deployPackageInfo(
+  pkg: PackageInfo,
+  network: string,
+  projectId: string,
+  userPrincipal: Principal,
+  verifiedWasm?: Uint8Array,
+  cyclesBudget?: bigint,
+): Promise<DeployedCanister> {
+  const wasm = verifiedWasm ?? await fetchVerifiedPackageWasm(pkg);
   const project = await getProject(projectId);
   if (!project) throw new Error(`Project ${projectId} was not found`);
   const initArg = encodeProjectContext({
@@ -157,8 +166,9 @@ export async function deployPackageInfo(pkg: PackageInfo, network: string, proje
     packageCanisters: await projectPackageCanistersByName(project),
   });
   const orchestrator = orchestratorPrincipal();
-  const controllers = orchestrator ? [userPrincipal, orchestrator] : [userPrincipal];
-  const canisterId = await createAndInstallCanisterFromWasm(network, wasm, controllers, initArg);
+  const owners = await coOwnerPrincipals(userPrincipal);
+  const controllers = orchestrator ? [...owners, orchestrator] : owners;
+  const canisterId = await createAndInstallCanisterFromWasm(network, wasm, controllers, initArg, cyclesBudget);
 
   try {
     const schema = await getModuleConfigSchema(canisterId.toText(), network);

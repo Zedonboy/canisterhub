@@ -1,7 +1,7 @@
 # Fused agent and connector
 
 This canister owns WhatsApp, Telegram, and mail ingress/egress, conversation
-history, the configured LLM, administrative escalation, and dynamically
+history, the configured LLM, ticket escalation, and dynamically
 discovered business tools.
 
 Controllers register business canisters through the dynamic configuration's

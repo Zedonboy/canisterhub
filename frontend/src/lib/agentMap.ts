@@ -82,14 +82,12 @@ export async function loadAgentMap(project: Project): Promise<AgentMapData> {
  * see `candid/agentCanister.ts`'s own doc comment on the three-state
  * convention. Used by every wire/unwire function below so none of them
  * ever risk touching a field the user didn't ask to change (in particular:
- * never the write-only `llm_api_key`/`admin_webhook_secret`). */
+ * never the write-only `llm_api_key`). */
 function untouchedAgentFields() {
   return {
     project_id: [] as [] | [[] | [string]],
     protocol_id: [] as [] | [[] | [Principal]],
-    admin_webhook_url: [] as [] | [[] | [string]],
     system_prompt: [] as [] | [[] | [string]],
-    admin_webhook_secret: [] as [] | [[] | [string]],
     whatsapp_verify_token: [] as [] | [[] | [string]],
     whatsapp_app_secret: [] as [] | [[] | [string]],
     whatsapp_access_token: [] as [] | [[] | [string]],

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Loader2, Plus, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, Plus, Settings2, Sparkles } from "lucide-react";
 import { Principal } from "@icp-sdk/core/principal";
 import { Dialog, DialogHeader, DialogContent } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
+import { Input, Label } from "@/components/ui/Input";
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { listMyProjects, type Project } from "@/lib/backend";
 import { type Product } from "@/lib/products";
@@ -16,6 +17,16 @@ const NETWORK_BADGE: Record<string, "green" | "amber" | "gray"> = {
   ic: "green",
   local: "gray",
 };
+const CYCLES_PER_TCYCLE = 1_000_000_000_000n;
+
+function parseTcycles(value: string): bigint | null {
+  const match = value.trim().match(/^(\d+)(?:\.(\d{1,12}))?$/);
+  if (!match) return null;
+  const whole = BigInt(match[1]);
+  const fraction = BigInt((match[2] ?? "").padEnd(12, "0"));
+  const cycles = whole * CYCLES_PER_TCYCLE + fraction;
+  return cycles > 0n ? cycles : null;
+}
 
 interface InstallProductDialogProps {
   open: boolean;
@@ -31,6 +42,8 @@ export function InstallProductDialog({ open, onClose, product }: InstallProductD
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [installingProjectId, setInstallingProjectId] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [cyclesBudgetT, setCyclesBudgetT] = useState("2");
   const navigate = useNavigate();
   const { principal } = useAuth();
 
@@ -39,6 +52,8 @@ export function InstallProductDialog({ open, onClose, product }: InstallProductD
     setProjects(null);
     setLoadError(null);
     setInstallingProjectId(null);
+    setShowSettings(false);
+    setCyclesBudgetT("2");
     listMyProjects()
       .then(setProjects)
       .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)));
@@ -49,6 +64,11 @@ export function InstallProductDialog({ open, onClose, product }: InstallProductD
       toast.error("Not signed in", "Sign in again and retry.");
       return;
     }
+    const cyclesBudget = parseTcycles(cyclesBudgetT);
+    if (cyclesBudget === null) {
+      toast.error("Check the cycles budget", "Enter a positive amount in T cycles, with at most 12 decimal places.");
+      return;
+    }
 
     setInstallingProjectId(project.id);
     try {
@@ -57,6 +77,8 @@ export function InstallProductDialog({ open, onClose, product }: InstallProductD
         project.network,
         project.id,
         Principal.fromText(principal),
+        undefined,
+        cyclesBudget,
       );
       toast.success(`${product.name} installed`, `Canister ${deployed.id} is live.`);
       onClose();
@@ -81,6 +103,43 @@ export function InstallProductDialog({ open, onClose, product }: InstallProductD
             <Button variant="secondary" size="sm" className="gap-1.5" onClick={() => setShowCreateProject(true)}>
               <Plus size={13} /> New project
             </Button>
+          </div>
+
+          <div className="rounded-lg border border-[#1e2d47] bg-[#0a0e1a]">
+            <button
+              type="button"
+              aria-expanded={showSettings}
+              aria-controls="package-install-settings"
+              disabled={installingProjectId !== null}
+              onClick={() => setShowSettings((current) => !current)}
+              className="w-full flex items-center gap-2 px-3 py-2.5 text-left text-xs text-[#8892a4] hover:text-[#e2e8f0] transition-colors disabled:opacity-50"
+            >
+              <Settings2 size={13} />
+              <span className="flex-1">Install settings</span>
+              <span className="font-mono text-[#00d4ff]">{cyclesBudgetT || "—"}T</span>
+              {showSettings ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+            {showSettings && (
+              <div id="package-install-settings" className="border-t border-[#1e2d47] p-3">
+                <Label htmlFor="package-cycles-budget">Cycles budget</Label>
+                <div className="relative">
+                  <Input
+                    id="package-cycles-budget"
+                    type="text"
+                    inputMode="decimal"
+                    value={cyclesBudgetT}
+                    onChange={(event) => setCyclesBudgetT(event.target.value)}
+                    disabled={installingProjectId !== null}
+                    className="pr-16"
+                    aria-describedby="package-cycles-budget-help"
+                  />
+                  <span className="absolute inset-y-0 right-3 flex items-center text-xs text-[#4a5568] pointer-events-none">T cycles</span>
+                </div>
+                <p id="package-cycles-budget-help" className="mt-1.5 text-[11px] text-[#4a5568]">
+                  Cycles used to create and fund the new canister. The default is 2T.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5 max-h-80 overflow-y-auto">

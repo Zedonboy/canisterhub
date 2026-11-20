@@ -7,6 +7,7 @@ const Login = lazy(() => import("@/pages/Login"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Account = lazy(() => import("@/pages/Account"));
 const Marketplace = lazy(() => import("@/pages/Marketplace"));
+const TemplateDetail = lazy(() => import("@/pages/TemplateDetail"));
 const Overview = lazy(() => import("@/pages/Overview"));
 const Auth = lazy(() => import("@/pages/Auth"));
 const AuthDetail = lazy(() => import("@/pages/AuthDetail"));
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
           <Route path="/account" element={<RequireAuth><Account /></RequireAuth>} />
           <Route path="/marketplace" element={<RequireAuth><Marketplace /></RequireAuth>} />
+          <Route path="/market/template/:template_id" element={<RequireAuth><TemplateDetail /></RequireAuth>} />
           <Route path="/market/product/:product_id" element={<RequireAuth><ProductInstall /></RequireAuth>} />
           <Route path="/market/publisher" element={<RequireAuth><PublisherSetup /></RequireAuth>} />
           <Route path="/project/:id" element={<RequireAuth><AppShell /></RequireAuth>}>

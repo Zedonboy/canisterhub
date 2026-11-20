@@ -23,10 +23,10 @@ URL, GitHub Release URL, slug, and manifest SHA.
 
 The checked-in `scripts/package-seed.json` is the release input: its `packages`
 array describes Wasms, and its `templates` array points to each source manifest
-and supplies the listing metadata. `seed_package_infos.js` consumes only the
-`packages` array to update the backend package registry. Template rows are
-included in the release seed for the template seeding flow; they are not sent
-to the backend by `seed_package_infos.js`.
+and supplies the listing metadata. `seed-marketplace` updates the package
+registry and upserts each official template through the backend's
+controller-only APIs. The backend requires template listings to use their
+GitHub Release URL; the R2 URL remains in the seed for direct manifest delivery.
 
 Configure these repository settings before running the workflow:
 
@@ -44,13 +44,13 @@ must resolve publicly to the same bucket and allow browser `GET`/`HEAD` requests
 from the app's origins through the bucket's CORS policy. Do not use the S3 API
 endpoint as the public base URL.
 
-`seed_package_infos.js` uploads the current package release registry used to
-detect upgrades on installed project canisters. Validate `package-seed.json`
-without changing canister state:
+`seed-marketplace` uploads the package release registry used to detect upgrades
+and upserts the seed file's templates. Validate `package-seed.json` without
+changing canister state:
 
 ```bash
 cd scripts
-npm run seed-packages -- --file ./package-seed.json --dry-run
+npm run seed-marketplace -- --file ./package-seed.json --dry-run
 ```
 
 Seed a local backend (the default environment) - run after `icp deploy
@@ -58,13 +58,13 @@ backend` so a fresh local network carries the same production registry the
 dashboard's upgrade detection expects:
 
 ```bash
-npm run seed-packages -- --file ./package-seed.json
+npm run seed-marketplace -- --file ./package-seed.json
 ```
 
 Seed the production backend with a controller identity:
 
 ```bash
-npm run seed-packages -- \
+npm run seed-marketplace -- \
   --file ./package-seed.json \
   --environment ic \
   --identity deploy

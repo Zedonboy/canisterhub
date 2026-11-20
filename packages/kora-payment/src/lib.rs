@@ -592,6 +592,11 @@ struct PushDelivery {
     subscription_removed: bool,
 }
 
+/// Cycles attached to `send_project_notification`: the protocol backend makes
+/// one HTTPS outcall per Web Push subscription and the caller pays for them.
+/// The backend accepts only the exact price; the rest is refunded.
+const NOTIFICATION_CYCLES: u128 = 5_000_000_000;
+
 async fn notify_owner_payment_received(charge: &ChargeRecord) -> bool {
     let Some(project_id) = canister_hub_sdk::ic::config::get_env_text("project_id")
         .filter(|id| !id.trim().is_empty()) else {
@@ -608,6 +613,7 @@ async fn notify_owner_payment_received(charge: &ChargeRecord) -> bool {
         url: "/admin/".to_string(),
     };
     let response = match ic_cdk::call::Call::bounded_wait(protocol_id, "send_project_notification")
+        .with_cycles(NOTIFICATION_CYCLES)
         .with_args(&(project_id, notification))
         .await
     {

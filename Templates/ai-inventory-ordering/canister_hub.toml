@@ -10,15 +10,18 @@ tags = ["inventory", "orders", "ai", "storefront"]
 
 [[packages]]
 name = "storage"
+package_name = "assetstorage"
 url = "https://asset.canisterhub.io/1.1.1/assetstorage.wasm"
 
 [[packages]]
 name = "inventory"
+package_name = "order_inventory"
 url = "https://asset.canisterhub.io/1.1.1/order_inventory.wasm"
 depends_on = ["storage"]
 
 [[packages]]
 name = "agent"
+package_name = "agent"
 url = "https://asset.canisterhub.io/1.1.1/agent.wasm"
 depends_on = ["inventory"]
 

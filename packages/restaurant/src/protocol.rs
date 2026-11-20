@@ -22,6 +22,11 @@ pub async fn verify_project_package_membership(
     result
 }
 
+/// Cycles attached to `send_project_notification`: the protocol backend makes
+/// one HTTPS outcall per Web Push subscription and the caller pays for them.
+/// The backend accepts only the exact price; the rest is refunded.
+const NOTIFICATION_CYCLES: u128 = 5_000_000_000;
+
 pub fn notify_owner(project_id: String, protocol: Principal, order_id: u64) {
     ic_cdk::futures::spawn(async move {
         let notification = PushNotification {
@@ -30,6 +35,7 @@ pub fn notify_owner(project_id: String, protocol: Principal, order_id: u64) {
             url: "/admin/".to_string(),
         };
         match ic_cdk::call::Call::bounded_wait(protocol, "send_project_notification")
+        .with_cycles(NOTIFICATION_CYCLES)
             .with_args(&(project_id, notification))
             .await
         {

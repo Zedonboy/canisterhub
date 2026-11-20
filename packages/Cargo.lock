@@ -9,23 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "admin_agent"
-version = "0.1.0"
-dependencies = [
- "candid",
- "canister-hub-sdk",
- "ciborium",
- "ic-cdk 0.19.0",
- "ic-rig",
- "ic-stable-structures",
- "pocket-ic",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
 name = "agent"
 version = "0.1.0"
 dependencies = [
@@ -82,20 +65,6 @@ name = "anyhow"
 version = "1.0.104"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
-name = "app_api"
-version = "0.1.0"
-dependencies = [
- "candid",
- "canister-hub-sdk",
- "ciborium",
- "ic-cdk 0.19.0",
- "ic-stable-structures",
- "serde",
- "serde_bytes",
- "serde_json",
-]
 
 [[package]]
 name = "ar_archive_writer"

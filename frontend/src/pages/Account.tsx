@@ -7,6 +7,7 @@ import { CanisterID } from "@/components/CanisterID";
 import { ToastProvider } from "@/components/Toast";
 import { Footer } from "@/components/layout/Footer";
 import { WalletPanel } from "@/components/WalletPanel";
+import { DevicesCard } from "@/components/DevicesCard";
 import { TopUpCyclesButton } from "@/components/TopUpCycles";
 import { useAuth } from "@/lib/auth";
 import { runtimeNetwork } from "@/lib/canisterEnv";
@@ -89,6 +90,8 @@ export default function Account() {
             )}
           </CardContent>
         </Card>
+
+        {status === "authenticated" && principal && <DevicesCard principal={principal} />}
 
         <WalletPanel network={network} reloadSignal={reloadSignal} />
       </main>

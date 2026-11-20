@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Store, KeyRound } from "lucide-react";
+import { ArrowRight, Store, KeyRound, FileCode2 } from "lucide-react";
 import { clsx } from "clsx";
 import { Badge } from "@/components/ui/Badge";
 import { ToastProvider } from "@/components/Toast";
@@ -9,15 +9,23 @@ import { ProductSearch } from "@/components/ProductSearch";
 import { TopNav } from "@/components/layout/TopNav";
 import { Footer } from "@/components/layout/Footer";
 import { listProducts, type Product } from "@/lib/products";
+import { listTemplates, type Template } from "@/lib/templates";
 
 export default function Marketplace() {
   const navigate = useNavigate();
   const [activeTag, setActiveTag] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
     listProducts().then((value) => active && setProducts(value)).catch(() => active && setProducts([]));
+    listTemplates()
+      .then((items) => active && setTemplates(items))
+      .catch((error) => active && setTemplatesError(error instanceof Error ? error.message : String(error)))
+      .finally(() => active && setTemplatesLoading(false));
     return () => { active = false; };
   }, []);
 
@@ -28,6 +36,9 @@ export default function Marketplace() {
     (activeTag === "All" || product.tag === activeTag)
     && (!query || [product.name, product.tagline, product.description].some((value) => value.toLowerCase().includes(query))),
   );
+  const filteredTemplates = templates.filter((template) =>
+    !query || [template.title, template.description, template.git_repo_url].some((value) => value.toLowerCase().includes(query)),
+  );
 
   return (
     <div className="min-h-screen bg-[#0a0e1a] flex flex-col">
@@ -37,7 +48,7 @@ export default function Marketplace() {
         <div className="py-12 flex flex-col items-center text-center animate-fade-in">
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#c084fc11] border border-[#c084fc33] text-[10px] text-[#c084fc] font-mono mb-4">
             <Store size={11} />
-            {products.length} canister products available
+            {products.length} packages · {templates.length} templates
           </div>
           <h1 className="text-3xl font-bold text-[#e2e8f0] mb-2">Marketplace</h1>
           <p className="text-sm text-[#4a5568] mb-8">
@@ -146,6 +157,46 @@ export default function Marketplace() {
         {query && filtered.length === 0 && (
           <p className="py-12 text-center text-sm text-[#4a5568]">No packages match “{searchQuery.trim()}”.</p>
         )}
+
+        <section className="mt-12">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-semibold text-[#e2e8f0]">{query ? `Templates matching “${searchQuery.trim()}”` : "Templates"}</h2>
+            {templatesError && <span className="text-xs text-[#ff6b6b]">Couldn't load templates: {templatesError}</span>}
+          </div>
+          {templatesLoading && <p className="py-8 text-center text-sm text-[#4a5568]">Loading templates…</p>}
+          {!templatesLoading && !templatesError && filteredTemplates.length === 0 && (
+            <p className="py-8 text-center text-sm text-[#4a5568]">
+              {templates.length === 0 ? "No templates have been published yet." : "No templates match this search."}
+            </p>
+          )}
+          {!templatesLoading && filteredTemplates.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {filteredTemplates.map((template) => (
+                <button
+                  key={template.id.toString()}
+                  onClick={() => navigate(`/market/template/${template.id.toString()}`)}
+                  className="text-left rounded-xl border border-[#1e2d47] bg-[#0f1629] p-4 flex flex-col hover:border-[#c084fc66] transition-colors"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-[#c084fc11] border border-[#c084fc33] text-[#c084fc] flex items-center justify-center shrink-0">
+                      <FileCode2 size={17} />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-semibold text-[#e2e8f0]">{template.title}</h3>
+                      <p className="text-xs text-[#8892a4] mt-1 leading-relaxed">{template.description}</p>
+                    </div>
+                  </div>
+                  <div className="mt-auto pt-4 flex items-center justify-between gap-3">
+                    <span className="text-[10px] text-[#4a5568] truncate">{template.downloads.toString()} downloads</span>
+                    <span className="inline-flex items-center gap-1.5 text-xs text-[#00d4ff] shrink-0">
+                      View details <ArrowRight size={12} />
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
       </main>
 
       <Footer />

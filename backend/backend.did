@@ -20,6 +20,13 @@ type CanisterInfo = record {
   // runtime-created, and legacy canisters.
   package_name : opt text;
 };
+// A co-owner device: a principal authorised to act as the owner. Added by the
+// owner; the browser then adds it as a controller of the owner's canisters.
+type Device = record {
+  "principal" : principal;
+  added_at : nat64;
+  label : text;
+};
 // Which building block a tracked canister actually is. Notification remains
 // as a legacy kind for older project records; Web Push now lives in backend.
 type CanisterKind = variant {
@@ -376,6 +383,7 @@ type Result_16 = variant { Ok : InstalledPackage; Err : text };
 type Result_17 = variant { Ok : vec InstalledPackage; Err : text };
 type Result_18 = variant { Ok : vec PackageInfo; Err : text };
 type Result_19 = variant { Ok : ProjectNotificationPreferences; Err : text };
+type Result_20 = variant { Ok : Device; Err : text };
 type Result_2 = variant { Ok : ByteBuf; Err : text };
 type Result_3 = variant { Ok : blob; Err : text };
 type Result_4 = variant { Ok : vec ManagedAiUsage; Err : text };
@@ -409,6 +417,8 @@ service : () -> {
   // always the complete, current record - the only thing telling the
   // dashboard which canisters exist to call directly. Owner-gated, same
   // shape as `remove_project_canister` below.
+  // Adds `device` as a co-owner of all the caller's projects. Owner-only.
+  add_device : (principal, text) -> (Result_20);
   add_project_canisters : (text, vec record { text; CanisterInfo }) -> (Result);
   // Controller-only setup for the shared provider account. The credential is
   // intentionally never returned by any query.
@@ -536,7 +546,13 @@ service : () -> {
   // Every project the caller owns, newest first - mirrors
   // `orchestrator::job::JobStore::list_for`. The real data behind the
   // dashboard's project list, called directly - no orchestrator HTTP call.
+  // The caller's owner's devices (works for the owner and for any device).
+  list_devices : () -> (vec Device) query;
   list_my_projects : () -> (vec Project) query;
+  // The principal the caller acts as: its owner if a device, else itself.
+  my_owner : () -> (principal) query;
+  // Removes a device. Owner-only.
+  remove_device : (principal) -> (Result);
   // Calls the configured external provider and accounts for every token the
   // provider reports. Provider failures are also counted, without inventing a
   // token value when the provider supplied none.
@@ -594,6 +610,7 @@ service : () -> {
   push_init_vapid : (text) -> (Result_3);
   push_ensure_vapid : () -> (Result_3);
   push_list_subscriptions : (principal) -> (Result_14) query;
+  // Delivers a test notification to the authenticated caller's own subscriptions.
   push_send : (principal, PushNotification) -> (Result_15);
   push_subscribe : (principal, PushSubscription) -> (Result);
   push_unsubscribe : (principal, text) -> (Result);

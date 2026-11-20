@@ -93,6 +93,19 @@ struct BackendManagedModel {
     model: Option<String>,
 }
 
+impl BackendManagedModel {
+    /// Cycles attached to each `managed_ai_completion` call. The backend
+    /// requires the IC LLM canister's flat per-chat price, or the worst-case
+    /// price of one DeepSeek HTTPS outcall (about 8B at the largest request on
+    /// a 34-node subnet). It accepts only the exact price; the rest is refunded.
+    fn cycles(&self) -> u128 {
+        match self.service {
+            ManagedAiService::IcLlm => 100_000_000_000,
+            ManagedAiService::DeepSeek => 12_000_000_000,
+        }
+    }
+}
+
 impl CompletionModel for BackendManagedModel {
     type Error = ManagedAiError;
 
@@ -102,6 +115,7 @@ impl CompletionModel for BackendManagedModel {
     ) -> Result<CompletionResponse, Self::Error> {
         let response = ic_cdk::call::Call::bounded_wait(self.backend, "managed_ai_completion")
             .change_timeout(300)
+            .with_cycles(self.cycles())
             .with_arg(ManagedAiCompletionRequest {
                 service: self.service,
                 model: self.model.clone(),
@@ -230,7 +244,7 @@ impl HttpClient for IcpClient {
             // match byte-for-byte, so consensus would never be reached
             // without a transform discarding the content itself. A single
             // replica is the only sensible choice here - same reasoning as
-            // `admin.rs::notify_admin_webhook` and every outbound send in
+            // every outbound send in
             // `connector` (see that canister's `outbound.rs`).
             is_replicated: Some(false),
         };

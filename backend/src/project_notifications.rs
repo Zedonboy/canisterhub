@@ -53,6 +53,8 @@ fn resolve_owner(project_id: &str, caller: Principal) -> Result<Principal, Strin
 
 /// Accepts a notification only from a canister tracked in `project_id` and
 /// delivers it through backend-owned Web Push subscriptions for the project owner.
+/// The caller must attach enough cycles to cover the outcalls (see
+/// `cycles::http_outcall_cost`); surplus is refunded.
 #[ic_cdk::update]
 pub async fn send_project_notification(
     project_id: String,
@@ -82,6 +84,11 @@ pub async fn send_project_notification(
         ));
         return Ok(Vec::new());
     }
+    // The backend pays for each Web Push outcall, so the calling canister
+    // funds them. Nothing is accepted when there is nothing to deliver.
+    let required = crate::web_push::send_cost(&owner);
+    crate::cycles::check(required)?;
+    crate::cycles::accept(required)?;
     crate::web_push::send(owner, notification).await
 }
 

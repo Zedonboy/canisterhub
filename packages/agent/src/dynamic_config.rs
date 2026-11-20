@@ -143,15 +143,6 @@ const ENDPOINTS: &[Endpoint] = &[
         group_description: "Connect a Telegram bot and configure Telegram to deliver updates to this endpoint.",
     },
     Endpoint {
-        key: "admin_callback_webhook_url",
-        label: "Admin Callback Webhook URL",
-        description: "Administrative systems post signed action resolutions to this endpoint",
-        path: Some("/webhook/admin"),
-        group: "admin_escalation",
-        group_label: "Administrative Escalation",
-        group_description: "Configuration for handing sensitive or unsupported actions to the SME's administrative system.",
-    },
-    Endpoint {
         key: "email_ingress_method",
         label: "Email Ingress",
         description: "The configured mail bridge calls this Candid update method",
@@ -215,8 +206,6 @@ const EDITABLE_CONFIG_KEYS: &[&str] = &[
     "llm_api_key",
     "max_output_tokens",
     "max_tool_iterations",
-    "admin_webhook_url",
-    "admin_webhook_secret",
 ];
 
 #[ic_cdk_020::query]
@@ -441,26 +430,6 @@ fn get_config_schema() -> Vec<ConfigFieldSchema> {
             ConfigType::Text,
             None,
         ),
-        editable_field(
-            "admin_webhook_url",
-            "Administrative Webhook URL",
-            "Base URL that receives administrative escalation requests",
-            "admin_escalation",
-            "Administrative Escalation",
-            "Configuration for handing sensitive or unsupported actions to the SME's administrative system.",
-            ConfigType::Text,
-            None,
-        ),
-        editable_field(
-            "admin_webhook_secret",
-            "Webhook Secret",
-            "HMAC secret used to sign requests and verify administrative callbacks",
-            "admin_escalation",
-            "Administrative Escalation",
-            "Configuration for handing sensitive or unsupported actions to the SME's administrative system.",
-            ConfigType::SecretText,
-            None,
-        ),
         ConfigFieldSchema {
             key: "agent_canister_id".to_string(),
             label: "Agent Canister ID".to_string(),
@@ -473,34 +442,6 @@ fn get_config_schema() -> Vec<ConfigFieldSchema> {
             },
             canister_type: Some(CanisterType::Custom),
             package_name: None,
-            is_required: false,
-            is_readonly: Some(true),
-            default_value: None,
-        },
-        ConfigFieldSchema {
-            key: "inventory_canister_id".to_string(),
-            label: "Inventory Canister ID".to_string(),
-            description: "Project inventory package authorized to send customer order messages".to_string(),
-            group: Some("deployment".to_string()),
-            group_label: Some("Deployment".to_string()),
-            group_description: Some("Read-only project package identities used by the agent.".to_string()),
-            field_type: ConfigType::CanisterPicker { module_type_filter: None },
-            canister_type: Some(CanisterType::Custom),
-            package_name: Some("order_inventory.wasm".to_string()),
-            is_required: false,
-            is_readonly: Some(true),
-            default_value: None,
-        },
-        ConfigFieldSchema {
-            key: "restaurant_canister_id".to_string(),
-            label: "Restaurant Canister ID".to_string(),
-            description: "Project restaurant package authorized to send customer order receipts".to_string(),
-            group: Some("deployment".to_string()),
-            group_label: Some("Deployment".to_string()),
-            group_description: Some("Read-only project package identities used by the agent.".to_string()),
-            field_type: ConfigType::CanisterPicker { module_type_filter: None },
-            canister_type: Some(CanisterType::Custom),
-            package_name: Some("restaurant.wasm".to_string()),
             is_required: false,
             is_readonly: Some(true),
             default_value: None,
@@ -557,18 +498,6 @@ fn get_config() -> HashMap<String, ConfigValue> {
         ),
     ]);
     let config = crate::state::get_config();
-    if let Some(inventory) = config.inventory_canister_id {
-        values.insert(
-            "inventory_canister_id".to_string(),
-            ConfigValue::PrincipalId(inventory),
-        );
-    }
-    if let Some(restaurant) = config.restaurant_canister_id {
-        values.insert(
-            "restaurant_canister_id".to_string(),
-            ConfigValue::PrincipalId(restaurant),
-        );
-    }
     if let Some(value) = &config.project_id {
         values.insert("project_id".to_string(), ConfigValue::Text(value.clone()));
     }
@@ -609,7 +538,6 @@ fn get_config() -> HashMap<String, ConfigValue> {
     );
     insert_text!("llm_provider", llm_provider);
     insert_text!("llm_model", llm_model);
-    insert_text!("admin_webhook_url", admin_webhook_url);
     if let Some(value) = config.max_output_tokens {
         values.insert(
             "max_output_tokens".to_string(),
@@ -699,8 +627,6 @@ fn apply_runtime_settings(
     apply_text!("llm_provider", llm_provider);
     apply_text!("llm_model", llm_model);
     apply_text!("llm_api_key", llm_api_key);
-    apply_text!("admin_webhook_url", admin_webhook_url);
-    apply_text!("admin_webhook_secret", admin_webhook_secret);
 
     if let Some(value) = settings.get("max_output_tokens") {
         config.max_output_tokens = match value {
@@ -766,8 +692,6 @@ fn prefill_from_schema(
         };
         match field.key.as_str() {
             "protocol_id" if config.protocol_id.is_none() => config.protocol_id = Some(canister_id),
-            "inventory_canister_id" => config.inventory_canister_id = Some(canister_id),
-            "restaurant_canister_id" => config.restaurant_canister_id = Some(canister_id),
             "mail_bridge_principal" if config.mail_bridge_principal.is_none() => {
                 config.mail_bridge_principal = Some(canister_id)
             }
@@ -883,7 +807,7 @@ mod tests {
     #[test]
     fn every_runtime_setting_is_in_the_dynamic_schema() {
         let schema = get_config_schema();
-        assert_eq!(schema.len(), 26);
+        assert_eq!(schema.len(), 23);
         let mut editable: Vec<_> = schema
             .iter()
             .filter(|field| field.is_readonly == Some(false))
