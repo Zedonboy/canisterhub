@@ -3,7 +3,7 @@
   "version": "1.2.0",
   "packages": [
     {
-      "description": "Give your business an always-available assistant that helps you respond to customers, stay on top of conversations, and handle everyday work faster—while keeping you in control.",
+      "description": "Give your business an always-available assistant that helps you respond to customers, stay on top of conversations, and handle everyday work faster\u2014while keeping you in control.",
       "package_name": "agent",
       "download_url": "https://asset.canisterhub.io/1.2.0/agent.wasm",
       "version": "1.2.0",
@@ -75,7 +75,8 @@
       "release_tag": "1.2.0",
       "package_slug": "ai-food-ordering",
       "manifest_sha": "a9a595b648aeac9e38019cc1086c36dd34cc916361ffa9b325eda901edbb9b07",
-      "github_release_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.2.0/ai-food-ordering.canister_hub.toml"
+      "github_release_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.2.0/ai-food-ordering.canister_hub.toml",
+      "manifest_file": "../Templates/food-order-service/canister_hub.toml"
     },
     {
       "title": "AI Inventory Ordering",
@@ -85,7 +86,8 @@
       "release_tag": "1.2.0",
       "package_slug": "ai-inventory-ordering",
       "manifest_sha": "30c31f9d783f809c04e8583900d9abdcbdb728ad4f7458d259d9bffac36de7fb",
-      "github_release_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.2.0/ai-inventory-ordering.canister_hub.toml"
+      "github_release_url": "https://github.com/Zedonboy/canisterhub/releases/download/1.2.0/ai-inventory-ordering.canister_hub.toml",
+      "manifest_file": "../Templates/ai-inventory-ordering/canister_hub.toml"
     }
   ]
 }
