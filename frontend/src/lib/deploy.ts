@@ -103,7 +103,7 @@ export async function deployMarketplaceItem(item: MarketplaceItem, network: stri
   });
 
   const orchestrator = orchestratorPrincipal();
-  const owners = await coOwnerPrincipals(userPrincipal);
+  const owners = await coOwnerPrincipals(userPrincipal, projectId);
   const controllers = orchestrator ? [...owners, orchestrator] : owners;
   await actor.update_settings({
     canister_id: canisterId,
@@ -166,7 +166,7 @@ export async function deployPackageInfo(
     packageCanisters: await projectPackageCanistersByName(project),
   });
   const orchestrator = orchestratorPrincipal();
-  const owners = await coOwnerPrincipals(userPrincipal);
+  const owners = await coOwnerPrincipals(userPrincipal, projectId);
   const controllers = orchestrator ? [...owners, orchestrator] : owners;
   const canisterId = await createAndInstallCanisterFromWasm(network, wasm, controllers, initArg, cyclesBudget);
 

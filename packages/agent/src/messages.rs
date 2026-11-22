@@ -169,6 +169,16 @@ pub enum MessagePayload {
 }
 
 impl MessagePayload {
+    /// Whether an unreadable message deserves a "can't read that" reply.
+    /// WhatsApp reactions and delivery chatter are not worth answering.
+    pub fn wants_unsupported_notice(&self) -> bool {
+        match self {
+            Self::WhatsApp(m) => !matches!(m.message_type.as_str(), "reaction" | "system"),
+            Self::Telegram(_) => true,
+            Self::Mail(_) => false,
+        }
+    }
+
     pub fn incoming(&self) -> Option<IncomingMessage> {
         match self {
             Self::WhatsApp(m) => location_text(m.latitude, m.longitude)

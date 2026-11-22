@@ -56,6 +56,27 @@ pub struct ModuleConfig {
         readonly
     )]
     pub build_hash: String,
+    #[config(
+        label = "Shout",
+        description = "Echoes the input back, upper-cased",
+        action(method = shout, param = "text", button = "Shout")
+    )]
+    pub shout_action: (),
+    #[config(label = "Ping", action(method = ping))]
+    pub ping_action: (),
+}
+
+async fn shout(
+    value: Option<canister_hub_sdk::ic::config::ConfigValue>,
+) -> Result<String, String> {
+    match value {
+        Some(canister_hub_sdk::ic::config::ConfigValue::Text(text)) => Ok(text.to_uppercase()),
+        _ => Err("expected text".to_string()),
+    }
+}
+
+async fn ping(_: Option<canister_hub_sdk::ic::config::ConfigValue>) -> Result<String, String> {
+    Ok("pong".to_string())
 }
 
 thread_local! {

@@ -218,6 +218,7 @@ export async function configureTemplatePackage(
     const field = fields.get(key);
     if (!field) throw new Error(`Package '${packageAlias}' has no dynamic setting named '${key}'.`);
     if (field.is_readonly?.[0]) continue;
+    if ("Action" in field.field_type) throw new Error(`'${key}' on package '${packageAlias}' is an action, not a setting.`);
     settings[key] = configValue(field.field_type, raw, canisters, projectId);
   }
   if (Object.keys(settings).length > 0) await setModuleConfig(canisterId, network, settings);

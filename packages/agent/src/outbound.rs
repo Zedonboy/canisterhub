@@ -133,12 +133,18 @@ pub async fn send(config: &Config, msg: &OutboundMessage) -> Result<(), String> 
                 .session_id
                 .parse()
                 .map_err(|_| "invalid Telegram chat id".to_string())?;
-            post_json(
-                &format!("https://api.telegram.org/bot{token}/sendMessage"),
-                &[],
-                serde_json::json!({"chat_id":chat_id,"text":msg.text}),
-            )
-            .await
+            // sendMessage rejects text over 4096 characters, so long replies
+            // go out as several messages.
+            let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+            let mut result = Ok(());
+            for chunk in split_for_telegram(&msg.text) {
+                result = post_json(&url, &[], serde_json::json!({"chat_id":chat_id,"text":chunk}))
+                    .await;
+                if result.is_err() {
+                    break;
+                }
+            }
+            result
         }
         Channel::Email => {
             let base = config
@@ -167,6 +173,65 @@ pub async fn send(config: &Config, msg: &OutboundMessage) -> Result<(), String> 
         )),
     }
     result
+}
+
+const TELEGRAM_MAX_CHARS: usize = 4_000;
+
+/// Splits `text` into pieces Telegram will accept, preferring to break at a
+/// newline or space. Always returns at least one piece.
+fn split_for_telegram(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while rest.chars().count() > TELEGRAM_MAX_CHARS {
+        let hard = rest
+            .char_indices()
+            .nth(TELEGRAM_MAX_CHARS)
+            .map_or(rest.len(), |(i, _)| i);
+        let cut = rest[..hard]
+            .rfind('\n')
+            .or_else(|| rest[..hard].rfind(' '))
+            .filter(|i| *i > 0)
+            .unwrap_or(hard);
+        out.push(rest[..cut].to_string());
+        rest = rest[cut..].trim_start();
+    }
+    out.push(rest.to_string());
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_text_is_one_piece_and_long_text_is_split_under_the_limit() {
+        assert_eq!(split_for_telegram("hi"), vec!["hi"]);
+        let long = "word ".repeat(2_000);
+        let parts = split_for_telegram(&long);
+        assert!(parts.len() > 1);
+        assert!(parts.iter().all(|p| p.chars().count() <= TELEGRAM_MAX_CHARS));
+        assert_eq!(parts.join(" ").split_whitespace().count(), 2_000);
+        let multibyte = "é".repeat(9_000);
+        assert!(split_for_telegram(&multibyte)
+            .iter()
+            .all(|p| p.chars().count() <= TELEGRAM_MAX_CHARS));
+    }
+}
+
+/// Points Telegram's webhook for `token`'s bot at `url`. Errors never include
+/// the token (it is part of the request URL).
+pub async fn telegram_set_webhook(
+    token: &str,
+    url: &str,
+    secret_token: Option<&str>,
+) -> Result<(), String> {
+    // Only plain messages are ever handled (see `telegram::parse_update`), so
+    // don't have Telegram deliver edits, channel posts or anything else.
+    let mut body = serde_json::json!({"url": url, "allowed_updates": ["message"]});
+    if let Some(secret) = secret_token {
+        body["secret_token"] = serde_json::json!(secret);
+    }
+    post_json(&format!("https://api.telegram.org/bot{token}/setWebhook"), &[], body).await
 }
 
 async fn post_json(

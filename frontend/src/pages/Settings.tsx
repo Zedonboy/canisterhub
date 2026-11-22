@@ -7,6 +7,8 @@ import { Input, Label } from "@/components/ui/Input";
 import { Table, TableHead, TableBody, Th, Tr, Td } from "@/components/ui/Table";
 import { Dialog, DialogHeader, DialogContent, DialogFooter } from "@/components/ui/Dialog";
 import { CanisterID } from "@/components/CanisterID";
+import { DevicesCard } from "@/components/DevicesCard";
+import { useAuth } from "@/lib/auth";
 import { toast } from "@/components/Toast";
 import { relativeTime } from "@/lib/mock-data";
 import type { ProjectContext } from "@/components/layout/AppShell";
@@ -144,6 +146,7 @@ function PushNotificationsCard({ projectId }: { projectId: string }) {
 function GeneralTab({ job, refetch }: { job: Project; refetch: () => void }) {
   const [name, setName] = useState(job.project_name ?? "");
   const [saving, setSaving] = useState(false);
+  const { status, principal } = useAuth();
 
   const save = async () => {
     const trimmed = name.trim();
@@ -194,6 +197,18 @@ function GeneralTab({ job, refetch }: { job: Project; refetch: () => void }) {
       </Card>
 
       <PushNotificationsCard projectId={job.id} />
+
+      {status === "authenticated" && principal && <DevicesCard projectId={job.id} owner={job.owner} principal={principal} />}
+
+      <div className="flex items-center justify-between rounded border border-[#1e2d47] bg-[#0f1629] px-4 py-3">
+        <div>
+          <div className="text-sm text-[#e2e8f0]">Account settings</div>
+          <div className="text-xs text-[#4a5568]">Your principal and wallet apply to every project.</div>
+        </div>
+        <Link to="/account" className="inline-flex items-center gap-1 text-xs text-[#00d4ff] hover:underline">
+          Open <ExternalLink size={11} />
+        </Link>
+      </div>
     </div>
   );
 }

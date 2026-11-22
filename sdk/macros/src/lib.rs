@@ -34,6 +34,50 @@ enum ConfigItem {
     CanisterPicker { module_type: Option<LitStr> },
     CanisterType(LitStr),
     PackageName(LitStr),
+    Action(ActionAttr),
+}
+
+/// Parsed `action(method = path, param = "...", options = [...], button = "...")`.
+struct ActionAttr {
+    method: syn::Path,
+    param: Option<LitStr>,
+    options: Option<Vec<LitStr>>,
+    button: Option<LitStr>,
+}
+
+impl Parse for ActionAttr {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut method = None;
+        let mut param = None;
+        let mut options = None;
+        let mut button = None;
+        while !input.is_empty() {
+            let name: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            match name.to_string().as_str() {
+                "method" => method = Some(input.parse()?),
+                "param" => param = Some(input.parse()?),
+                "button" => button = Some(input.parse()?),
+                "options" => {
+                    let array;
+                    syn::bracketed!(array in input);
+                    let parsed: Punctuated<LitStr, Token![,]> = Punctuated::parse_terminated(&array)?;
+                    options = Some(parsed.into_iter().collect());
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        format!("unknown `action(...)` argument `{other}` - expected `method`, `param`, `options`, or `button`"),
+                    ))
+                }
+            }
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        let method = method.ok_or_else(|| input.error("`action(...)` requires `method = handler_fn`"))?;
+        Ok(Self { method, param, options, button })
+    }
 }
 
 impl Parse for ConfigItem {
@@ -113,6 +157,11 @@ impl Parse for ConfigItem {
                 input.parse::<Token![=]>()?;
                 Ok(ConfigItem::PackageName(input.parse()?))
             }
+            "action" => {
+                let content;
+                syn::parenthesized!(content in input);
+                Ok(ConfigItem::Action(content.parse()?))
+            }
             other => Err(syn::Error::new(
                 ident.span(),
                 format!("unknown `#[config(...)]` attribute `{other}`"),
@@ -137,6 +186,7 @@ struct FieldAttrs {
     canister_picker: Option<Option<LitStr>>,
     canister_type: Option<LitStr>,
     package_name: Option<LitStr>,
+    action: Option<ActionAttr>,
 }
 
 fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
@@ -165,6 +215,7 @@ fn parse_field_attrs(field: &syn::Field) -> syn::Result<FieldAttrs> {
                 }
                 ConfigItem::CanisterType(value) => attrs.canister_type = Some(value),
                 ConfigItem::PackageName(value) => attrs.package_name = Some(value),
+                ConfigItem::Action(value) => attrs.action = Some(value),
             }
         }
     }
@@ -407,6 +458,90 @@ fn canister_type_expr(value: &LitStr) -> syn::Result<TokenStream2> {
 struct FieldPlan {
     schema_tokens: TokenStream2,
     default_tokens: Option<TokenStream2>,
+    /// `(key, handler path)` for an `action(...)` field.
+    action: Option<(String, syn::Path)>,
+}
+
+/// Schema tokens for an `action(...)` field: a button, never stored, so it is
+/// never required, read-only, or defaulted.
+fn plan_action_field(field: &syn::Field, attrs: &FieldAttrs, action: &ActionAttr) -> syn::Result<FieldPlan> {
+    let field_ident = field.ident.as_ref().expect("checked by plan_field");
+    if !matches!(&field.ty, Type::Tuple(tuple) if tuple.elems.is_empty()) {
+        return Err(syn::Error::new(field.ty.span(), "an `action(...)` field must have type `()`"));
+    }
+    if attrs.default.is_some() || attrs.readonly || attrs.secret || attrs.multiline
+        || attrs.select.is_some() || attrs.canister_picker.is_some()
+    {
+        return Err(syn::Error::new(
+            field.span(),
+            "`action(...)` cannot be combined with `default`, `readonly`, `secret`, `multiline`, `select`, or `canister_picker`",
+        ));
+    }
+    let param_tokens = match action.param.as_ref().map(|lit| lit.value()).as_deref() {
+        None => quote! { None },
+        Some("text") => quote! { Some(canister_hub_sdk::ic::config::ConfigVectorType::Text) },
+        Some("secret") => quote! { Some(canister_hub_sdk::ic::config::ConfigVectorType::SecretText) },
+        Some("number") => quote! { Some(canister_hub_sdk::ic::config::ConfigVectorType::Number) },
+        Some("float") => quote! { Some(canister_hub_sdk::ic::config::ConfigVectorType::Float) },
+        Some("bool") => quote! { Some(canister_hub_sdk::ic::config::ConfigVectorType::Boolean) },
+        Some("principal") => quote! {
+            Some(canister_hub_sdk::ic::config::ConfigVectorType::CanisterPicker { module_type_filter: None })
+        },
+        Some("select") => {
+            let options = action.options.as_ref().ok_or_else(|| {
+                syn::Error::new(action.param.span(), "`param = \"select\"` requires `options = [...]`")
+            })?;
+            quote! {
+                Some(canister_hub_sdk::ic::config::ConfigVectorType::Select {
+                    options: vec![#(#options.to_string()),*]
+                })
+            }
+        }
+        Some(_) => {
+            return Err(syn::Error::new(
+                action.param.span(),
+                "action `param` must be one of `text`, `secret`, `number`, `float`, `bool`, `principal`, or `select`",
+            ))
+        }
+    };
+    if action.options.is_some() && action.param.as_ref().map(|p| p.value()).as_deref() != Some("select") {
+        return Err(syn::Error::new(field.span(), "`options` is only valid with `param = \"select\"`"));
+    }
+
+    let key = attrs.key.as_ref().map(|l| l.value()).unwrap_or_else(|| field_ident.to_string());
+    let label = attrs.label.as_ref().map(|l| l.value()).unwrap_or_else(|| title_case(&field_ident.to_string()));
+    let description = attrs.description.as_ref().map(|l| l.value()).unwrap_or_default();
+    let button = action.button.as_ref().map(|l| l.value()).unwrap_or_else(|| "Run".to_string());
+    let opt_str = |value: &Option<LitStr>| match value {
+        Some(value) => quote! { Some(#value.to_string()) },
+        None => quote! { None },
+    };
+    let (group, group_label, group_description) = (
+        opt_str(&attrs.group),
+        opt_str(&attrs.group_label),
+        opt_str(&attrs.group_description),
+    );
+
+    let schema_tokens = quote! {
+        canister_hub_sdk::ic::config::ConfigFieldSchema {
+            key: #key.to_string(),
+            label: #label.to_string(),
+            description: #description.to_string(),
+            group: #group,
+            group_label: #group_label,
+            group_description: #group_description,
+            field_type: canister_hub_sdk::ic::config::ConfigType::Action {
+                param: #param_tokens,
+                button_label: #button.to_string(),
+            },
+            canister_type: None,
+            package_name: None,
+            is_required: false,
+            is_readonly: Some(false),
+            default_value: None,
+        }
+    };
+    Ok(FieldPlan { schema_tokens, default_tokens: None, action: Some((key, action.method.clone())) })
 }
 
 fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
@@ -414,6 +549,9 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
         syn::Error::new(field.span(), "dynamic_config requires named struct fields")
     })?;
     let attrs = parse_field_attrs(field)?;
+    if let Some(action) = &attrs.action {
+        return plan_action_field(field, &attrs, action);
+    }
 
     let (is_option, optional_inner_ty) = unwrap_option(&field.ty);
     let (is_vector, inner_ty) = unwrap_vec(optional_inner_ty);
@@ -595,6 +733,7 @@ fn plan_field(field: &syn::Field) -> syn::Result<FieldPlan> {
     Ok(FieldPlan {
         schema_tokens,
         default_tokens,
+        action: None,
     })
 }
 
@@ -658,8 +797,10 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     let mut schema_entries = Vec::new();
     let mut default_entries = Vec::new();
+    let mut actions = Vec::new();
     for field in fields {
         let plan = plan_field(field)?;
+        actions.extend(plan.action);
         schema_entries.push(plan.schema_tokens);
         if let Some(tokens) = plan.default_tokens {
             default_entries.push(tokens);
@@ -680,7 +821,33 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     });
 
+    // Only generated when an action exists, so modules without one keep their
+    // exact Candid surface.
+    let action_endpoint = if actions.is_empty() {
+        quote! {}
+    } else {
+        let arms = actions.iter().map(|(key, method)| quote! { #key => #method(value).await, });
+        quote! {
+            #[ic_cdk::update]
+            async fn run_config_action(
+                key: String,
+                value: Option<canister_hub_sdk::ic::config::ConfigValue>,
+            ) -> Result<String, String> {
+                if !ic_cdk::api::is_controller(&ic_cdk::api::msg_caller()) {
+                    return Err("only a controller may run configuration actions".to_string());
+                }
+                canister_hub_sdk::ic::config::check_action_input::<#struct_ident>(&key, value.as_ref())?;
+                match key.as_str() {
+                    #(#arms)*
+                    other => Err(format!("unknown config action '{other}'")),
+                }
+            }
+        }
+    };
+
     Ok(quote! {
+        #action_endpoint
+
         impl canister_hub_sdk::ic::config::ConfigSchema for #struct_ident {
             fn schema() -> Vec<canister_hub_sdk::ic::config::ConfigFieldSchema> {
                 vec![ #(#schema_entries),* ]

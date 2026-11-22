@@ -17,6 +17,7 @@ mod assets;
 mod config;
 mod dynamic_config;
 mod http;
+mod ingress;
 mod llm;
 mod messages;
 mod outbound;
@@ -62,6 +63,9 @@ thread_local! {
     static PENDING_SESSIONS: RefCell<BTreeSet<SessionKey>> = const { RefCell::new(BTreeSet::new()) };
 }
 
+const BUSY_MESSAGE: &str =
+    "already processing a message for this conversation - try again shortly";
+
 /// Per-conversation reentrancy lock - see this module's doc comment for why
 /// it's keyed by `SessionKey` rather than caller, and the `canister-security`
 /// skill for the general pattern this adapts (held across every `await` in
@@ -73,10 +77,7 @@ impl SessionGuard {
     fn new(key: SessionKey) -> Result<Self, String> {
         PENDING_SESSIONS.with(|p| {
             if !p.borrow_mut().insert(key.clone()) {
-                return Err(
-                    "already processing a message for this conversation - try again shortly"
-                        .to_string(),
-                );
+                return Err(BUSY_MESSAGE.to_string());
             }
             Ok(Self(key))
         })
@@ -218,7 +219,7 @@ async fn process_message_with_client_data(
         ],
     );
 
-    if customer.session_id != CONSOLE_SESSION {
+    if !owner_tools::is_console(&customer) {
         protocol::notify_owner(
             &config,
             "New customer message",
@@ -255,11 +256,9 @@ const TELEGRAM_PATH: &str = "/webhook/telegram";
 fn http_request(req: HttpRequest) -> HttpResponse {
     let (path, _) = http::path_and_query(&req.url);
     match (req.method.as_str(), path) {
-        ("GET", WHATSAPP_PATH) => match state::get_config().whatsapp_verify_token {
-            Some(token) => whatsapp::verify_handshake(&req, &token),
-            None => HttpResponse::text(503, "whatsapp_verify_token is not configured"),
-        },
-        ("POST", WHATSAPP_PATH | TELEGRAM_PATH) => {
+        // The handshake is upgraded too: a query is answered by one replica
+        // without consensus, so the verify-token exchange must not rely on it.
+        ("GET" | "POST", WHATSAPP_PATH) | ("POST", TELEGRAM_PATH) => {
             HttpResponse::upgrade_to_update()
         }
         ("GET" | "HEAD", _) => assets::serve(&req),
@@ -275,6 +274,10 @@ async fn http_request_update(req: HttpRequest) -> HttpResponse {
         req.method
     ));
     match (req.method.as_str(), path) {
+        ("GET", WHATSAPP_PATH) => match state::get_config().whatsapp_verify_token {
+            Some(token) => whatsapp::verify_handshake(&req, &token),
+            None => HttpResponse::text(503, "whatsapp_verify_token is not configured"),
+        },
         ("POST", WHATSAPP_PATH) => handle_whatsapp(&req),
         ("POST", TELEGRAM_PATH) => handle_telegram(&req),
         _ => HttpResponse::not_found(),
@@ -287,10 +290,64 @@ fn store_and_process(payload: MessagePayload) {
     if let Some(incoming) = message.payload.incoming() {
         let client_data = message.payload.client_data().map(|value| (None, value));
         ic_cdk::futures::spawn(async move {
-            if let Err(e) = process_message_with_client_data(incoming, client_data).await {
-                log_error(format!("inbound message processing failed: {e}"));
+            let key = SessionKey::from(&incoming);
+            match process_message_with_client_data(incoming, client_data).await {
+                Ok(()) => {}
+                // The message was not handled, and the webhook already said
+                // 200, so the channel will not retry: tell the sender.
+                Err(e) if e == BUSY_MESSAGE => {
+                    notify_customer(
+                        key,
+                        "I'm still replying to your previous message - please send that again in a moment.",
+                    )
+                    .await
+                }
+                Err(e) => log_error(format!("inbound message processing failed: {e}")),
             }
         });
+    } else {
+        log_info("inbound message has no readable content");
+    }
+}
+
+/// Best-effort plain notice to a customer outside the agent loop.
+async fn notify_customer(key: SessionKey, text: &str) {
+    let msg = OutboundMessage {
+        channel: key.channel,
+        session_id: key.session_id,
+        text: text.to_string(),
+        subject: None,
+    };
+    if let Err(e) = outbound::send(&state::get_config(), &msg).await {
+        log_error(format!("customer notice failed: {e}"));
+    }
+}
+
+const UNSUPPORTED_NOTICE: &str =
+    "Sorry, I can only read text messages and shared locations right now.";
+
+/// Applies replay/duplicate/rate-limit admission before anything is stored or
+/// sent to the model. Rejections are logged and answered with a 200 by the
+/// caller so the channel does not retry them.
+fn accept_channel_message(sender: SessionKey, dedup_id: Option<String>, payload: MessagePayload) {
+    match ingress::admit(&sender, dedup_id.as_deref(), ic_cdk::api::time()) {
+        ingress::Admission::Admit => {
+            // Nothing the agent can read: say so instead of staying silent.
+            if payload.incoming().is_none() && payload.wants_unsupported_notice() {
+                ic_cdk::futures::spawn(async move {
+                    notify_customer(sender, UNSUPPORTED_NOTICE).await
+                });
+                return;
+            }
+            store_and_process(payload)
+        }
+        ingress::Admission::Duplicate => log_info("channel message dropped: duplicate delivery"),
+        ingress::Admission::RateLimited => {
+            log_warn(format!(
+                "channel message dropped: rate limited channel={:?}",
+                sender.channel
+            ))
+        }
     }
 }
 
@@ -302,14 +359,26 @@ fn handle_whatsapp(req: &HttpRequest) -> HttpResponse {
         log_warn("WhatsApp webhook rejected: invalid signature");
         return HttpResponse::text(401, "invalid signature");
     }
-    match whatsapp::parse_messages(&req.body) {
+    let config = state::get_config();
+    match whatsapp::parse_messages(&req.body, config.whatsapp_phone_number_id.as_deref()) {
         Ok(messages) => {
             log_info(format!(
                 "WhatsApp webhook accepted messages={}",
                 messages.len()
             ));
+            let now_secs = ic_cdk::api::time() / 1_000_000_000;
             for message in messages {
-                store_and_process(MessagePayload::WhatsApp(message));
+                if !ingress::timestamp_is_fresh(message.timestamp.as_deref(), now_secs) {
+                    log_warn("WhatsApp message dropped: stale or future timestamp");
+                    continue;
+                }
+                let sender = SessionKey {
+                    channel: Channel::WhatsApp,
+                    session_id: message.from.clone(),
+                };
+                let dedup = (!message.message_id.is_empty())
+                    .then(|| format!("wa:{}", message.message_id));
+                accept_channel_message(sender, dedup, MessagePayload::WhatsApp(message));
             }
             HttpResponse::text(200, "ok")
         }
@@ -328,7 +397,12 @@ fn handle_telegram(req: &HttpRequest) -> HttpResponse {
     match telegram::parse_update(&req.body) {
         Ok(Some(message)) => {
             log_info("Telegram webhook accepted one message");
-            store_and_process(MessagePayload::Telegram(message));
+            let sender = SessionKey {
+                channel: Channel::Telegram,
+                session_id: message.chat_id.to_string(),
+            };
+            let dedup = Some(format!("tg:{}", message.update_id));
+            accept_channel_message(sender, dedup, MessagePayload::Telegram(message));
             HttpResponse::text(200, "ok")
         }
         Ok(None) => HttpResponse::text(200, "ok"),

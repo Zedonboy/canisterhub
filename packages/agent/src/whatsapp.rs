@@ -1,4 +1,4 @@
-use crate::http::{header, path_and_query, query_param, HttpRequest, HttpResponse};
+use crate::http::{ct_eq, header, path_and_query, query_param, HttpRequest, HttpResponse};
 use crate::messages::WhatsAppMessage;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -10,7 +10,7 @@ pub fn verify_handshake(req: &HttpRequest, configured_token: &str) -> HttpRespon
         query_param(query, "hub.verify_token"),
         query_param(query, "hub.challenge"),
     ) {
-        (Some("subscribe"), Some(token), Some(challenge)) if token == configured_token => {
+        (Some("subscribe"), Some(token), Some(challenge)) if ct_eq(&token, configured_token) => {
             HttpResponse::text(200, challenge)
         }
         _ => HttpResponse::text(403, "verification failed"),
@@ -35,13 +35,24 @@ pub fn header_signature(req: &HttpRequest) -> Option<&str> {
     header(&req.headers, "X-Hub-Signature-256")
 }
 
-pub fn parse_messages(body: &[u8]) -> Result<Vec<WhatsAppMessage>, String> {
+/// `expected_phone_number_id` is the configured business number: a signed
+/// payload for any other number under the same Meta app is ignored, so one
+/// app secret can't route an unrelated number's traffic into this agent.
+pub fn parse_messages(
+    body: &[u8],
+    expected_phone_number_id: Option<&str>,
+) -> Result<Vec<WhatsAppMessage>, String> {
     let root: serde_json::Value =
         serde_json::from_slice(body).map_err(|e| format!("invalid JSON: {e}"))?;
     let mut out = Vec::new();
     for entry in root["entry"].as_array().into_iter().flatten() {
         for change in entry["changes"].as_array().into_iter().flatten() {
             let value = &change["value"];
+            if let Some(expected) = expected_phone_number_id {
+                if value["metadata"]["phone_number_id"].as_str() != Some(expected) {
+                    continue;
+                }
+            }
             let to = value["metadata"]["display_phone_number"]
                 .as_str()
                 .map(str::to_string);
@@ -70,8 +81,16 @@ mod tests {
     #[test]
     fn parses_shared_location() {
         let body = br#"{"entry":[{"changes":[{"value":{"messages":[{"id":"m1","from":"234","type":"location","location":{"latitude":6.5244,"longitude":3.3792}}]}}]}]}"#;
-        let messages = parse_messages(body).unwrap();
+        let messages = parse_messages(body, None).unwrap();
         assert_eq!(messages[0].latitude, Some(6.5244));
         assert_eq!(messages[0].longitude, Some(3.3792));
+    }
+
+    #[test]
+    fn ignores_other_phone_numbers_when_one_is_configured() {
+        let body = br#"{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"111"},"messages":[{"id":"m1","from":"234","type":"text","text":{"body":"hi"}}]}}]}]}"#;
+        assert_eq!(parse_messages(body, Some("111")).unwrap().len(), 1);
+        assert!(parse_messages(body, Some("222")).unwrap().is_empty());
+        assert_eq!(parse_messages(body, None).unwrap().len(), 1);
     }
 }

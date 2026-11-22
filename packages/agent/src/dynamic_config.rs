@@ -19,7 +19,16 @@ pub enum ConfigType {
     CanisterPicker { module_type_filter: Option<String> },
     SecretText,
     Vector { element_type: ConfigVectorType },
+    /// A button that invokes `run_config_action`; `param` is the type of the
+    /// input the user supplies to it. Mirrors the SDK's `ConfigType::Action`.
+    Action {
+        param: Option<ConfigVectorType>,
+        button_label: String,
+    },
 }
+
+/// Key of the Telegram "Connect" action in the dashboard schema.
+const CONNECT_TELEGRAM_KEY: &str = "connect_telegram";
 
 thread_local! {
     static CONFIG_UPDATE_PENDING: Cell<bool> = const { Cell::new(false) };
@@ -195,8 +204,6 @@ const EDITABLE_CONFIG_KEYS: &[&str] = &[
     "whatsapp_app_secret",
     "whatsapp_access_token",
     "whatsapp_phone_number_id",
-    "telegram_secret_token",
-    "telegram_bot_token",
     "mail_bridge_url",
     "mail_bridge_api_key",
     "mail_from_address",
@@ -368,26 +375,22 @@ fn get_config_schema() -> Vec<ConfigFieldSchema> {
             ConfigType::Text,
             None,
         ),
-        editable_field(
-            "telegram_secret_token",
-            "Webhook Secret Token",
-            "Secret Telegram includes with webhook requests",
-            "telegram",
-            "Telegram",
-            "Connect a Telegram bot and configure Telegram to deliver updates to the endpoint below.",
-            ConfigType::SecretText,
-            None,
-        ),
-        editable_field(
-            "telegram_bot_token",
-            "Bot Token",
-            "Telegram bot token used to send replies",
-            "telegram",
-            "Telegram",
-            "Connect a Telegram bot and configure Telegram to deliver updates to the endpoint below.",
-            ConfigType::SecretText,
-            None,
-        ),
+        ConfigFieldSchema {
+            field_type: ConfigType::Action {
+                param: Some(ConfigVectorType::SecretText),
+                button_label: "Connect".to_string(),
+            },
+            ..editable_field(
+                CONNECT_TELEGRAM_KEY,
+                "Bot Token",
+                "Telegram bot token. Connect saves it and registers this agent's webhook with Telegram",
+                "telegram",
+                "Telegram",
+                "Connect a Telegram bot and configure Telegram to deliver updates to the endpoint below.",
+                ConfigType::SecretText,
+                None,
+            )
+        },
         editable_field(
             "mail_bridge_principal",
             "Mail Bridge Canister",
@@ -618,8 +621,6 @@ fn apply_runtime_settings(
     apply_text!("whatsapp_app_secret", whatsapp_app_secret);
     apply_text!("whatsapp_access_token", whatsapp_access_token);
     apply_text!("whatsapp_phone_number_id", whatsapp_phone_number_id);
-    apply_text!("telegram_secret_token", telegram_secret_token);
-    apply_text!("telegram_bot_token", telegram_bot_token);
     apply_text!("mail_bridge_url", mail_bridge_url);
     apply_text!("mail_bridge_api_key", mail_bridge_api_key);
     apply_text!("mail_from_address", mail_from_address);
@@ -784,6 +785,52 @@ async fn set_config(new_settings: HashMap<String, ConfigValue>) -> Result<(), St
     Ok(())
 }
 
+/// 64 hex chars of management-canister randomness; within Telegram's
+/// `secret_token` alphabet (`A-Za-z0-9_-`) and 256-char limit.
+async fn generate_webhook_secret() -> Result<String, String> {
+    let bytes = ic_cdk_management_canister::raw_rand()
+        .await
+        .map_err(|e| format!("failed to generate webhook secret: {e:?}"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Runs a dashboard action. `connect_telegram` takes the bot token, registers
+/// this canister's webhook with Telegram using it with a
+/// canister-generated webhook secret, and only then stores the token - so a bad token is
+/// never saved.
+#[ic_cdk_020::update]
+async fn run_config_action(key: String, value: Option<ConfigValue>) -> Result<String, String> {
+    if !ic_cdk_020::api::is_controller(&ic_cdk_020::api::msg_caller()) {
+        return Err("only a controller may run configuration actions".to_string());
+    }
+    if key != CONNECT_TELEGRAM_KEY {
+        return Err(format!("unknown config action '{key}'"));
+    }
+    let Some(ConfigValue::Text(token)) = value else {
+        return Err("config action 'connect_telegram' requires a bot token".to_string());
+    };
+    let token = token.trim().to_string();
+    if token.is_empty() || token == "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}" {
+        return Err("enter the Telegram bot token".to_string());
+    }
+    let _guard = ConfigUpdateGuard::acquire()?;
+    let webhook_url = endpoint_value(&ENDPOINTS[1]);
+    // The webhook secret is canister-generated, never user-entered. Reuse an
+    // existing one so reconnecting does not invalidate a registered webhook.
+    let secret = match crate::state::get_config().telegram_secret_token {
+        Some(secret) => secret,
+        None => generate_webhook_secret().await?,
+    };
+    crate::outbound::telegram_set_webhook(&token, &webhook_url, Some(&secret)).await?;
+    let mut config = crate::state::get_config();
+    config.telegram_bot_token = Some(token);
+    config.telegram_secret_token = Some(secret);
+    crate::state::set_config(config);
+    crate::assets::certify();
+    crate::log_info("telegram bot connected".to_string());
+    Ok("Telegram bot connected and webhook registered".to_string())
+}
+
 #[ic_cdk_020::query]
 fn get_links() -> Vec<CanisterLink> {
     vec![
@@ -807,13 +854,14 @@ mod tests {
     #[test]
     fn every_runtime_setting_is_in_the_dynamic_schema() {
         let schema = get_config_schema();
-        assert_eq!(schema.len(), 23);
+        assert_eq!(schema.len(), 22);
         let mut editable: Vec<_> = schema
             .iter()
             .filter(|field| field.is_readonly == Some(false))
             .map(|field| field.key.as_str())
             .collect();
         let mut expected = EDITABLE_CONFIG_KEYS.to_vec();
+        expected.push(CONNECT_TELEGRAM_KEY);
         editable.sort_unstable();
         expected.sort_unstable();
         assert_eq!(editable, expected);

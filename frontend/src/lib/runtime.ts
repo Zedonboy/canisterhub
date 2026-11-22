@@ -289,7 +289,7 @@ export async function deployWasmRuntime(label: string, wasmModule: Uint8Array, n
   // fails before cycles are spent on the new canister.
   const initArg = await projectInitArg(projectId);
   const orchestrator = orchestratorPrincipal();
-  const owners = await coOwnerPrincipals(userPrincipal);
+  const owners = await coOwnerPrincipals(userPrincipal, projectId);
   const controllers = orchestrator ? [...owners, orchestrator] : owners;
   const canisterId = await createAndInstallCanisterFromWasm(
     network,

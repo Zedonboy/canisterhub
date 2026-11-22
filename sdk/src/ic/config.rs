@@ -103,6 +103,18 @@
 //!   metadata for a canister picker. If omitted, consumers must treat it as
 //!   `custom`.
 //!
+//! - `action(method = handler_fn, param = "text", button = "Send")` marks a
+//!   field of type `()` as a button instead of a stored value. The settings
+//!   UI shows an input of the `param` type (`"text"`, `"secret"`, `"number"`,
+//!   `"float"`, `"bool"`, `"principal"`, or `"select"` with
+//!   `options = ["a", "b"]`; omit `param` for a no-input button) and, on
+//!   click, calls the generated controller-only
+//!   `run_config_action(key, opt ConfigValue) -> Result<text, text>`.
+//!   `handler_fn` must be an
+//!   `async fn(Option<ConfigValue>) -> Result<String, String>` in scope; the
+//!   input is validated against `param` first and never persisted. The
+//!   endpoint is only generated when a struct declares an action.
+//!
 //! Supported field types: `String`, `i64` (-> `Number`), `f64` (-> `Float`),
 //! `bool` (-> `Boolean`), `candid::Principal` (-> `CanisterPicker`), and a
 //! homogeneous `Vec<T>` of any of those. Vector fields start with an empty
@@ -198,6 +210,14 @@ pub enum ConfigType {
     /// settings UI renders this as a list with per-entry Add/Remove controls.
     Vector {
         element_type: ConfigVectorType,
+    },
+    /// Not a stored value: a button that invokes a canister-side handler
+    /// through `run_config_action`, optionally passing the value the user
+    /// typed as the handler's parameter. `param` reuses the scalar type set
+    /// of [`ConfigVectorType`]; `None` means the handler takes no input.
+    Action {
+        param: Option<ConfigVectorType>,
+        button_label: String,
     },
 }
 
@@ -571,6 +591,9 @@ pub fn set<T: ConfigSchema>(new_settings: HashMap<String, ConfigValue>) -> Resul
         if field.readonly() {
             return Err(format!("config key '{key}' is read-only"));
         }
+        if matches!(field.field_type, ConfigType::Action { .. }) {
+            return Err(format!("config key '{key}' is an action - invoke it with run_config_action"));
+        }
         if !value.matches(&field.field_type) {
             return Err(format!(
                 "config key '{key}' expects a {:?} value, got a {} value",
@@ -703,6 +726,46 @@ pub fn unset<T: ConfigSchema>(key: &str) -> Result<(), String> {
     record_user_configured(&mut config, [key.to_string()]);
     persist(config);
     Ok(())
+}
+
+/// Validates the input for a `#[config(action(...))]` field before the
+/// generated `run_config_action` endpoint dispatches to its handler: the key
+/// must name an action, a parameterised action needs a value of its declared
+/// type, and a parameterless one must not receive a value. A value is never
+/// persisted - actions are invocations, not settings.
+pub fn check_action_input<T: ConfigSchema>(key: &str, value: Option<&ConfigValue>) -> Result<(), String> {
+    let field = T::schema()
+        .into_iter()
+        .find(|field| field.key == key)
+        .ok_or_else(|| format!("unknown config key '{key}'"))?;
+    let ConfigType::Action { param, .. } = &field.field_type else {
+        return Err(format!("config key '{key}' is not an action"));
+    };
+    match (param, value) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(format!("config action '{key}' takes no input")),
+        (Some(_), None) => Err(format!("config action '{key}' requires an input value")),
+        (Some(param), Some(value)) => {
+            let scalar = match value {
+                ConfigValue::Text(v) => Some(ConfigVectorValue::Text(v.clone())),
+                ConfigValue::Number(v) => Some(ConfigVectorValue::Number(*v)),
+                ConfigValue::Float(v) => Some(ConfigVectorValue::Float(*v)),
+                ConfigValue::Boolean(v) => Some(ConfigVectorValue::Boolean(*v)),
+                ConfigValue::PrincipalId(v) => Some(ConfigVectorValue::PrincipalId(*v)),
+                ConfigValue::Vector(_) => None,
+            };
+            if !scalar.is_some_and(|scalar| scalar.matches(param)) {
+                return Err(format!(
+                    "config action '{key}' expects a {param:?} input, got a {} value",
+                    value.type_name()
+                ));
+            }
+            if contains_mask_placeholder(value) {
+                return Err(format!("config action '{key}' received the masked placeholder"));
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Substitutes the placeholder `{canister_id}` in `template` with this

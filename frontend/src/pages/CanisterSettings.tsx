@@ -13,7 +13,7 @@ import { CanisterID } from "@/components/CanisterID";
 import { ConfigForm } from "@/components/ConfigForm";
 import { toast } from "@/components/Toast";
 import type { ProjectContext } from "@/components/layout/AppShell";
-import { getModuleConfigSchema, getModuleConfig, setModuleConfig, type ConfigFieldSchema, type ConfigValue } from "@/lib/moduleConfig";
+import { getModuleConfigSchema, getModuleConfig, setModuleConfig, runModuleConfigAction, type ConfigFieldSchema, type ConfigValue } from "@/lib/moduleConfig";
 
 export default function CanisterSettings() {
   const { job, loadError, refetch } = useOutletContext<ProjectContext>();
@@ -105,6 +105,10 @@ export default function CanisterSettings() {
               network={job.network}
               onCanisterInstalled={() => refetch()}
               onSubmit={handleSave}
+              onRunAction={async (key, value) => {
+                if (!canisterId) throw new Error("Missing canister id");
+                return runModuleConfigAction(canisterId, job.network, key, value);
+              }}
             />
           )}
         </CardContent>

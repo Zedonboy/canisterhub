@@ -231,7 +231,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
     let (pic, id) = setup(Config::default());
     let (schema,): (Vec<ReadonlySchemaField>,) =
         query_candid_as(&pic, id, admin(), "get_config_schema", ()).unwrap();
-    assert_eq!(schema.len(), 23);
+    assert_eq!(schema.len(), 22);
     let whatsapp = schema
         .iter()
         .find(|field| field.key == "whatsapp_webhook_url")
@@ -247,7 +247,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         .filter(|field| field.is_readonly == Some(false))
         .map(|field| field.key.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(editable.len(), 19);
+    assert_eq!(editable.len(), 18);
     for key in [
         "connected_canisters",
         "project_id",
@@ -257,7 +257,7 @@ fn dynamic_config_lists_agentic_canisters_and_read_only_channel_endpoints() {
         "llm_api_key",
         "max_output_tokens",
         "whatsapp_verify_token",
-        "telegram_bot_token",
+        "connect_telegram",
         "mail_bridge_api_key",
     ] {
         assert!(editable.contains(&key), "missing dynamic config key {key}");

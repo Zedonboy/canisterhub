@@ -84,6 +84,16 @@ pub fn query_param(query: &str, key: &str) -> Option<String> {
         })
 }
 
+/// Compares secrets without exiting early on the first differing byte.
+pub fn ct_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut diff = (a.len() ^ b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
+    }
+    diff == 0
+}
+
 /// Looks up a header by name, case-insensitively.
 pub fn header<'a>(headers: &'a [HeaderField], name: &str) -> Option<&'a str> {
     headers
@@ -95,6 +105,15 @@ pub fn header<'a>(headers: &'a [HeaderField], name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ct_eq_matches_only_identical_strings() {
+        assert!(ct_eq("secret", "secret"));
+        assert!(!ct_eq("secret", "secreT"));
+        assert!(!ct_eq("secret", "secre"));
+        assert!(!ct_eq("", "x"));
+        assert!(ct_eq("", ""));
+    }
 
     #[test]
     fn path_and_query_splits_on_first_question_mark() {

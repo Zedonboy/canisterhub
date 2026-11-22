@@ -8,7 +8,6 @@ import { toast } from "@/components/Toast";
 import { relativeTime } from "@/lib/mock-data";
 import {
   listDevices,
-  myOwner,
   registerDevice,
   deregisterDevice,
   syncDeviceControllers,
@@ -20,12 +19,12 @@ function failures(results: ControllerSyncResult[]) {
   return results.filter((r) => !r.ok);
 }
 
-/** Co-owner devices: another principal that acts as the signed-in owner.
- * Adding one registers it on `backend` (dashboard access to every project) and
- * adds it as a controller of every canister those projects track. */
-export function DevicesCard({ principal }: { principal: string }) {
+/** Devices of one project: another principal (e.g. your other Internet
+ * Identity) that may work on this project only. Adding one registers it on
+ * `backend` and adds it as a controller of every canister the project tracks. */
+export function DevicesCard({ projectId, owner, principal }: { projectId: string; owner: string; principal: string }) {
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
-  const [isDevice, setIsDevice] = useState(false);
+  const isDevice = owner !== principal;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [newPrincipal, setNewPrincipal] = useState("");
   const [label, setLabel] = useState("");
@@ -34,14 +33,12 @@ export function DevicesCard({ principal }: { principal: string }) {
 
   const load = useCallback(async () => {
     try {
-      const [list, owner] = await Promise.all([listDevices(), myOwner()]);
-      setDevices(list);
-      setIsDevice(owner !== principal);
+      setDevices(await listDevices(projectId));
       setLoadError(null);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }
-  }, [principal]);
+  }, [projectId]);
 
   useEffect(() => {
     void load();
@@ -57,11 +54,11 @@ export function DevicesCard({ principal }: { principal: string }) {
   const handleAdd = async () => {
     setBusy("add");
     try {
-      await registerDevice(newPrincipal, label);
+      await registerDevice(projectId, newPrincipal, label);
       setNewPrincipal("");
       setLabel("");
       await load();
-      report(await syncDeviceControllers(newPrincipal.trim(), "add", principal), "Device added");
+      report(await syncDeviceControllers(projectId, newPrincipal.trim(), "add", principal), "Device added");
     } catch (e) {
       toast("error", "Couldn't add device", e instanceof Error ? e.message : String(e));
       await load();
@@ -73,7 +70,7 @@ export function DevicesCard({ principal }: { principal: string }) {
   const handleResync = async (device: string) => {
     setBusy(device);
     try {
-      report(await syncDeviceControllers(device, "add", principal), "Controllers synced");
+      report(await syncDeviceControllers(projectId, device, "add", principal), "Controllers synced");
     } catch (e) {
       toast("error", "Sync failed", e instanceof Error ? e.message : String(e));
     } finally {
@@ -87,7 +84,7 @@ export function DevicesCard({ principal }: { principal: string }) {
     setBusy(device);
     try {
       if (!force) {
-        const results = await syncDeviceControllers(device, "remove", principal);
+        const results = await syncDeviceControllers(projectId, device, "remove", principal);
         const failed = failures(results);
         if (failed.length > 0) {
           setProblems(failed);
@@ -95,7 +92,7 @@ export function DevicesCard({ principal }: { principal: string }) {
           return;
         }
       }
-      await deregisterDevice(device);
+      await deregisterDevice(projectId, device);
       setProblems([]);
       toast("success", "Device removed");
       await load();
@@ -116,13 +113,13 @@ export function DevicesCard({ principal }: { principal: string }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-[#8892a4]">
-          A device is another principal (for example your other Internet Identity) that acts as you: it sees all of
-          your projects and becomes a controller of every canister they track.
+          A device is another principal (for example your other Internet Identity) that can work on this project only:
+          it becomes a controller of every canister the project tracks.
         </p>
         {loadError && <div className="text-xs text-[#ff5252]">Couldn't load devices: {loadError}</div>}
         {isDevice && (
           <div className="text-xs text-[#ffb74d]">
-            You are signed in as a device. Only the owner can add or remove devices.
+            You are signed in as a device of this project. Only the owner can add or remove devices.
           </div>
         )}
         <div className="divide-y divide-[#1e2d47]">

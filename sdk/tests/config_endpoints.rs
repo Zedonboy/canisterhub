@@ -104,7 +104,7 @@ fn schema_reports_every_field_with_its_declared_type_and_requiredness() {
         .map(|field| (field.key.clone(), field))
         .collect();
 
-    assert_eq!(by_key.len(), 12);
+    assert_eq!(by_key.len(), 14);
 
     let greeting = &by_key["greeting"];
     assert_eq!(greeting.label, "Greeting");
@@ -512,4 +512,81 @@ fn config_and_env_mirror_survive_a_canister_upgrade() {
     );
     // post_upgrade re-mirrors into env, not just the stable cell.
     assert_eq!(greet(&pic, id), "Persisted");
+}
+
+// ---------------------------------------------------------------------------
+// config actions
+// ---------------------------------------------------------------------------
+
+fn run_config_action(
+    pic: &PocketIc,
+    id: Principal,
+    caller: Principal,
+    key: &str,
+    value: Option<ConfigValue>,
+) -> Result<String, String> {
+    let (result,): (Result<String, String>,) =
+        update_candid_as(pic, id, caller, "run_config_action", (key.to_string(), value)).unwrap();
+    result
+}
+
+#[test]
+fn action_fields_are_described_in_the_schema_and_never_stored() {
+    let (pic, id) = setup();
+    let schema = get_config_schema(&pic, id, controller());
+    let shout = schema.iter().find(|f| f.key == "shout_action").unwrap();
+    assert_eq!(
+        shout.field_type,
+        ConfigType::Action {
+            param: Some(ConfigVectorType::Text),
+            button_label: "Shout".to_string(),
+        }
+    );
+    assert!(!shout.is_required);
+    let ping = schema.iter().find(|f| f.key == "ping_action").unwrap();
+    assert_eq!(
+        ping.field_type,
+        ConfigType::Action { param: None, button_label: "Run".to_string() }
+    );
+    assert!(!get_config(&pic, id, controller()).contains_key("shout_action"));
+
+    let err = set_config(
+        &pic,
+        id,
+        controller(),
+        HashMap::from([("shout_action".to_string(), ConfigValue::Text("x".to_string()))]),
+    )
+    .unwrap_err();
+    assert!(err.contains("is an action"), "{err}");
+}
+
+#[test]
+fn run_config_action_passes_the_validated_input_to_the_handler() {
+    let (pic, id) = setup();
+    assert_eq!(
+        run_config_action(&pic, id, controller(), "shout_action", Some(ConfigValue::Text("hi".into()))),
+        Ok("HI".to_string())
+    );
+    assert_eq!(
+        run_config_action(&pic, id, controller(), "ping_action", None),
+        Ok("pong".to_string())
+    );
+}
+
+#[test]
+fn run_config_action_rejects_bad_calls() {
+    let (pic, id) = setup();
+    let text = Some(ConfigValue::Text("hi".into()));
+    let err = run_config_action(&pic, id, stranger(), "shout_action", text.clone()).unwrap_err();
+    assert!(err.contains("only a controller"), "{err}");
+    let err = run_config_action(&pic, id, controller(), "shout_action", None).unwrap_err();
+    assert!(err.contains("requires an input"), "{err}");
+    let err = run_config_action(&pic, id, controller(), "shout_action", Some(ConfigValue::Number(1))).unwrap_err();
+    assert!(err.contains("expects"), "{err}");
+    let err = run_config_action(&pic, id, controller(), "ping_action", text).unwrap_err();
+    assert!(err.contains("takes no input"), "{err}");
+    let err = run_config_action(&pic, id, controller(), "greeting", None).unwrap_err();
+    assert!(err.contains("not an action"), "{err}");
+    let err = run_config_action(&pic, id, controller(), "nope", None).unwrap_err();
+    assert!(err.contains("unknown config key"), "{err}");
 }

@@ -156,6 +156,9 @@ function canisterPickerType(fieldType: ConfigType): Extract<ConfigVectorType, { 
   if ("Vector" in fieldType && "CanisterPicker" in fieldType.Vector.element_type) {
     return fieldType.Vector.element_type;
   }
+  if ("Action" in fieldType && fieldType.Action.param[0] && "CanisterPicker" in fieldType.Action.param[0]) {
+    return fieldType.Action.param[0];
+  }
   return null;
 }
 
@@ -407,6 +410,8 @@ export interface ConfigFormProps {
   initialValues: Record<string, ConfigValue>;
   installedCanisters?: InstalledCanisters;
   onSubmit: (changed: Record<string, ConfigValue>) => Promise<void>;
+  /** Runs an `action(...)` field's handler; resolves with its message. */
+  onRunAction?: (key: string, value: ConfigValue | null) => Promise<string>;
   projectId?: string;
   network?: string;
   onCanisterInstalled?: (canister: DeployedCanister) => void;
@@ -417,6 +422,7 @@ interface EditableFieldProps {
   initialValue: ConfigValue | undefined;
   installedCanisters: InstalledCanisters;
   onSubmit: ConfigFormProps["onSubmit"];
+  onRunAction?: ConfigFormProps["onRunAction"];
   onRawChange?: (value: RawValue) => void;
   onInstallPackage?: (packageName: string, onInstalled: (canisterId: string) => void) => void;
 }
@@ -493,7 +499,108 @@ function FoldableGroup({ group, children }: { group: FieldGroup; children: React
   );
 }
 
-function EditableField({ schema, initialValue, installedCanisters, onSubmit, onRawChange, onInstallPackage }: EditableFieldProps) {
+function ActionField({ schema, installedCanisters, onRunAction }: {
+  schema: ConfigFieldSchema;
+  installedCanisters: InstalledCanisters;
+  onRunAction?: ConfigFormProps["onRunAction"];
+}) {
+  const fieldType = schema.field_type;
+  const action = "Action" in fieldType ? fieldType.Action : null;
+  const param = action?.param[0];
+  const [value, setValue] = useState<RawScalarValue>(() => (param ? emptyVectorItem(param) : ""));
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string>();
+  const [result, setResult] = useState<string>();
+  if (!action) return null;
+
+  const run = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (running || !onRunAction) return;
+    let converted: ConfigValue | null = null;
+    if (param) {
+      if (!("Boolean" in param) && String(value).trim() === "") {
+        setError("Enter a value to run this action");
+        return;
+      }
+      converted = rawToScalarConfigValue(param, value, installedCanisters);
+      if (converted === null) {
+        setError("Not a valid value");
+        return;
+      }
+    }
+    setRunning(true);
+    setError(undefined);
+    setResult(undefined);
+    try {
+      setResult(await onRunAction(schema.key, converted));
+      // Secrets are write-only; don't keep the plaintext in the input.
+      if (param && isSecretType(param)) setValue("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const inputId = `config-field-${schema.key}`;
+  const change = (next: RawScalarValue) => {
+    setValue(next);
+    setError(undefined);
+    setResult(undefined);
+  };
+  return (
+    <form onSubmit={run} className="rounded-md border border-[#1e2d47] bg-[#0a0e1a55] p-3">
+      <Label htmlFor={inputId}>{schema.label}</Label>
+      {param && (
+        <div className="mt-1">
+          {"Boolean" in param ? (
+            <Toggle checked={Boolean(value)} onChange={change} />
+          ) : "Select" in param ? (
+            <Select
+              id={inputId}
+              value={String(value)}
+              onChange={change}
+              options={param.Select.options.map((option) => ({ value: option, label: selectOptionLabel(option) }))}
+            />
+          ) : "CanisterPicker" in param ? (
+            <Combobox
+              id={inputId}
+              value={String(value)}
+              onChange={change}
+              placeholder="Canister name or principal ID"
+              options={canisterItems(canisterOptionsForField(schema, installedCanisters))}
+            />
+          ) : (
+            <Input
+              id={inputId}
+              type={"SecretText" in param ? "password" : "Number" in param || "Float" in param ? "number" : "text"}
+              step={"Float" in param ? "any" : undefined}
+              value={String(value)}
+              onChange={(e) => change(e.target.value)}
+            />
+          )}
+        </div>
+      )}
+      {schema.description && <p className="text-[10px] text-[#4a5568] mt-1">{schema.description}</p>}
+      {error && <p className="mt-2 text-[10px] text-[#ff5252]">{error}</p>}
+      {result && <p className="mt-2 text-[10px] text-[#48bb78] break-words">{result}</p>}
+      <div className="mt-3">
+        <Button type="submit" variant="primary" size="sm" disabled={running || !onRunAction}>
+          {running ? "Running…" : action.button_label}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function EditableField(props: EditableFieldProps) {
+  if ("Action" in props.schema.field_type) {
+    return <ActionField schema={props.schema} installedCanisters={props.installedCanisters} onRunAction={props.onRunAction} />;
+  }
+  return <SettingField {...props} />;
+}
+
+function SettingField({ schema, initialValue, installedCanisters, onSubmit, onRawChange, onInstallPackage }: EditableFieldProps) {
   const [value, setValue] = useState<RawValue>(() => configValueToRaw(schema.field_type, initialValue));
   const [dirty, setDirty] = useState(false);
   const [fieldError, setFieldError] = useState<string>();
@@ -593,7 +700,7 @@ function EditableField({ schema, initialValue, installedCanisters, onSubmit, onR
   );
 }
 
-export function ConfigForm({ schema, initialValues, installedCanisters = {}, onSubmit, projectId, network, onCanisterInstalled }: ConfigFormProps) {
+export function ConfigForm({ schema, initialValues, installedCanisters = {}, onSubmit, onRunAction, projectId, network, onCanisterInstalled }: ConfigFormProps) {
   const initialProvider = (() => {
     const value = initialValues.llm_provider;
     return value && "Text" in value ? normalizeProvider(value.Text) : "";
@@ -650,6 +757,7 @@ export function ConfigForm({ schema, initialValues, installedCanisters = {}, onS
                       initialValue={displayedInitialValue}
                       installedCanisters={installedCanisters}
                       onSubmit={onSubmit}
+                      onRunAction={onRunAction}
                       onInstallPackage={(packageName, onInstalled) => setInstallTarget({ packageName, onInstalled })}
                       onRawChange={field.key === "llm_provider"
                         ? (value) => setLlmProvider(Array.isArray(value) ? "" : String(value))

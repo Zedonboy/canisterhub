@@ -67,6 +67,16 @@ export async function setModuleConfig(canisterId: string, network: string, newSe
   if ("Err" in result) throw new Error(result.Err);
 }
 
+/** Invokes a module's `action(...)` handler. Resolves with the handler's
+ * message; throws with the canister's own rejection text. The value is never
+ * persisted as a setting. */
+export async function runModuleConfigAction(canisterId: string, network: string, key: string, value: ConfigValue | null): Promise<string> {
+  const actor = await getModuleConfigActor(canisterId, network);
+  const result = await actor.run_config_action(key, value ? [value] : []);
+  if ("Err" in result) throw new Error(result.Err);
+  return result.Ok;
+}
+
 /** Returns every webpage declared by the module, preserving declaration
  * order and resolving canister-relative routes for the active network. */
 export async function getModuleLinks(canisterId: string, network: string): Promise<CanisterLink[]> {

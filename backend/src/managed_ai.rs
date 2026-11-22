@@ -1255,7 +1255,7 @@ fn grant_token_credits(owner: Principal, amount: u64) -> Result<TokenCreditBalan
 #[ic_cdk::query]
 fn get_token_credits(owner: Principal) -> Result<Option<TokenCreditBalance>, String> {
     let caller = ic_cdk::api::msg_caller();
-    if crate::devices::owner_of(caller) != owner && !ic_cdk::api::is_controller(&caller) {
+    if caller != owner && !ic_cdk::api::is_controller(&caller) {
         return Err("only the account owner or a controller may read token credits".to_string());
     }
     Ok(ACCOUNTS.with(|accounts| {
@@ -1428,7 +1428,7 @@ fn get_managed_ai_usage(project_id: String) -> Result<Vec<ManagedAiUsage>, Strin
     let project = PROJECTS
         .with(|projects| projects.borrow().get(&project_id))
         .ok_or_else(|| "project not found".to_string())?;
-    if crate::devices::owner_of(caller) != project.owner && !controller {
+    if !crate::has_project_access(&project, caller) && !controller {
         return Err("only the project owner or a controller may read managed AI usage".to_string());
     }
     let mut rows = USAGE.with(|usage| {

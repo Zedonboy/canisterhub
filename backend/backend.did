@@ -20,8 +20,9 @@ type CanisterInfo = record {
   // runtime-created, and legacy canisters.
   package_name : opt text;
 };
-// A co-owner device: a principal authorised to act as the owner. Added by the
-// owner; the browser then adds it as a controller of the owner's canisters.
+// A project device: a principal the project's owner authorised to work on that
+// one project. The browser then adds it as a controller of the project's
+// canisters.
 type Device = record {
   "principal" : principal;
   added_at : nat64;
@@ -384,6 +385,7 @@ type Result_17 = variant { Ok : vec InstalledPackage; Err : text };
 type Result_18 = variant { Ok : vec PackageInfo; Err : text };
 type Result_19 = variant { Ok : ProjectNotificationPreferences; Err : text };
 type Result_20 = variant { Ok : Device; Err : text };
+type Result_21 = variant { Ok : vec Device; Err : text };
 type Result_2 = variant { Ok : ByteBuf; Err : text };
 type Result_3 = variant { Ok : blob; Err : text };
 type Result_4 = variant { Ok : vec ManagedAiUsage; Err : text };
@@ -417,9 +419,10 @@ service : () -> {
   // always the complete, current record - the only thing telling the
   // dashboard which canisters exist to call directly. Owner-gated, same
   // shape as `remove_project_canister` below.
-  // Adds `device` as a co-owner of all the caller's projects. Owner-only.
-  add_device : (principal, text) -> (Result_20);
   add_project_canisters : (text, vec record { text; CanisterInfo }) -> (Result);
+  // Adds `device` to one project: it will see and manage that project only.
+  // Only the project's owner may add devices.
+  add_project_device : (text, principal, text) -> (Result_20);
   // Controller-only setup for the shared provider account. The credential is
   // intentionally never returned by any query.
   configure_managed_ai : (ManagedAiConfigUpdate) -> (Result_1);
@@ -543,16 +546,12 @@ service : () -> {
   list_marketplace_items : () -> (vec MarketplaceItem) query;
   list_package_infos : () -> (vec PackageInfo) query;
   list_project_package_installations : (text) -> (Result_17) query;
-  // Every project the caller owns, newest first - mirrors
+  // Every project the caller owns or was added to as a device, newest first - mirrors
   // `orchestrator::job::JobStore::list_for`. The real data behind the
   // dashboard's project list, called directly - no orchestrator HTTP call.
-  // The caller's owner's devices (works for the owner and for any device).
-  list_devices : () -> (vec Device) query;
   list_my_projects : () -> (vec Project) query;
-  // The principal the caller acts as: its owner if a device, else itself.
-  my_owner : () -> (principal) query;
-  // Removes a device. Owner-only.
-  remove_device : (principal) -> (Result);
+  // The project's devices. Visible to the owner and to the project's devices.
+  list_project_devices : (text) -> (Result_21) query;
   // Calls the configured external provider and accounts for every token the
   // provider reports. Provider failures are also counted, without inventing a
   // token value when the provider supplied none.
@@ -647,6 +646,8 @@ service : () -> {
   // tracked is not an error - the end state (not tracked) is already what
   // was asked for.
   remove_project_canister : (text, text) -> (Result);
+  // Removes a device from a project. Only the project's owner may.
+  remove_project_device : (text, principal) -> (Result);
   // Revokes a principal's access to a vetkey this canister manages (e.g.
   // after a refund or chargeback). Same authorization as `set_user_rights`.
   remove_user : (principal, ByteBuf, principal) -> (Result_6);

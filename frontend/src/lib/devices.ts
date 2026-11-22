@@ -1,8 +1,8 @@
-// Co-owner devices: extra principals (e.g. the same person's other Internet
-// Identity) authorised to act as the owner. `backend` records the
-// authorisation (`add_device`/`remove_device`, owner-only); this file makes
-// the matching controller change on every canister the owner's projects
-// track, using the signed-in identity's own management-canister
+// Project devices: extra principals (e.g. the same person's other Internet
+// Identity) a project's owner authorised to work on that one project. `backend`
+// records the authorisation (`add_project_device`/`remove_project_device`,
+// owner-only); this file makes the matching controller change on the canisters
+// that project tracks, using the signed-in identity's own management-canister
 // `update_settings` - the backend is not a controller of those canisters, the
 // owner is. Like every other management call in this dashboard it works on
 // mainnet but is rejected by this project's local gateway (see
@@ -12,7 +12,7 @@ import { Actor } from "@icp-sdk/core/agent";
 import { Principal } from "@icp-sdk/core/principal";
 import { getAgent } from "./agent";
 import { getBackendActor } from "./actors";
-import { listMyProjects } from "./backend";
+import { getProject } from "./backend";
 import { readPublicInfo } from "./canisterStats";
 import { idlFactory as managementIdlFactory, MANAGEMENT_CANISTER_ID, type ManagementService } from "./candid/management";
 
@@ -34,46 +34,41 @@ export interface ControllerSyncResult {
   error?: string;
 }
 
-export async function listDevices(): Promise<DeviceInfo[]> {
+export async function listDevices(projectId: string): Promise<DeviceInfo[]> {
   const actor = await getBackendActor();
-  const devices = await actor.list_devices();
-  return devices.map((d) => ({
+  const result = await actor.list_project_devices(projectId);
+  if ("Err" in result) throw new Error(result.Err);
+  return result.Ok.map((d) => ({
     principal: d.principal.toText(),
     label: d.label,
     addedAt: new Date(Number(d.added_at / 1_000_000n)).toISOString(),
   }));
 }
 
-/** The principal the signed-in identity acts as: its owner when it is a device. */
-export async function myOwner(): Promise<string> {
-  const actor = await getBackendActor();
-  return (await actor.my_owner()).toText();
-}
-
 /** Registers the device on `backend` only; pair with `syncDeviceControllers`. */
-export async function registerDevice(principal: string, label: string): Promise<void> {
+export async function registerDevice(projectId: string, principal: string, label: string): Promise<void> {
   const actor = await getBackendActor();
-  const result = await actor.add_device(Principal.fromText(principal.trim()), label.trim());
+  const result = await actor.add_project_device(projectId, Principal.fromText(principal.trim()), label.trim());
   if ("Err" in result) throw new Error(result.Err);
 }
 
 /** Deregisters the device on `backend` only; pair with `syncDeviceControllers`. */
-export async function deregisterDevice(principal: string): Promise<void> {
+export async function deregisterDevice(projectId: string, principal: string): Promise<void> {
   const actor = await getBackendActor();
-  const result = await actor.remove_device(Principal.fromText(principal));
+  const result = await actor.remove_project_device(projectId, Principal.fromText(principal));
   if ("Err" in result) throw new Error(result.Err);
 }
 
-/** Owner plus every device, de-duplicated, with `self` always included. Used
- * as the user-side controller set for newly deployed canisters so a canister
- * deployed from one device stays controllable from the others. Falls back to
+/** `self` plus the project's devices, de-duplicated. Used as the user-side
+ * controller set for newly deployed canisters so a canister deployed from one
+ * device stays controllable from the project's other devices. Falls back to
  * just `self` if `backend` can't be reached. */
-export async function coOwnerPrincipals(self: Principal): Promise<Principal[]> {
+export async function coOwnerPrincipals(self: Principal, projectId: string): Promise<Principal[]> {
   const ids = new Set<string>([self.toText()]);
   try {
-    const actor = await getBackendActor();
-    ids.add((await actor.my_owner()).toText());
-    for (const device of await actor.list_devices()) ids.add(device.principal.toText());
+    const project = await getProject(projectId);
+    if (project) ids.add(project.owner);
+    for (const device of await listDevices(projectId)) ids.add(device.principal);
   } catch {
     // keep self only - a deploy must not fail because the device list is unreadable
   }
@@ -89,15 +84,16 @@ async function managementActor(network: string, target: Principal): Promise<Mana
   });
 }
 
-/** Adds or removes `device` as a controller of every distinct canister across
- * all of the owner's projects. `update_settings` replaces the whole controller
+/** Adds or removes `device` as a controller of every distinct canister the
+ * project tracks. `update_settings` replaces the whole controller
  * list, so each canister's current list is read first and only edited; a
  * canister whose list can't be read (empty result) is skipped rather than
  * risk overwriting it. Never removes `self` (the signed-in identity). One
  * canister's failure does not stop the rest. */
-export async function syncDeviceControllers(device: string, mode: "add" | "remove", self: string): Promise<ControllerSyncResult[]> {
+export async function syncDeviceControllers(projectId: string, device: string, mode: "add" | "remove", self: string): Promise<ControllerSyncResult[]> {
   if (mode === "remove" && device === self) throw new Error("You cannot remove your own principal as a controller.");
-  const projects = await listMyProjects();
+  const project = await getProject(projectId);
+  const projects = project ? [project] : [];
   const seen = new Set<string>();
   const results: ControllerSyncResult[] = [];
 

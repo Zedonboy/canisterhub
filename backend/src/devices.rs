@@ -1,11 +1,12 @@
-//! Co-owner devices: extra principals (typically the same person's other
-//! Internet Identity) that the owner has authorised to act as them.
+//! Project devices: extra principals (typically the same person's other
+//! Internet Identity) that a project's owner has authorised to work on that one
+//! project.
 //!
-//! A device resolves to its owner at every owner-keyed check (`owner_of`), so
-//! it sees and manages exactly the owner's projects. Only the owner manages the
-//! device list. Controller changes on the owner's canisters are made by the
-//! browser (the backend is not a controller of them); this module only records
-//! the authorisation.
+//! A device sees and manages only the projects it was added to; it is never
+//! treated as the owner. Only the project's owner manages its device list.
+//! Controller changes on the project's canisters are made by the browser (the
+//! backend is not a controller of them); this module only records the
+//! authorisation.
 
 use crate::{Memory, MEMORY_MANAGER};
 use candid::{CandidType, Principal};
@@ -14,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, cell::RefCell};
 
 const DEVICES_MEMORY_ID: ic_stable_structures::memory_manager::MemoryId =
-    ic_stable_structures::memory_manager::MemoryId::new(22);
-const MAX_DEVICES_PER_OWNER: usize = 10;
+    ic_stable_structures::memory_manager::MemoryId::new(23);
+const MAX_DEVICES_PER_PROJECT: usize = 10;
 const MAX_LABEL_BYTES: usize = 64;
 
 #[derive(Clone, Debug, CandidType, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,7 +28,6 @@ pub struct Device {
 
 #[derive(Clone, Debug, CandidType, Serialize, Deserialize)]
 struct DeviceRecord {
-    owner: Principal,
     label: String,
     added_at: u64,
 }
@@ -49,33 +49,52 @@ impl Storable for DeviceRecord {
 }
 
 thread_local! {
-    /// device principal -> its owner's record.
-    static DEVICES: RefCell<StableBTreeMap<Principal, DeviceRecord, Memory>> =
+    /// "<project id>:<device principal>" -> the device's record. A principal's
+    /// text form never contains ':', so the key is unambiguous.
+    static DEVICES: RefCell<StableBTreeMap<String, DeviceRecord, Memory>> =
         RefCell::new(StableBTreeMap::init(
             MEMORY_MANAGER.with(|manager| manager.borrow().get(DEVICES_MEMORY_ID))
         ));
 }
 
-/// The owner `principal` acts as: its owner if it is a device, else itself.
-pub fn owner_of(principal: Principal) -> Principal {
+fn key(project_id: &str, device: Principal) -> String {
+    format!("{project_id}:{device}")
+}
+
+fn prefix(project_id: &str) -> String {
+    format!("{project_id}:")
+}
+
+/// Whether `principal` was added as a device of `project_id`.
+pub fn is_device(project_id: &str, principal: Principal) -> bool {
+    DEVICES.with(|devices| devices.borrow().contains_key(&key(project_id, principal)))
+}
+
+/// Ids of every project `principal` was added to as a device.
+pub fn projects_of(principal: Principal) -> Vec<String> {
+    let suffix = format!(":{principal}");
     DEVICES.with(|devices| {
         devices
             .borrow()
-            .get(&principal)
-            .map_or(principal, |record| record.owner)
+            .iter()
+            .filter_map(|entry| entry.key().strip_suffix(&suffix).map(str::to_string))
+            .collect()
     })
 }
 
-pub fn list(owner: Principal) -> Vec<Device> {
+pub fn list(project_id: &str) -> Vec<Device> {
+    let prefix = prefix(project_id);
     DEVICES.with(|devices| {
         let mut list: Vec<Device> = devices
             .borrow()
             .iter()
-            .filter(|entry| entry.value().owner == owner)
-            .map(|entry| Device {
-                principal: *entry.key(),
-                label: entry.value().label,
-                added_at: entry.value().added_at,
+            .filter_map(|entry| {
+                let principal = entry.key().strip_prefix(&prefix)?;
+                Some(Device {
+                    principal: Principal::from_text(principal).ok()?,
+                    label: entry.value().label,
+                    added_at: entry.value().added_at,
+                })
             })
             .collect();
         list.sort_by_key(|device| device.added_at);
@@ -83,13 +102,11 @@ pub fn list(owner: Principal) -> Vec<Device> {
     })
 }
 
-/// `owns_projects` says whether `device` already owns projects of its own,
-/// which adding it as a device would hide from it.
 pub fn add(
+    project_id: &str,
     owner: Principal,
     device: Principal,
     label: String,
-    owns_projects: bool,
     now: u64,
 ) -> Result<Device, String> {
     if device == Principal::anonymous() {
@@ -103,55 +120,52 @@ pub fn add(
             "device label must be between 1 and {MAX_LABEL_BYTES} bytes"
         ));
     }
-    if owns_projects {
-        return Err(
-            "that principal already owns projects of its own; adding it as a device would hide them"
-                .to_string(),
-        );
+    if is_device(project_id, device) {
+        return Err("that principal is already a device".to_string());
+    }
+    if list(project_id).len() >= MAX_DEVICES_PER_PROJECT {
+        return Err(format!(
+            "at most {MAX_DEVICES_PER_PROJECT} devices may be added to a project"
+        ));
     }
     DEVICES.with(|devices| {
-        let mut devices = devices.borrow_mut();
-        if devices.contains_key(&device) {
-            return Err("that principal is already a device".to_string());
-        }
-        // A principal that has devices of its own is itself an owner.
-        if devices.iter().any(|entry| entry.value().owner == device) {
-            return Err("that principal already has devices of its own".to_string());
-        }
-        let count = devices
-            .iter()
-            .filter(|entry| entry.value().owner == owner)
-            .count();
-        if count >= MAX_DEVICES_PER_OWNER {
-            return Err(format!(
-                "at most {MAX_DEVICES_PER_OWNER} devices may be added"
-            ));
-        }
-        devices.insert(
-            device,
+        devices.borrow_mut().insert(
+            key(project_id, device),
             DeviceRecord {
-                owner,
                 label: label.clone(),
                 added_at: now,
             },
         );
-        Ok(Device {
-            principal: device,
-            label,
-            added_at: now,
-        })
+    });
+    Ok(Device {
+        principal: device,
+        label,
+        added_at: now,
     })
 }
 
-pub fn remove(owner: Principal, device: Principal) -> Result<(), String> {
+pub fn remove(project_id: &str, device: Principal) -> Result<(), String> {
+    DEVICES.with(|devices| {
+        devices
+            .borrow_mut()
+            .remove(&key(project_id, device))
+            .map(|_| ())
+            .ok_or_else(|| "that principal is not a device of this project".to_string())
+    })
+}
+
+/// Drops every device of a deleted project.
+pub fn remove_project(project_id: &str) {
+    let prefix = prefix(project_id);
     DEVICES.with(|devices| {
         let mut devices = devices.borrow_mut();
-        match devices.get(&device) {
-            Some(record) if record.owner == owner => {
-                devices.remove(&device);
-                Ok(())
-            }
-            _ => Err("that principal is not one of your devices".to_string()),
+        let keys: Vec<String> = devices
+            .iter()
+            .filter(|entry| entry.key().starts_with(&prefix))
+            .map(|entry| entry.key().clone())
+            .collect();
+        for key in keys {
+            devices.remove(&key);
         }
-    })
+    });
 }

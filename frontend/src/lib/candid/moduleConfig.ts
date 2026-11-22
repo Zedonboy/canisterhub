@@ -46,7 +46,10 @@ export type ConfigType =
   | { Select: { options: string[] } }
   | { CanisterPicker: { module_type_filter: [] | [string] } }
   | { SecretText: null }
-  | { Vector: { element_type: ConfigVectorType } };
+  | { Vector: { element_type: ConfigVectorType } }
+  /** A button, not a stored value: runs the module's handler through
+   * `run_config_action`, passing the user's input when `param` is set. */
+  | { Action: { param: [] | [ConfigVectorType]; button_label: string } };
 
 export interface ConfigFieldSchema {
   key: string;
@@ -89,6 +92,8 @@ export interface ModuleConfigService {
   get_config_schema: () => Promise<ConfigFieldSchema[]>;
   get_config: () => Promise<Array<[string, ConfigValue]>>;
   set_config: (newSettings: Array<[string, ConfigValue]>) => Promise<{ Ok: null } | { Err: string }>;
+  /** Only implemented by modules that declare an `action(...)` field. */
+  run_config_action: (key: string, value: [] | [ConfigValue]) => Promise<{ Ok: string } | { Err: string }>;
   update_project_context: (context: ProjectContext) => Promise<{ Ok: null } | { Err: string }>;
   get_links: () => Promise<CanisterLink[]>;
 }
@@ -128,6 +133,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     CanisterPicker: IDL.Record({ module_type_filter: IDL.Opt(IDL.Text) }),
     SecretText: IDL.Null,
     Vector: IDL.Record({ element_type: ConfigVectorType }),
+    Action: IDL.Record({ param: IDL.Opt(ConfigVectorType), button_label: IDL.Text }),
   });
   const CanisterType = IDL.Variant({
     Auth: IDL.Null,
@@ -162,6 +168,7 @@ export const idlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     get_config_schema: IDL.Func([], [IDL.Vec(ConfigFieldSchema)], ["query"]),
     get_config: IDL.Func([], [ConfigMap], ["query"]),
     set_config: IDL.Func([ConfigMap], [SetConfigResult], []),
+    run_config_action: IDL.Func([IDL.Text, IDL.Opt(ConfigValue)], [IDL.Variant({ Ok: IDL.Text, Err: IDL.Text })], []),
     update_project_context: IDL.Func([ProjectContext], [ResultUnit], []),
     get_links: IDL.Func([], [IDL.Vec(CanisterLink)], ["query"]),
   });

@@ -150,6 +150,8 @@ type ConfigType = variant {
   Select : record { options : vec text };
   Vector : record { element_type : ConfigVectorType };
   Number;
+  // A button that calls `run_config_action`, passing the user's input.
+  Action : record { param : opt ConfigVectorType; button_label : text };
 };
 // `update_config`'s argument - see `Config`'s doc comment. Semantics
 // (three states per field) are identical to `connector`'s `ConfigUpdate`;
@@ -282,6 +284,7 @@ type ProjectContext = record {
 type Result = variant { Ok : AiCanister; Err : text };
 type Result_1 = variant { Ok : text; Err : text };
 type Result_10 = variant { Ok; Err : text };
+type ActionResult = variant { Ok : text; Err : text };
 type Result_11 = variant { Ok : vec StoredChatMessage; Err : text };
 type Result_12 = variant { Ok : opt ClientDataRequest; Err : text };
 type Result_2 = variant { Ok : opt AdminRequest; Err : text };
@@ -373,6 +376,7 @@ service : (ProjectContext) -> {
   // an `Operator` turn so it appears in the transcript and the agent knows a
   // human spoke.
   operator_reply : (Channel, text, text) -> (Result_10);
+  run_config_action : (text, opt ConfigValue) -> (ActionResult);
   receive_mail : (MailMessage) -> (Result_10);
   // Runs one controller-submitted message through the same path used by the
   // channel webhooks. Real channel ingress calls `process_message` internally.
