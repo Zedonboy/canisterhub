@@ -26,6 +26,7 @@ mod protocol;
 mod remote_tools;
 mod state;
 mod telegram;
+mod telegram_format;
 mod tools;
 mod whatsapp;
 
@@ -291,6 +292,8 @@ fn store_and_process(payload: MessagePayload) {
         let client_data = message.payload.client_data().map(|value| (None, value));
         ic_cdk::futures::spawn(async move {
             let key = SessionKey::from(&incoming);
+            // Held until this turn ends; stops the typing refresh on drop.
+            let _typing = TypingIndicator::start(&key);
             match process_message_with_client_data(incoming, client_data).await {
                 Ok(()) => {}
                 // The message was not handled, and the webhook already said
@@ -307,6 +310,47 @@ fn store_and_process(payload: MessagePayload) {
         });
     } else {
         log_info("inbound message has no readable content");
+    }
+}
+
+/// How often to refresh Telegram's "typing…" status, which fades after about
+/// five seconds.
+const TYPING_REFRESH: std::time::Duration = std::time::Duration::from_secs(4);
+
+/// Shows "typing…" to a Telegram customer while the agent works on a reply:
+/// once immediately (issued before processing starts, but not awaited, so it
+/// doesn't delay the model call) and then on a timer. Cancelled on drop, so
+/// every exit path of a turn - including errors - stops it. Other channels
+/// get nothing.
+struct TypingIndicator(Option<ic_cdk_timers::TimerId>);
+
+impl TypingIndicator {
+    fn start(key: &SessionKey) -> Self {
+        if key.channel != Channel::Telegram {
+            return Self(None);
+        }
+        let Ok(chat_id) = key.session_id.parse::<i64>() else {
+            return Self(None);
+        };
+        ic_cdk::futures::spawn(send_typing(chat_id));
+        let timer = ic_cdk_timers::set_timer_interval_serial(TYPING_REFRESH, async move || {
+            send_typing(chat_id).await
+        });
+        Self(Some(timer))
+    }
+}
+
+impl Drop for TypingIndicator {
+    fn drop(&mut self) {
+        if let Some(timer) = self.0.take() {
+            ic_cdk_timers::clear_timer(timer);
+        }
+    }
+}
+
+async fn send_typing(chat_id: i64) {
+    if let Err(e) = outbound::telegram_typing(&state::get_config(), chat_id).await {
+        log_warn(format!("typing indicator failed: {e}"));
     }
 }
 

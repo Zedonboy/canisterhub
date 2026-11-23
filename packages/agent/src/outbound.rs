@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::telegram_format;
 use crate::messages::{Channel, ClientDataKind, ClientDataRequest, OutboundMessage, SessionKey};
 use ic_cdk_management_canister::{http_request, HttpHeader, HttpMethod, HttpRequestArgs};
 
@@ -133,13 +134,13 @@ pub async fn send(config: &Config, msg: &OutboundMessage) -> Result<(), String> 
                 .session_id
                 .parse()
                 .map_err(|_| "invalid Telegram chat id".to_string())?;
-            // sendMessage rejects text over 4096 characters, so long replies
-            // go out as several messages.
+            // Replies are markdown from the model; Telegram only renders the
+            // HTML subset `telegram_format` produces, and caps messages at
+            // 4096 characters, so a long reply goes out as several messages.
             let url = format!("https://api.telegram.org/bot{token}/sendMessage");
             let mut result = Ok(());
-            for chunk in split_for_telegram(&msg.text) {
-                result = post_json(&url, &[], serde_json::json!({"chat_id":chat_id,"text":chunk}))
-                    .await;
+            for chunk in telegram_format::render(&msg.text) {
+                result = send_telegram_chunk(&url, chat_id, &chunk).await;
                 if result.is_err() {
                     break;
                 }
@@ -175,47 +176,39 @@ pub async fn send(config: &Config, msg: &OutboundMessage) -> Result<(), String> 
     result
 }
 
-const TELEGRAM_MAX_CHARS: usize = 4_000;
-
-/// Splits `text` into pieces Telegram will accept, preferring to break at a
-/// newline or space. Always returns at least one piece.
-fn split_for_telegram(text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut rest = text;
-    while rest.chars().count() > TELEGRAM_MAX_CHARS {
-        let hard = rest
-            .char_indices()
-            .nth(TELEGRAM_MAX_CHARS)
-            .map_or(rest.len(), |(i, _)| i);
-        let cut = rest[..hard]
-            .rfind('\n')
-            .or_else(|| rest[..hard].rfind(' '))
-            .filter(|i| *i > 0)
-            .unwrap_or(hard);
-        out.push(rest[..cut].to_string());
-        rest = rest[cut..].trim_start();
-    }
-    out.push(rest.to_string());
-    out
+/// Shows "typing…" in a Telegram chat for about five seconds (or until the
+/// next message is sent). Best-effort: callers log and ignore failures.
+pub async fn telegram_typing(config: &Config, chat_id: i64) -> Result<(), String> {
+    let token = config
+        .telegram_bot_token
+        .as_deref()
+        .ok_or("telegram_bot_token is not configured")?;
+    post_json(
+        &format!("https://api.telegram.org/bot{token}/sendChatAction"),
+        &[],
+        serde_json::json!({"chat_id": chat_id, "action": "typing"}),
+    )
+    .await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn short_text_is_one_piece_and_long_text_is_split_under_the_limit() {
-        assert_eq!(split_for_telegram("hi"), vec!["hi"]);
-        let long = "word ".repeat(2_000);
-        let parts = split_for_telegram(&long);
-        assert!(parts.len() > 1);
-        assert!(parts.iter().all(|p| p.chars().count() <= TELEGRAM_MAX_CHARS));
-        assert_eq!(parts.join(" ").split_whitespace().count(), 2_000);
-        let multibyte = "é".repeat(9_000);
-        assert!(split_for_telegram(&multibyte)
-            .iter()
-            .all(|p| p.chars().count() <= TELEGRAM_MAX_CHARS));
+/// Sends one chunk as formatted HTML, falling back to its plain text if
+/// Telegram answers 400 (e.g. "can't parse entities") so a conversion
+/// problem costs the formatting, never the message.
+async fn send_telegram_chunk(
+    url: &str,
+    chat_id: i64,
+    chunk: &telegram_format::Chunk,
+) -> Result<(), String> {
+    if chunk.is_html {
+        let body = serde_json::json!({"chat_id": chat_id, "text": chunk.html, "parse_mode": "HTML"});
+        match post_json(url, &[], body).await {
+            Err(e) if e.contains("status 400") => {
+                crate::log_warn("Telegram rejected formatted text; resending as plain text");
+            }
+            other => return other,
+        }
     }
+    post_json(url, &[], serde_json::json!({"chat_id": chat_id, "text": chunk.plain})).await
 }
 
 /// Points Telegram's webhook for `token`'s bot at `url`. Errors never include

@@ -19,12 +19,14 @@ dependencies = [
  "ic-asset-certification",
  "ic-cdk 0.20.3",
  "ic-cdk-management-canister",
+ "ic-cdk-timers",
  "ic-http-certification 4.0.0",
  "ic-llm",
  "ic-rig",
  "ic-stable-structures",
  "include_dir",
  "pocket-ic",
+ "pulldown-cmark",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -1061,6 +1063,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-cdk-timers"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6852b9c1d4a82ff50fc7318599298aee8bfb082bd7e9fe7e5c1420692b2170f7"
+dependencies = [
+ "ic-cdk-executor",
+ "ic0",
+ "slotmap",
+]
+
+[[package]]
 name = "ic-certificate-verification"
 version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1934,6 +1947,17 @@ checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
 dependencies = [
  "ar_archive_writer",
  "cc",
+]
+
+[[package]]
+name = "pulldown-cmark"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
+dependencies = [
+ "bitflags",
+ "memchr",
+ "unicase",
 ]
 
 [[package]]
