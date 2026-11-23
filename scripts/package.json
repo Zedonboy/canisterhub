@@ -8,6 +8,7 @@
     "publish": "npm run generate && node publish_to_marketplace.js",
     "create-r2-seed": "node create_r2_package_seed.js",
     "seed-marketplace": "node seed_package_infos.js",
+    "seed-latest": "node seed_from_release.js",
     "seed-packages": "node seed_package_infos.js"
   },
   "dependencies": {

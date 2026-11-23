@@ -1,0 +1,17 @@
+{
+  "packages": {
+    "agent": "Give your business an always-available assistant that helps you respond to customers, stay on top of conversations, and handle everyday work faster—while keeping you in control.",
+    "order_inventory": "Run your shop with less stress. Keep products organized, track stock, receive customer orders, and manage your online storefront from one simple place.",
+    "assetstorage": "Keep your business images, documents, and other important files together in a dependable home, ready to use across your website and business tools.",
+    "auth": "Manage user authentication, identity, and secure access for your Internet Computer applications.",
+    "ic-kv": "Store and retrieve structured key-value data on the Internet Computer.",
+    "ic-sql": "Use a SQL database canister to manage relational data for your Internet Computer application.",
+    "kora-payment": "Accept customer payments through Kora checkout and track payment results in your project.",
+    "paystack-payment": "Accept customer payments through Paystack and track payment results in your project.",
+    "restaurant": "Manage a restaurant menu, portion-based orders, kitchen fulfillment, and payment collection."
+  },
+  "templates": [
+    "food-order-service",
+    "ai-inventory-ordering"
+  ]
+}

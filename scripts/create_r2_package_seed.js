@@ -12,7 +12,7 @@ function parseArgs(argv) {
   const options = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (!["--version", "--base-url", "--wasm-dir", "--output", "--template-dir"].includes(arg)) {
+    if (!["--version", "--base-url", "--wasm-dir", "--output", "--template-dir", "--repo"].includes(arg)) {
       throw new Error(`Unknown option: ${arg}`);
     }
     const value = argv[i + 1];
@@ -25,6 +25,10 @@ function parseArgs(argv) {
   }
   if (!/^[A-Za-z0-9._-]+$/.test(options.version)) {
     throw new Error("Version/tag may contain only letters, numbers, dots, underscores, and hyphens");
+  }
+  options.repo ??= process.env.GITHUB_REPOSITORY;
+  if (!options.repo || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(options.repo)) {
+    throw new Error("--repo (or GITHUB_REPOSITORY) must be owner/name");
   }
   const base = new URL(options.base_url);
   if (base.protocol !== "https:") throw new Error("--base-url must use HTTPS");
@@ -50,16 +54,40 @@ function renderTemplateManifest(source, baseUrl, version, label) {
   return rendered;
 }
 
+/// Reads `name`, `slug` and `description` from a template manifest's
+/// `[template]` table, so listing metadata lives with the template itself.
+function templateInfo(source, label) {
+  const info = {};
+  let inTemplate = false;
+  for (const line of source.split(/\r?\n/)) {
+    const header = line.match(/^\s*\[+([^\]]+)\]+\s*$/);
+    if (header) {
+      inTemplate = header[1].trim() === "template";
+      continue;
+    }
+    const field = inTemplate && line.match(/^\s*(name|slug|description)\s*=\s*"((?:[^"\\]|\\.)*)"/);
+    if (field) info[field[1]] = JSON.parse(`"${field[2]}"`);
+  }
+  for (const key of ["name", "slug", "description"]) {
+    if (!info[key]) throw new Error(`${label} is missing [template].${key}`);
+  }
+  return info;
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const seed = JSON.parse(
-    await readFile(path.join(scriptDir, "package-seed.json"), "utf8"),
-  );
-  const packageDefinitions = Array.isArray(seed) ? seed : seed.packages;
-  const templateDefinitions = Array.isArray(seed) ? [] : seed.templates ?? [];
-  if (!Array.isArray(packageDefinitions) || packageDefinitions.length === 0) {
-    throw new Error("package-seed.json must contain a non-empty packages array");
+  // Which packages and templates to publish, and the packages' marketplace
+  // descriptions. Everything else (versions, URLs, hashes) is derived.
+  const metadata = JSON.parse(await readFile(path.join(scriptDir, "release-metadata.json"), "utf8"));
+  const packageDescriptions = Object.entries(metadata.packages ?? {});
+  const templateDirs = metadata.templates ?? [];
+  if (packageDescriptions.length === 0) {
+    throw new Error("release-metadata.json must list at least one package");
   }
+  const packageDefinitions = packageDescriptions.map(([package_name, description]) => ({
+    package_name,
+    description,
+  }));
   const records = [];
   for (const entry of packageDefinitions) {
     const filename = `${entry.package_name}.wasm`;
@@ -75,12 +103,19 @@ async function main() {
 
   await mkdir(options.template_dir, { recursive: true });
   const templates = [];
-  for (const entry of templateDefinitions) {
-    for (const field of ["title", "description", "git_repo_url", "package_slug", "manifest_file"]) {
-      if (typeof entry[field] !== "string" || entry[field].trim() === "") {
-        throw new Error(`template ${entry.package_slug ?? "<unknown>"}.${field} must be a non-empty string`);
-      }
+  for (const dir of templateDirs) {
+    if (typeof dir !== "string" || !/^[A-Za-z0-9_-]+$/.test(dir)) {
+      throw new Error(`release-metadata.json has an invalid template directory: ${dir}`);
     }
+    const manifest_file = path.join(projectRoot, "Templates", dir, "canister_hub.toml");
+    const info = templateInfo(await readFile(manifest_file, "utf8"), manifest_file);
+    const entry = {
+      title: info.name,
+      description: info.description,
+      package_slug: info.slug,
+      git_repo_url: `https://github.com/${options.repo}`,
+      manifest_file,
+    };
     if (!/^[a-z][a-z0-9-]{0,63}$/.test(entry.package_slug)) {
       throw new Error(`template has an invalid package_slug: ${entry.package_slug}`);
     }
@@ -92,7 +127,7 @@ async function main() {
     if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repositoryPath)) {
       throw new Error(`template ${entry.package_slug}.git_repo_url must point to an owner/repository`);
     }
-    const sourcePath = path.resolve(scriptDir, entry.manifest_file);
+    const sourcePath = entry.manifest_file;
     const source = await readFile(sourcePath, "utf8");
     const rendered = renderTemplateManifest(source, options.base_url, options.version, sourcePath);
     const filename = `${entry.package_slug}.canister_hub.toml`;

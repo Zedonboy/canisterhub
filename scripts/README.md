@@ -21,12 +21,15 @@ attaches them to the GitHub Release. It also attaches a generated
 include the R2 `download_url` and SHA-256; template rows include the R2 manifest
 URL, GitHub Release URL, slug, and manifest SHA.
 
-The checked-in `scripts/package-seed.json` is the release input: its `packages`
-array describes Wasms, and its `templates` array points to each source manifest
-and supplies the listing metadata. `seed-marketplace` updates the package
-registry and upserts each official template through the backend's
-controller-only APIs. The backend requires template listings to use their
-GitHub Release URL; the R2 URL remains in the seed for direct manifest delivery.
+`scripts/release-metadata.json` is the release input: the packages to publish
+with their marketplace descriptions, and the `Templates/` directories to list.
+Each template's title, slug and description come from the `[template]` table in
+its own `canister_hub.toml`, and the repository from `GITHUB_REPOSITORY`. The
+generated `package-seed.json` is a release artifact only; it is not checked in.
+`seed-marketplace` updates the package registry and upserts each official
+template through the backend's controller-only APIs. The backend requires
+template listings to use their GitHub Release URL; the R2 URL remains in the
+seed for direct manifest delivery.
 
 Configure these repository settings before running the workflow:
 
@@ -44,13 +47,14 @@ must resolve publicly to the same bucket and allow browser `GET`/`HEAD` requests
 from the app's origins through the bucket's CORS policy. Do not use the S3 API
 endpoint as the public base URL.
 
-`seed-marketplace` uploads the package release registry used to detect upgrades
-and upserts the seed file's templates. Validate `package-seed.json` without
-changing canister state:
+`seed-latest` downloads the latest release's `package-seed.json` into a temp
+directory and seeds the backend with it (`--tag` picks another release). It
+uploads the package release registry used to detect upgrades and upserts the
+seed's templates. Validate without changing canister state:
 
 ```bash
 cd scripts
-npm run seed-marketplace -- --file ./package-seed.json --dry-run
+npm run seed-latest -- --dry-run
 ```
 
 Seed a local backend (the default environment) - run after `icp deploy
@@ -58,14 +62,13 @@ backend` so a fresh local network carries the same production registry the
 dashboard's upgrade detection expects:
 
 ```bash
-npm run seed-marketplace -- --file ./package-seed.json
+npm run seed-latest
 ```
 
 Seed the production backend with a controller identity:
 
 ```bash
-npm run seed-marketplace -- \
-  --file ./package-seed.json \
+npm run seed-latest -- \
   --environment ic \
   --identity deploy
 ```
